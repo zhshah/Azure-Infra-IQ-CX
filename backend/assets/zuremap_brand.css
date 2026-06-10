@@ -1,0 +1,162 @@
+/* ============================================================================
+   Architecture Map — embedded brand skin
+   Reskins the embedded diagram engine to match the Azure Infrastructure
+   Optimization design system (deep navy surfaces, slate text, azure/indigo
+   accents) and replaces the third-party mark with our own network glyph so the
+   embedded view reads as a native part of the product.
+   Injected into the engine's index.html as an inline <style id="brand-skin">.
+   ========================================================================== */
+
+/* ---- Root palette (Tailwind v4 custom props used by the app) ------------- */
+:root,
+html[data-beasties-container] {
+  --azure-neutral: #080c14;
+  --azure-dark:    #0c1220;
+  --azure-border:  #1e293b;
+  --azure-blue:    #2563eb;
+  --color-azure-neutral: #080c14;
+  --color-azure-dark:    #0c1220;
+}
+
+html, body {
+  background: #080c14 !important;
+  color: #e7edf5 !important;
+}
+::selection { background: rgba(37,99,235,.45); }
+
+/* ---- Surfaces ------------------------------------------------------------ */
+.bg-white, .bg-gray-50, .bg-gray-100, .bg-neutral-50, .bg-neutral-100,
+.bg-slate-50, .bg-zinc-50, .bg-stone-50 {
+  background-color: #111827 !important;
+}
+.bg-gray-200, .bg-slate-100, .bg-zinc-100 { background-color: #1a2332 !important; }
+.bg-gray-300, .bg-slate-200             { background-color: #243044 !important; }
+
+/* tinted info/success/warn/danger panels -> dark equivalents */
+.bg-blue-50, .bg-sky-50, .bg-indigo-50   { background-color: #0e1a2e !important; }
+.bg-green-50, .bg-emerald-50, .bg-teal-50{ background-color: #0c1f19 !important; }
+.bg-amber-50, .bg-yellow-50, .bg-orange-50{ background-color: #241d0c !important; }
+.bg-red-50, .bg-rose-50, .bg-pink-50     { background-color: #241016 !important; }
+.bg-purple-50, .bg-violet-50, .bg-fuchsia-50 { background-color: #1a1330 !important; }
+
+/* opacity-variant tints (e.g. bg-blue-50/50, bg-white/70). The trailing slash
+   in the matcher guards against matching solid colors like bg-blue-500. */
+[class*="bg-white/"]                                              { background-color: #111827 !important; }
+[class*="bg-blue-50/"], [class*="bg-sky-50/"], [class*="bg-indigo-50/"] { background-color: #0e1a2e !important; }
+[class*="bg-gray-50/"], [class*="bg-slate-50/"], [class*="bg-neutral-50/"] { background-color: #111827 !important; }
+[class*="bg-green-50/"], [class*="bg-emerald-50/"], [class*="bg-teal-50/"]  { background-color: #0c1f19 !important; }
+[class*="bg-amber-50/"], [class*="bg-yellow-50/"], [class*="bg-orange-50/"] { background-color: #241d0c !important; }
+[class*="bg-red-50/"], [class*="bg-rose-50/"], [class*="bg-pink-50/"]       { background-color: #241016 !important; }
+
+/* ---- Text ---------------------------------------------------------------- */
+.text-gray-900, .text-gray-800, .text-black, .text-slate-900, .text-slate-800,
+.text-neutral-900, .text-zinc-900 { color: #f1f5f9 !important; }
+.text-gray-700, .text-gray-600, .text-slate-700, .text-slate-600,
+.text-neutral-700, .text-neutral-600 { color: #cbd5e1 !important; }
+.text-gray-500, .text-gray-400, .text-slate-500, .text-slate-400,
+.text-neutral-500, .text-neutral-400 { color: #94a3b8 !important; }
+
+.text-blue-900, .text-blue-800, .text-blue-700, .text-blue-600 { color: #7cb4f5 !important; }
+.text-indigo-700, .text-indigo-600, .text-violet-700, .text-violet-600 { color: #a5b4fc !important; }
+.text-green-800, .text-green-700, .text-emerald-700 { color: #6ee7b7 !important; }
+.text-amber-800, .text-amber-700, .text-yellow-800, .text-orange-700 { color: #fcd34d !important; }
+.text-red-800, .text-red-700, .text-rose-700 { color: #fca5a5 !important; }
+
+/* ---- Borders / rings / dividers ----------------------------------------- */
+.border, .border-2, .border-t, .border-b, .border-l, .border-r,
+.border-gray-100, .border-gray-200, .border-gray-300,
+.border-slate-100, .border-slate-200, .border-slate-300,
+.border-neutral-200, .border-neutral-300, .border-zinc-200 {
+  border-color: #1e293b !important;
+}
+.border-blue-200, .border-blue-300, .border-indigo-200, .border-sky-200 { border-color: rgba(37,99,235,.35) !important; }
+.divide-gray-100 > * + *, .divide-gray-200 > * + *, .divide-slate-200 > * + * { border-color: #1e293b !important; }
+.ring-1, .ring-2, .ring-gray-200, .ring-gray-300, .ring-slate-200 { --tw-ring-color: #1e293b !important; }
+
+/* ---- Shadows ------------------------------------------------------------- */
+.shadow, .shadow-sm, .shadow-md, .shadow-lg, .shadow-xl, .shadow-2xl {
+  box-shadow: 0 12px 38px rgba(0,0,0,.55) !important;
+}
+
+/* ---- Accent / primary actions ------------------------------------------- */
+.bg-blue-500, .bg-blue-600, .bg-blue-700, .bg-azure-blue, .bg-sky-600 {
+  background-color: #2563eb !important; color: #fff !important;
+}
+.hover\:bg-blue-600:hover, .hover\:bg-blue-700:hover, .hover\:bg-blue-800:hover { background-color: #3b82f6 !important; }
+.bg-indigo-500, .bg-indigo-600, .bg-violet-600 { background-color: #6366f1 !important; color: #fff !important; }
+.hover\:bg-indigo-700:hover { background-color: #818cf8 !important; }
+.bg-green-600, .bg-emerald-600 { background-color: #059669 !important; }
+.bg-red-600, .bg-rose-600 { background-color: #dc2626 !important; }
+
+/* neutral hover states */
+.hover\:bg-gray-50:hover, .hover\:bg-gray-100:hover, .hover\:bg-gray-200:hover,
+.hover\:bg-slate-50:hover, .hover\:bg-slate-100:hover, .hover\:bg-neutral-100:hover {
+  background-color: #1a2332 !important;
+}
+
+/* tinted hover states (e.g. the Scan-Azure card) -> subtle dark blue, not white */
+.hover\:bg-blue-50:hover, .hover\:bg-blue-100:hover,
+.hover\:bg-indigo-50:hover, .hover\:bg-indigo-100:hover,
+.hover\:bg-sky-50:hover, .hover\:bg-sky-100:hover,
+.hover\:bg-green-50:hover, .hover\:bg-emerald-50:hover,
+.hover\:bg-violet-50:hover, .hover\:bg-purple-50:hover {
+  background-color: #16263d !important;
+}
+
+/* ---- Form controls ------------------------------------------------------- */
+input, select, textarea, .form-input, .form-select, .form-textarea {
+  background-color: #0f172a !important;
+  color: #f1f5f9 !important;
+  border-color: #1e293b !important;
+}
+input::placeholder, textarea::placeholder { color: #64748b !important; }
+input:focus, select:focus, textarea:focus { outline-color: #2563eb !important; border-color: #2563eb !important; }
+.focus\:ring-blue-500:focus, .focus\:ring-2:focus { --tw-ring-color: rgba(37,99,235,.55) !important; }
+
+/* checkboxes / radios / toggles accent */
+input[type="checkbox"], input[type="radio"], input[type="range"], progress { accent-color: #2563eb !important; }
+
+/* ---- Tables / lists ------------------------------------------------------ */
+table, thead, tbody, tr, th, td { border-color: #1e293b !important; }
+thead, th { background-color: #0f172a !important; color: #94a3b8 !important; }
+tbody tr:hover { background-color: #131c2b !important; }
+
+/* ---- Canvas / diagram surface ------------------------------------------- */
+[class*="canvas"], [class*="diagram"], .bg-azure-neutral, main {
+  background-color: #080c14 !important;
+}
+
+/* ---- Scrollbars ---------------------------------------------------------- */
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-track { background: #0c1220; }
+*::-webkit-scrollbar-thumb { background: #334155; border-radius: 5px; }
+*::-webkit-scrollbar-thumb:hover { background: #475569; }
+* { scrollbar-color: #334155 #0c1220; }
+
+/* ============================================================================
+   Logo replacement — swap the third-party mark for our network glyph
+   ========================================================================== */
+img[src$="logo.png"],
+img[alt="Azure Architecture Map"],
+img[alt="ZureMap"],
+img[alt="Zuremap"] {
+  content: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%232563eb'/><stop offset='1' stop-color='%236366f1'/></linearGradient></defs><rect x='1' y='1' width='38' height='38' rx='10' fill='%230f172a' stroke='%231e293b'/><g stroke='url(%23g)' stroke-width='2' stroke-linecap='round'><line x1='20' y1='20' x2='9' y2='10'/><line x1='20' y1='20' x2='31' y2='10'/><line x1='20' y1='20' x2='10' y2='30'/><line x1='20' y1='20' x2='30' y2='31'/></g><circle cx='20' cy='20' r='5.4' fill='url(%23g)'/><circle cx='9' cy='10' r='3' fill='%237cb4f5'/><circle cx='31' cy='10' r='3' fill='%23a5b4fc'/><circle cx='10' cy='30' r='3' fill='%2334d399'/><circle cx='30' cy='31' r='3' fill='%2360a5fa'/></svg>") !important;
+  height: 2.5rem !important;
+  width: auto !important;
+}
+
+/* Brand wordmark — gradient on the landing title */
+h1.text-2xl.font-bold {
+  background: linear-gradient(90deg, #7cb4f5, #a5b4fc) !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  color: transparent !important;
+  letter-spacing: -.01em;
+}
+
+/* Soft animated aura behind the landing card for a distinct identity */
+.bg-white.rounded-xl, .rounded-2xl.bg-white {
+  background-image: radial-gradient(120% 100% at 0% 0%, rgba(37,99,235,.10), transparent 55%),
+                    radial-gradient(120% 100% at 100% 100%, rgba(99,102,241,.10), transparent 55%) !important;
+}

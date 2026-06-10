@@ -1,0 +1,633 @@
+import React, { useState, useMemo, useEffect, useCallback } from "react";
+
+const SEVERITY_COLOR = {
+  critical: "#ef4444",
+  high:     "#f97316",
+  medium:   "#eab308",
+  low:      "#64748b",
+};
+
+const GAP_TYPE_LABEL = {
+  no_backup:            "No Backup",
+  no_private_endpoint:  "No Private Endpoint",
+  no_lock:              "No Resource Lock",
+  missing_tags:         "Missing Tags",
+  unmonitored:          "Unmonitored",
+  public_exposure:      "Public Exposure",
+};
+
+const GAP_TYPE_ICON = {
+  no_backup:            "💾",
+  no_private_endpoint:  "🔒",
+  no_lock:              "🔓",
+  missing_tags:         "🏷️",
+  unmonitored:          "👁️",
+  public_exposure:      "🌐",
+};
+
+const SOURCE_LABEL = {
+  internal:     "Coverage Gap",
+  defender:     "Defender for Cloud",
+  advisor:      "Azure Advisor",
+  arc_analysis: "Azure Arc",
+};
+
+const SOURCE_COLOR = {
+  internal:     "#38bdf8",
+  defender:     "#a78bfa",
+  advisor:      "#34d399",
+  arc_analysis: "#fb923c",
+};
+
+const RESOURCE_TYPE_ICONS = {
+  "microsoft.compute/virtualmachines": "🖥️",
+  "microsoft.sql/servers/databases": "🗄️",
+  "microsoft.documentdb/databaseaccounts": "🌐",
+  "microsoft.storage/storageaccounts": "📦",
+  "microsoft.keyvault/vaults": "🔑",
+  "microsoft.web/sites": "🌍",
+  "microsoft.network/networksecuritygroups": "🛡️",
+  "microsoft.hybridcompute/machines": "🔗",
+  "microsoft.dbformysql/flexibleservers": "🐬",
+  "microsoft.dbforpostgresql/flexibleservers": "🐘",
+  "microsoft.cognitiveservices/accounts": "🧠",
+  "microsoft.containerservice/managedclusters": "☸️",
+  "microsoft.app/containerapps": "📱",
+};
+
+// ── Helper Components ────────────────────────────────────────────────────────
+
+function SeverityBadge({ severity }) {
+  const color = SEVERITY_COLOR[severity] || "#64748b";
+  return (
+    <span style={{
+      background: `${color}20`, color: color,
+      fontSize: 10, fontWeight: 700, padding: "2px 8px",
+      borderRadius: 20, textTransform: "uppercase", letterSpacing: "0.5px",
+      border: `1px solid ${color}40`,
+    }}>
+      {severity}
+    </span>
+  );
+}
+
+function SourceBadge({ source }) {
+  const color = SOURCE_COLOR[source] || "#64748b";
+  const label = SOURCE_LABEL[source] || source;
+  return (
+    <span style={{
+      background: `${color}15`, color: color,
+      fontSize: 9, fontWeight: 600, padding: "2px 6px",
+      borderRadius: 12, border: `1px solid ${color}30`,
+    }}>
+      {label}
+    </span>
+  );
+}
+
+function SecureScoreGauge({ score }) {
+  if (!score || !score.percentage) return null;
+  const pct = score.percentage;
+  const color = pct >= 70 ? "#22c55e" : pct >= 50 ? "#eab308" : "#ef4444";
+  const circumference = 2 * Math.PI * 38;
+  const strokeDashoffset = circumference * (1 - pct / 100);
+  return (
+    <div style={{ textAlign: "center" }}>
+      <svg width="90" height="90" viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="38" fill="none" stroke="#1e293b" strokeWidth="8" />
+        <circle cx="50" cy="50" r="38" fill="none" stroke={color} strokeWidth="8"
+          strokeDasharray={circumference} strokeDashoffset={strokeDashoffset}
+          strokeLinecap="round" transform="rotate(-90 50 50)"
+          style={{ transition: "stroke-dashoffset 1s ease" }} />
+        <text x="50" y="45" textAnchor="middle" fill={color} fontSize="20" fontWeight="800">{Math.round(pct)}%</text>
+        <text x="50" y="62" textAnchor="middle" fill="#64748b" fontSize="8">Secure Score</text>
+      </svg>
+      <div style={{ color: "#94a3b8", fontSize: 10, marginTop: 2 }}>
+        {score.current_score}/{score.max_score} pts
+      </div>
+    </div>
+  );
+}
+
+// ── Card View ────────────────────────────────────────────────────────────────
+
+function GapCard({ finding }) {
+  const [open, setOpen] = useState(false);
+  const color = SEVERITY_COLOR[finding.severity] || "#64748b";
+  const icon = finding.gap_type ? (GAP_TYPE_ICON[finding.gap_type] || "⚠️") : "🔍";
+  const rtype = (finding.resource_type || "").toLowerCase();
+  const typeIcon = RESOURCE_TYPE_ICONS[rtype] || "📋";
+
+  return (
+    <div style={{
+      background: "#0f172a", border: `1px solid ${color}30`,
+      borderRadius: 10, padding: "12px 14px",
+      borderLeft: `3px solid ${color}`,
+    }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <span style={{ fontSize: 18, marginTop: 1 }}>{icon}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+            <span style={{ color: "#f1f5f9", fontSize: 13, fontWeight: 600 }}>{finding.title}</span>
+            <SeverityBadge severity={finding.severity} />
+            {finding.source && <SourceBadge source={finding.source} />}
+          </div>
+          <div style={{ color: "#64748b", fontSize: 12, marginBottom: 4 }}>
+            <span style={{ marginRight: 4 }}>{typeIcon}</span>
+            <span style={{ color: "#94a3b8" }}>{finding.resource_name}</span>
+            {" · "}
+            <span>{finding.resource_group}</span>
+            {finding.subscription_id && (
+              <span style={{ color: "#475569", marginLeft: 6, fontSize: 10 }}>
+                {finding.subscription_id.substring(0, 8)}…
+              </span>
+            )}
+            {finding.monthly_risk_usd > 0 && (
+              <span style={{ color: "#ef4444", marginLeft: 8 }}>
+                ${finding.monthly_risk_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo risk
+              </span>
+            )}
+          </div>
+          {open && (
+            <div style={{ marginTop: 6, marginBottom: 6 }}>
+              <div style={{ color: "#94a3b8", fontSize: 12, marginBottom: 4 }}>
+                {finding.description}
+              </div>
+              {finding.remediation && (
+                <div style={{ color: "#34d399", fontSize: 11, marginTop: 4 }}>
+                  💡 {finding.remediation}
+                </div>
+              )}
+              {finding.resource_type && (
+                <div style={{ color: "#475569", fontSize: 10, marginTop: 4 }}>
+                  Type: {finding.resource_type}
+                </div>
+              )}
+            </div>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
+            {finding.azure_service && (
+              <span style={{
+                background: "#1e293b", color: "#38bdf8",
+                fontSize: 11, padding: "2px 8px", borderRadius: 6,
+              }}>
+                ✦ {finding.azure_service}
+              </span>
+            )}
+            {finding.category && (
+              <span style={{ color: "#475569", fontSize: 10 }}>{finding.category}</span>
+            )}
+            <button onClick={() => setOpen(!open)} style={{
+              background: "none", border: "none", color: "#475569",
+              cursor: "pointer", fontSize: 11, padding: 0,
+            }}>
+              {open ? "Hide detail" : "More info ›"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Table/List View ──────────────────────────────────────────────────────────
+
+function SecurityTable({ findings, onSort, sortBy, sortDir }) {
+  const columns = [
+    { key: "severity", label: "Severity", width: "80px" },
+    { key: "title", label: "Finding", width: "auto" },
+    { key: "resource_name", label: "Resource", width: "180px" },
+    { key: "resource_type", label: "Type", width: "140px" },
+    { key: "resource_group", label: "Resource Group", width: "140px" },
+    { key: "source", label: "Source", width: "110px" },
+    { key: "category", label: "Category", width: "120px" },
+  ];
+
+  return (
+    <div style={{ overflowX: "auto", borderRadius: 10, border: "1px solid #1e293b" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+        <thead>
+          <tr style={{ background: "#0a0f1a" }}>
+            {columns.map(col => (
+              <th key={col.key} onClick={() => onSort(col.key)} style={{
+                padding: "8px 10px", color: sortBy === col.key ? "#38bdf8" : "#64748b",
+                fontSize: 11, fontWeight: 700, textTransform: "uppercase",
+                cursor: "pointer", userSelect: "none", whiteSpace: "nowrap",
+                borderBottom: "1px solid #1e293b", textAlign: "left", width: col.width,
+              }}>
+                {col.label} {sortBy === col.key ? (sortDir === "asc" ? "▲" : "▼") : ""}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {findings.map((f, i) => (
+            <tr key={f.id || f.resource_id + f.title + i}
+                style={{ background: i % 2 === 0 ? "#0f172a" : "#0d1117" }}>
+              <td style={{ padding: "8px 10px" }}><SeverityBadge severity={f.severity} /></td>
+              <td style={{ padding: "8px 10px", color: "#e2e8f0", fontWeight: 500 }}>
+                <div>{f.title}</div>
+                {f.description && (
+                  <div style={{ color: "#475569", fontSize: 10, marginTop: 2, maxWidth: 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {f.description}
+                  </div>
+                )}
+              </td>
+              <td style={{ padding: "8px 10px", color: "#94a3b8" }}>{f.resource_name}</td>
+              <td style={{ padding: "8px 10px", color: "#64748b", fontSize: 10 }}>{(f.resource_type || "").split("/").pop()}</td>
+              <td style={{ padding: "8px 10px", color: "#64748b", fontSize: 11 }}>{f.resource_group}</td>
+              <td style={{ padding: "8px 10px" }}><SourceBadge source={f.source} /></td>
+              <td style={{ padding: "8px 10px", color: "#64748b", fontSize: 11 }}>{f.category || f.gap_type}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Export Utility ────────────────────────────────────────────────────────────
+
+function exportToCSV(findings, filename = "security_findings.csv") {
+  const headers = ["Severity", "Title", "Resource Name", "Resource Type", "Resource Group",
+    "Subscription", "Source", "Category", "Description", "Remediation"];
+  const rows = findings.map(f => [
+    f.severity, f.title, f.resource_name, f.resource_type, f.resource_group,
+    f.subscription_id, f.source || "internal", f.category || f.gap_type || "",
+    (f.description || "").replace(/"/g, '""'), (f.remediation || "").replace(/"/g, '""'),
+  ]);
+  const csv = [headers, ...rows].map(r => r.map(c => `"${c || ""}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Filter Bar ───────────────────────────────────────────────────────────────
+
+function FilterBar({ filters, setFilters, allFindings }) {
+  const subscriptions = useMemo(() => [...new Set(allFindings.map(f => f.subscription_id).filter(Boolean))], [allFindings]);
+  const resourceGroups = useMemo(() => [...new Set(allFindings.map(f => f.resource_group).filter(Boolean))].sort(), [allFindings]);
+  const resourceTypes = useMemo(() => [...new Set(allFindings.map(f => f.resource_type).filter(Boolean))].sort(), [allFindings]);
+  const sources = useMemo(() => [...new Set(allFindings.map(f => f.source).filter(Boolean))], [allFindings]);
+  const categories = useMemo(() => [...new Set(allFindings.map(f => f.category || f.gap_type).filter(Boolean))].sort(), [allFindings]);
+
+  const selectStyle = {
+    background: "#0f172a", color: "#94a3b8", border: "1px solid #1e293b",
+    borderRadius: 6, padding: "5px 8px", fontSize: 11, cursor: "pointer", maxWidth: 160,
+  };
+
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+      <select style={selectStyle} value={filters.subscription || "all"}
+        onChange={e => setFilters(f => ({ ...f, subscription: e.target.value }))}>
+        <option value="all">All Subscriptions</option>
+        {subscriptions.map(s => <option key={s} value={s}>{s.substring(0, 12)}…</option>)}
+      </select>
+
+      <select style={selectStyle} value={filters.resourceGroup || "all"}
+        onChange={e => setFilters(f => ({ ...f, resourceGroup: e.target.value }))}>
+        <option value="all">All Resource Groups</option>
+        {resourceGroups.map(rg => <option key={rg} value={rg}>{rg}</option>)}
+      </select>
+
+      <select style={selectStyle} value={filters.resourceType || "all"}
+        onChange={e => setFilters(f => ({ ...f, resourceType: e.target.value }))}>
+        <option value="all">All Resource Types</option>
+        <option value="microsoft.compute/virtualmachines">Azure VMs</option>
+        <option value="microsoft.hybridcompute/machines">Azure Arc Machines</option>
+        <option value="microsoft.sql/servers/databases">SQL Databases</option>
+        <option value="microsoft.storage/storageaccounts">Storage Accounts</option>
+        <option value="microsoft.keyvault/vaults">Key Vaults</option>
+        <option value="microsoft.web/sites">App Services</option>
+        <option value="microsoft.network">Networking</option>
+        {resourceTypes
+          .filter(t => !["microsoft.compute/virtualmachines", "microsoft.hybridcompute/machines",
+            "microsoft.sql/servers/databases", "microsoft.storage/storageaccounts",
+            "microsoft.keyvault/vaults", "microsoft.web/sites"].includes(t) && !t.startsWith("microsoft.network"))
+          .map(t => <option key={t} value={t}>{t.split("/").pop()}</option>)}
+      </select>
+
+      <select style={selectStyle} value={filters.source || "all"}
+        onChange={e => setFilters(f => ({ ...f, source: e.target.value }))}>
+        <option value="all">All Sources</option>
+        {sources.map(s => <option key={s} value={s}>{SOURCE_LABEL[s] || s}</option>)}
+      </select>
+
+      <select style={selectStyle} value={filters.category || "all"}
+        onChange={e => setFilters(f => ({ ...f, category: e.target.value }))}>
+        <option value="all">All Categories</option>
+        {categories.map(c => <option key={c} value={c}>{GAP_TYPE_LABEL[c] || c}</option>)}
+      </select>
+
+      {/* Severity filter pills */}
+      <div style={{ display: "flex", gap: 4, background: "#0f172a", borderRadius: 8, padding: 3 }}>
+        {["all", "critical", "high", "medium", "low"].map(s => (
+          <button key={s} onClick={() => setFilters(f => ({ ...f, severity: s }))} style={{
+            background: filters.severity === s ? "#1e293b" : "none",
+            border: "none", color: filters.severity === s ? (SEVERITY_COLOR[s] || "#f1f5f9") : "#64748b",
+            borderRadius: 5, padding: "3px 8px", cursor: "pointer", fontSize: 11,
+            fontWeight: filters.severity === s ? 700 : 400,
+          }}>
+            {s === "all" ? "All" : s.charAt(0).toUpperCase() + s.slice(1)}
+          </button>
+        ))}
+      </div>
+
+      {/* Search */}
+      <input type="text" placeholder="Search findings…" value={filters.search || ""}
+        onChange={e => setFilters(f => ({ ...f, search: e.target.value }))}
+        style={{
+          background: "#0f172a", color: "#e2e8f0", border: "1px solid #1e293b",
+          borderRadius: 6, padding: "5px 10px", fontSize: 11, width: 160,
+        }}
+      />
+    </div>
+  );
+}
+
+// ── Score Controls Panel ─────────────────────────────────────────────────────
+
+function ScoreControlsPanel({ controls }) {
+  if (!controls || !controls.length) return null;
+  return (
+    <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: 16 }}>
+      <h3 style={{ color: "#f1f5f9", fontSize: 14, fontWeight: 700, margin: "0 0 12px" }}>
+        🎯 Defender Secure Score Controls
+      </h3>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+        {controls.slice(0, 12).map((c, i) => {
+          const pct = c.maxScore > 0 ? (c.currentScore / c.maxScore * 100) : 0;
+          const color = pct >= 80 ? "#22c55e" : pct >= 50 ? "#eab308" : "#ef4444";
+          return (
+            <div key={i} style={{ background: "#0d1117", border: "1px solid #1e293b", borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <span style={{ color: "#e2e8f0", fontSize: 11, fontWeight: 600 }}>{c.controlName}</span>
+                <span style={{ color: color, fontSize: 11, fontWeight: 700 }}>{Math.round(pct)}%</span>
+              </div>
+              <div style={{ background: "#1e293b", borderRadius: 4, height: 4, overflow: "hidden" }}>
+                <div style={{ background: color, height: "100%", width: `${pct}%`, transition: "width 0.5s" }} />
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+                <span style={{ color: "#475569", fontSize: 9 }}>{c.unhealthyCount} unhealthy</span>
+                <span style={{ color: "#475569", fontSize: 9 }}>{c.healthyCount} healthy</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Main Enhanced Security Panel ─────────────────────────────────────────────
+
+export default function SecurityPanel({ securityGaps = [] }) {
+  const [view, setView] = useState("card");
+  const [defenderData, setDefenderData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [sortBy, setSortBy] = useState("severity");
+  const [sortDir, setSortDir] = useState("asc");
+  const [page, setPage] = useState(0);
+  const [filters, setFilters] = useState({
+    severity: "all", source: "all", resourceType: "all",
+    subscription: "all", resourceGroup: "all", category: "all",
+    search: "",
+  });
+
+  const PAGE_SIZE = view === "list" ? 50 : 20;
+
+  // Fetch Defender + Advisor + Arc data on mount
+  useEffect(() => {
+    setLoading(true);
+    fetch("/api/security/enhanced")
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setDefenderData(data); })
+      .catch(err => {
+        console.warn("Defender data unavailable:", err);
+        setError("Defender for Cloud data not available — showing internal analysis only");
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  // Merge all findings into unified list
+  const allFindings = useMemo(() => {
+    const findings = [];
+    for (const g of securityGaps) {
+      findings.push({
+        ...g,
+        id: g.resource_id + "_" + g.gap_type,
+        source: "internal",
+        category: GAP_TYPE_LABEL[g.gap_type] || g.gap_type,
+      });
+    }
+    if (defenderData?.defender?.findings) {
+      for (const f of defenderData.defender.findings) findings.push({ ...f });
+    }
+    if (defenderData?.arc_findings) {
+      for (const f of defenderData.arc_findings) findings.push({ ...f });
+    }
+    return findings;
+  }, [securityGaps, defenderData]);
+
+  // Apply filters
+  const filtered = useMemo(() => {
+    return allFindings.filter(f => {
+      if (filters.severity !== "all" && f.severity !== filters.severity) return false;
+      if (filters.source !== "all" && f.source !== filters.source) return false;
+      if (filters.subscription !== "all" && f.subscription_id !== filters.subscription) return false;
+      if (filters.resourceGroup !== "all" && f.resource_group !== filters.resourceGroup) return false;
+      if (filters.category !== "all") {
+        const cat = f.category || f.gap_type || "";
+        if (cat !== filters.category) return false;
+      }
+      if (filters.resourceType !== "all") {
+        const rtype = (f.resource_type || "").toLowerCase();
+        if (filters.resourceType === "microsoft.network") {
+          if (!rtype.startsWith("microsoft.network")) return false;
+        } else if (rtype !== filters.resourceType.toLowerCase()) return false;
+      }
+      if (filters.search) {
+        const q = filters.search.toLowerCase();
+        const searchable = `${f.title} ${f.resource_name} ${f.description} ${f.resource_group}`.toLowerCase();
+        if (!searchable.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [allFindings, filters]);
+
+  // Sort
+  const sorted = useMemo(() => {
+    const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+    return [...filtered].sort((a, b) => {
+      let cmp = 0;
+      if (sortBy === "severity") {
+        cmp = (sevOrder[a.severity] || 9) - (sevOrder[b.severity] || 9);
+      } else {
+        const av = (a[sortBy] || "").toString().toLowerCase();
+        const bv = (b[sortBy] || "").toString().toLowerCase();
+        cmp = av.localeCompare(bv);
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [filtered, sortBy, sortDir]);
+
+  const paginated = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const totalPages = Math.ceil(sorted.length / PAGE_SIZE);
+
+  const handleSort = useCallback((key) => {
+    if (sortBy === key) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortBy(key); setSortDir("asc"); }
+  }, [sortBy]);
+
+  // Severity counts across ALL findings
+  const counts = useMemo(() => {
+    const c = { critical: 0, high: 0, medium: 0, low: 0 };
+    allFindings.forEach(f => { if (c[f.severity] !== undefined) c[f.severity]++; });
+    return c;
+  }, [allFindings]);
+
+  const totalRisk = securityGaps.reduce((s, g) => s + (g.monthly_risk_usd || 0), 0);
+  const secureScore = defenderData?.defender?.secure_score;
+
+  if (!securityGaps.length && !defenderData) {
+    if (loading) return (
+      <div style={{ background: "#0d1117", borderRadius: 16, padding: 40, textAlign: "center" }}>
+        <div style={{ color: "#64748b", fontSize: 14 }}>Loading security posture…</div>
+      </div>
+    );
+    return null;
+  }
+
+  return (
+    <div style={{ background: "#0d1117", border: "1px solid #1e293b", borderRadius: 16, padding: "20px 24px" }}>
+      {/* ── Header ── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          {secureScore && secureScore.percentage > 0 && <SecureScoreGauge score={secureScore} />}
+          <div>
+            <h2 style={{ color: "#f1f5f9", margin: 0, fontSize: 18, fontWeight: 700 }}>
+              🔒 Security Findings
+            </h2>
+            <p style={{ color: "#64748b", margin: "4px 0 0", fontSize: 13 }}>
+              {allFindings.length} findings across {new Set(allFindings.map(f => f.resource_id)).size} resources
+              {totalRisk > 0 && ` · $${totalRisk.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo risk`}
+              {defenderData?.defender?.defender_count > 0 && (
+                <span style={{ color: "#a78bfa", marginLeft: 8 }}>
+                  ({defenderData.defender.defender_count} Defender)
+                </span>
+              )}
+              {defenderData?.arc_findings?.length > 0 && (
+                <span style={{ color: "#fb923c", marginLeft: 8 }}>
+                  ({defenderData.arc_findings.length} Arc)
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {Object.entries(counts).filter(([, v]) => v > 0).map(([sev, cnt]) => (
+            <div key={sev} style={{
+              background: `${SEVERITY_COLOR[sev]}15`, border: `1px solid ${SEVERITY_COLOR[sev]}40`,
+              color: SEVERITY_COLOR[sev], borderRadius: 8, padding: "4px 12px", fontSize: 12, fontWeight: 700,
+            }}>
+              {cnt} {sev}
+            </div>
+          ))}
+          {/* View Toggle */}
+          <div style={{ display: "flex", background: "#0f172a", borderRadius: 8, padding: 3, marginLeft: 8 }}>
+            <button onClick={() => { setView("card"); setPage(0); }} style={{
+              background: view === "card" ? "#1e293b" : "none",
+              border: "none", color: view === "card" ? "#f1f5f9" : "#64748b",
+              borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 11,
+            }}>▦ Cards</button>
+            <button onClick={() => { setView("list"); setPage(0); }} style={{
+              background: view === "list" ? "#1e293b" : "none",
+              border: "none", color: view === "list" ? "#f1f5f9" : "#64748b",
+              borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 11,
+            }}>≡ List</button>
+          </div>
+          {/* Export */}
+          <button onClick={() => exportToCSV(sorted)} style={{
+            background: "#1e293b", border: "1px solid #334155", color: "#94a3b8",
+            borderRadius: 6, padding: "5px 12px", cursor: "pointer", fontSize: 11,
+          }}>↓ Export CSV</button>
+        </div>
+      </div>
+
+      {/* ── Source Stats ── */}
+      {defenderData && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+          {[
+            { label: "Internal Gaps", count: securityGaps.length, color: SOURCE_COLOR.internal },
+            { label: "Defender for Cloud", count: defenderData.defender?.defender_count || 0, color: SOURCE_COLOR.defender },
+            { label: "Azure Advisor", count: defenderData.defender?.advisor_count || 0, color: SOURCE_COLOR.advisor },
+            { label: "Azure Arc", count: defenderData.arc_findings?.length || 0, color: SOURCE_COLOR.arc_analysis },
+          ].filter(s => s.count > 0).map(s => (
+            <div key={s.label} style={{
+              background: `${s.color}10`, border: `1px solid ${s.color}30`,
+              borderRadius: 8, padding: "6px 12px", display: "flex", alignItems: "center", gap: 6,
+            }}>
+              <span style={{ color: s.color, fontSize: 14, fontWeight: 800 }}>{s.count}</span>
+              <span style={{ color: "#94a3b8", fontSize: 10 }}>{s.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Filter Bar ── */}
+      <div style={{ marginBottom: 14 }}>
+        <FilterBar filters={filters} setFilters={(fn) => { setFilters(fn); setPage(0); }} allFindings={allFindings} />
+      </div>
+
+      {/* ── Results Count ── */}
+      <div style={{ color: "#475569", fontSize: 11, marginBottom: 10 }}>
+        Showing {paginated.length} of {sorted.length} findings
+        {sorted.length !== allFindings.length && ` (${allFindings.length} total)`}
+      </div>
+
+      {/* ── Content ── */}
+      {view === "card" ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {paginated.map((f, i) => <GapCard key={f.id || f.resource_id + f.title + i} finding={f} />)}
+        </div>
+      ) : (
+        <SecurityTable findings={paginated} onSort={handleSort} sortBy={sortBy} sortDir={sortDir} />
+      )}
+
+      {/* ── Pagination ── */}
+      {totalPages > 1 && (
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 14 }}>
+          <button disabled={page === 0} onClick={() => setPage(p => p - 1)} style={{
+            background: "none", border: "1px solid #1e293b", color: page === 0 ? "#334155" : "#94a3b8",
+            borderRadius: 6, padding: "4px 10px", cursor: page === 0 ? "default" : "pointer", fontSize: 11,
+          }}>← Prev</button>
+          <span style={{ color: "#64748b", fontSize: 11 }}>Page {page + 1} of {totalPages}</span>
+          <button disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)} style={{
+            background: "none", border: "1px solid #1e293b", color: page >= totalPages - 1 ? "#334155" : "#94a3b8",
+            borderRadius: 6, padding: "4px 10px", cursor: page >= totalPages - 1 ? "default" : "pointer", fontSize: 11,
+          }}>Next →</button>
+        </div>
+      )}
+
+      {/* ── Defender Score Controls ── */}
+      {defenderData?.defender?.controls?.length > 0 && (
+        <div style={{ marginTop: 20 }}>
+          <ScoreControlsPanel controls={defenderData.defender.controls} />
+        </div>
+      )}
+
+      {/* ── Loading/Error ── */}
+      {loading && <div style={{ marginTop: 12, color: "#64748b", fontSize: 11, textAlign: "center" }}>Loading Defender data…</div>}
+      {error && (
+        <div style={{ marginTop: 12, padding: "8px 12px", background: "#1e293b", borderRadius: 8 }}>
+          <span style={{ color: "#eab308", fontSize: 11 }}>⚠ {error}</span>
+        </div>
+      )}
+    </div>
+  );
+}

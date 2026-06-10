@@ -1,0 +1,40 @@
+# ---- Build-context excludes for the combined Azure Infra IQ image ----
+# Keep the ACR/Docker build context small and NEVER ship secrets or local state.
+
+# Secrets / local environment
+**/.env
+**/.env.*
+backend/.env
+backend/.env.*
+
+# Local data / caches / virtualenvs / build outputs
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/venv/
+**/node_modules/
+backend/data/
+data/
+frontend/dist/
+**/*.log
+
+# VCS / editor
+.git/
+.gitignore
+.vscode/
+**/.DS_Store
+
+# Things not needed in the app image (reduce upload size)
+Scripts/
+BCDR_PowerShell_Utility/
+Qatar_BCDR_Plan/
+Resiliency_Dashboard_StorageAcc/
+apex-integration/
+cli/
+docker-compose.yml
+*.md
+test-*.html
+test_*.ps1
+test_*.py
+_*.py
+_*.txt
