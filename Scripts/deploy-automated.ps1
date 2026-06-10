@@ -107,9 +107,10 @@ param(
     [string]$RedisSku  = "Basic",
     [string]$RedisVmSize = "c0",
 
-    # Container sizing (consumption profile: 1.0 CPU pairs with 2.0Gi)
-    [string]$Cpu    = "1.0",
-    [string]$Memory = "2.0Gi",
+    # Container sizing (Consumption profile — valid CPU:memory pairs up to 4 vCPU / 8Gi).
+    # 2.0 vCPU / 4.0Gi production size (AI analysis, multi-sub scanning, diagram + PDF rendering).
+    [string]$Cpu    = "2.0",
+    [string]$Memory = "4.0Gi",
 
     # ── Private / VNet-integrated deployment ──────────────────────────────────
     # 'Public'  : Container Apps environment with a public ingress (default).
