@@ -188,7 +188,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.7"
+$ScriptVersion = "2026-06-11.8"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -403,12 +403,15 @@ if ($isPrivate) {
         }
     }
     if (-not $linkedEnv) {
-        # Broader subscription-level search (covers envs in other resource groups)
+        # Broader subscription-level search (covers envs in other resource groups).
+        # Normalize both IDs: lowercase + trim to avoid silent comparison misses
+        # when the ARM API returns IDs with different casing.
+        $normInfraId = $InfraSubnetId.ToLowerInvariant().Trim()
         $allEnvs = az containerapp env list --subscription $SubscriptionId --output json 2>$null
         if ($allEnvs) {
             ($allEnvs | ConvertFrom-Json) | ForEach-Object {
                 $es = $_.properties.vnetConfiguration.infrastructureSubnetId
-                if ($es -and $es.ToLowerInvariant() -eq $InfraSubnetId.ToLowerInvariant()) {
+                if ($es -and $es.ToLowerInvariant().Trim() -eq $normInfraId) {
                     $linkedEnv = $_; $linkedEnvRg = ($_.id -split '/')[4]
                 }
             }
@@ -724,9 +727,49 @@ if (-not $envProvState) {
         }
 
         $lastEnvError = "$envErr"
-        # Match both the initial AKS capacity hit AND the follow-on 'already in CreateFailed state'
-        # error that Azure returns when the previous failed attempt left a broken environment.
-        $isRetryable = ($lastEnvError -match "AKSCapacityHeavyUsage|capacity|CreateFailed|CreateFail|ManagedEnvironmentIn")
+
+        # ── Hard-stop: subnet already owned by another environment ───────────────
+        # ManagedEnvironmentSubnetInUse is a CONFIGURATION error, not a capacity error.
+        # No amount of retrying or SKU switching will fix it — only deleting the
+        # conflicting environment (or using a different subnet) will. Surface it
+        # immediately with exact remediation commands and exit.
+        if ($lastEnvError -match "ManagedEnvironmentSubnetInUse") {
+            $ceName = "unknown"; $ceRg = "unknown"
+            if ($lastEnvError -match "managedEnvironments/([^'`"\s]+)") { $ceName = $Matches[1] }
+            if ($lastEnvError -match "/resourceGroups/([^/]+)/providers/Microsoft\.App")  { $ceRg  = $Matches[1] }
+            $sep = "  " + ("─" * 70)
+            Write-Host ""
+            Write-Host $sep                                                                         -ForegroundColor Red
+            Write-Host "  SUBNET IN USE  —  '$SubnetName' is already claimed by another environment" -ForegroundColor Red
+            Write-Host $sep                                                                         -ForegroundColor Red
+            Write-Host "  Conflicting environment : $ceName"                                        -ForegroundColor Cyan
+            Write-Host "  Resource group          : $ceRg"                                          -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host "  This is a configuration error — retrying or changing SKU will NOT fix it." -ForegroundColor Yellow
+            Write-Host "  Run BOTH commands below, then re-run this script:"                         -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "  Step 1 — Delete the conflicting environment:"                              -ForegroundColor White
+            Write-Host "    az containerapp env delete ``"                                           -ForegroundColor Cyan
+            Write-Host "        --name $ceName ``"                                                   -ForegroundColor Cyan
+            Write-Host "        --resource-group $ceRg --yes"                                       -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host "  Step 2 — If the subnet delegation is still stuck after deletion:"          -ForegroundColor White
+            Write-Host "    az network vnet subnet update ``"                                        -ForegroundColor Cyan
+            Write-Host "        --resource-group $VNetResourceGroupName ``"                         -ForegroundColor Cyan
+            Write-Host "        --vnet-name $VNetName ``"                                           -ForegroundColor Cyan
+            Write-Host "        --name $SubnetName --remove delegations"                            -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host "  Alternative — re-run with a brand-new empty subnet:"                      -ForegroundColor White
+            Write-Host "    -SubnetName '<new-empty-subnet-name>'"                                  -ForegroundColor Cyan
+            Write-Host $sep                                                                         -ForegroundColor Red
+            Write-Host ""
+            Fail "Subnet '$SubnetName' is already claimed by '$ceName' (RG: $ceRg). Delete that environment first, then re-run."
+        }
+
+        # ── Retryable errors: AKS capacity and transient ARM state errors ────────
+        # NOTE: 'ManagedEnvironmentIn' is intentionally scoped to 'InCreateFailedState'
+        # only — do NOT widen it to match 'ManagedEnvironmentSubnetInUse' again.
+        $isRetryable = ($lastEnvError -match "AKSCapacityHeavyUsage|capacity|InCreateFailedState")
         if ($isRetryable -and $attempt -lt 4) {
             Write-Warn2 "Container Apps environment create failed (capacity/transient). Waiting 30 seconds before retry $($attempt + 1)/4..."
             Start-Sleep -Seconds 30
