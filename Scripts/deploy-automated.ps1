@@ -203,7 +203,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.10"
+$ScriptVersion = "2026-06-11.11"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -737,7 +737,11 @@ if ($envProvState -and $envProvState -ne "Succeeded") {
 if (-not $envProvState) {
     $envCreateArgs = @(
         "containerapp","env","create",
-        "--name",$ContainerAppEnvName,"--resource-group",$ResourceGroupName,"--location",$Location
+        "--name",$ContainerAppEnvName,"--resource-group",$ResourceGroupName,"--location",$Location,
+        # Explicitly a workload-profiles environment: guarantees the built-in 'Consumption'
+        # profile is available AND that dedicated D-series profiles can be added/switched to
+        # later (the manual 'deploy on Consumption, scale up afterwards' path).
+        "--enable-workload-profiles","true"
     )
     if ($useLogAnalytics) {
         $envCreateArgs += @("--logs-destination","log-analytics","--logs-workspace-id",$lawCustomerId,"--logs-workspace-key",$lawKey)
