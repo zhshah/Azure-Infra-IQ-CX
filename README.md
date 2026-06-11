@@ -241,6 +241,8 @@ The script automatically:
 
 **Estimated time:** ~10–15 minutes (most of it the remote image build).
 
+Tip: The script prints a version banner at startup. If you do not see a recent version line, run `git pull` before deploying.
+
 ### Step 4 — Sign in
 
 Open the **App URL** printed at the end and sign in with your organizational account.

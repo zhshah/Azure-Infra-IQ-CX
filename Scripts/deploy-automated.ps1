@@ -189,10 +189,12 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
+$ScriptVersion = "2026-06-11.4"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
 Write-Host "  AI-Powered Azure Infrastructure Management and Insights" -ForegroundColor Blue
+Write-Host "  Script version: $ScriptVersion" -ForegroundColor Blue
 Write-Host "============================================================" -ForegroundColor Blue
 
 # ── Step 0: Prerequisites & tooling bootstrap ─────────────────────────────-
@@ -315,6 +317,7 @@ $ingressMode   = if ($isPrivate) { "internal" } else { "external" }
 $InfraSubnetId = ""
 $VNetId        = ""
 $PeSubnetId    = ""
+$VNetLocation  = ""
 
 # Suggest the LAST /27 of the VNet (subnets are usually allocated from the start) as a
 # default when the PE subnet must be auto-created. Returns "" if it cannot be computed.
@@ -343,13 +346,13 @@ if ($isPrivate) {
     $vnet = az network vnet show --resource-group $VNetResourceGroupName --name $VNetName -o json 2>$null | ConvertFrom-Json
     if (-not $vnet) { Fail "VNet '$VNetName' not found in resource group '$VNetResourceGroupName'." }
     $VNetId = $vnet.id
+    $VNetLocation = "$($vnet.location)"
     Write-Ok "VNet: $VNetName ($VNetResourceGroupName)"
 
     # ACA environment region must match the VNet region.
-    $vnetLocation = "$($vnet.location)"
-    if (-not [string]::IsNullOrWhiteSpace($vnetLocation) -and $vnetLocation.ToLowerInvariant() -ne $Location.ToLowerInvariant()) {
-        Write-Warn2 "Private mode requires Container Apps environment region to match VNet region. Overriding -Location '$Location' -> '$vnetLocation'."
-        $Location = $vnetLocation
+    if (-not [string]::IsNullOrWhiteSpace($VNetLocation) -and $VNetLocation.ToLowerInvariant() -ne $Location.ToLowerInvariant()) {
+        Write-Warn2 "Private mode requires Container Apps environment region to match VNet region. Overriding -Location '$Location' -> '$VNetLocation'."
+        $Location = $VNetLocation
     }
 
     # 1) Container Apps infrastructure subnet (delegated to Microsoft.App/environments).
@@ -416,6 +419,11 @@ $reuseImage = -not [string]::IsNullOrWhiteSpace($ImageTag)
 $imageTag = if ($reuseImage) { $ImageTag } else { "v$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" }
 
 if ([string]::IsNullOrWhiteSpace($OpenAILocation))  { $OpenAILocation  = $Location }
+
+# Final guardrail: do not continue to build/deploy if private mode region still mismatches VNet.
+if ($isPrivate -and -not [string]::IsNullOrWhiteSpace($VNetLocation) -and $VNetLocation.ToLowerInvariant() -ne $Location.ToLowerInvariant()) {
+    Fail "Private deployment region mismatch: VNet is in '$VNetLocation' but deployment location is '$Location'. Use -Location '$VNetLocation'."
+}
 
 Write-Info "Region:            $Location"
 Write-Info "Resource group:    $ResourceGroupName"
