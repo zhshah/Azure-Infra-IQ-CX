@@ -4593,10 +4593,43 @@ async def _run_warehouse_etl_async(triggered_by: str = "manual"):
     try:
         sub_ids = finops_data_svc.get_subscription_ids() if _FINOPS_AVAILABLE else []
         await loop.run_in_executor(_pool, lambda: finops_warehouse_svc.run_full_etl(sub_ids, triggered_by))
+        # Fresh data landed — invalidate the warehouse read caches so the next UI
+        # request reflects it immediately instead of a stale cached aggregate.
+        _fw_bump_version()
     except Exception as e:
         logger.error("Warehouse ETL async wrapper error: %s", e)
     finally:
         _warehouse_etl_task = None
+
+
+# ── FinOps Warehouse read cache (Redis L2) ────────────────────────────────────
+# The warehouse SQL tables are refreshed by the ETL only every ~12h, yet these
+# read endpoints run heavy aggregation queries against Azure SQL on EVERY UI
+# request. Cache each result in Redis (cache-aside; graceful no-op without Redis)
+# so repeat opens skip the SQL round-trip. Keys are namespaced by an ETL version
+# token that is bumped when a collection completes, so fresh data is served right
+# after an ETL; the TTL is only a backstop.
+_FW_CACHE_TTL = 900  # seconds (15 min)
+
+
+def _fw_cache_version() -> str:
+    try:
+        v = cache_svc.get_json("fw:ver")
+        return str(v) if v else "0"
+    except Exception:
+        return "0"
+
+
+def _fw_bump_version() -> None:
+    try:
+        cache_svc.set_json("fw:ver", int(_time_mod.time()))
+    except Exception:
+        pass
+
+
+def _fw_cache_key(name: str, *parts) -> str:
+    safe = ":".join("" if p is None else str(p) for p in parts)
+    return f"fw:{name}:{_fw_cache_version()}:{safe}"
 
 
 @app.get("/api/finops/warehouse/status", tags=["FinOps Warehouse"])
@@ -4633,10 +4666,14 @@ async def warehouse_dashboard(
     _require_warehouse()
     sub_ids = [subscription_id] if subscription_id else None
     loop = asyncio.get_event_loop()
-    data = await loop.run_in_executor(
-        _pool,
-        lambda: finops_warehouse_svc.get_warehouse_dashboard(sub_ids, resource_group, days),
-    )
+    _ck = _fw_cache_key("dashboard", subscription_id, resource_group, days)
+    data = cache_svc.get_json(_ck)
+    if data is None:
+        data = await loop.run_in_executor(
+            _pool,
+            lambda: finops_warehouse_svc.get_warehouse_dashboard(sub_ids, resource_group, days),
+        )
+        cache_svc.set_json(_ck, data, ttl_seconds=_FW_CACHE_TTL)
     run_status = finops_warehouse_svc.get_last_run_status()
     data["data_freshness"] = {
         "completed_at": run_status.get("completed_at"),
@@ -4663,13 +4700,20 @@ async def warehouse_resources(
     _require_warehouse()
     sub_ids = [subscription_id] if subscription_id else None
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
+    _ck = _fw_cache_key("resources", subscription_id, resource_group, resource_type,
+                        service_family, days, page, page_size, sort_by, sort_dir)
+    _hit = cache_svc.get_json(_ck)
+    if _hit is not None:
+        return _hit
+    result = await loop.run_in_executor(
         _pool,
         lambda: finops_warehouse_svc.get_resource_costs(
             sub_ids, resource_group, resource_type, service_family,
             days, page, page_size, sort_by, sort_dir,
         ),
     )
+    cache_svc.set_json(_ck, result, ttl_seconds=_FW_CACHE_TTL)
+    return result
 
 
 @app.get("/api/finops/warehouse/anomalies", tags=["FinOps Warehouse"])
@@ -4681,10 +4725,16 @@ async def warehouse_anomalies(
     """Return detected cost anomalies (spikes vs 7-day rolling average)."""
     _require_warehouse()
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
+    _ck = _fw_cache_key("anomalies", severity, status, limit)
+    _hit = cache_svc.get_json(_ck)
+    if _hit is not None:
+        return _hit
+    result = await loop.run_in_executor(
         _pool,
         lambda: finops_warehouse_svc.get_anomalies(severity, status, limit),
     )
+    cache_svc.set_json(_ck, result, ttl_seconds=_FW_CACHE_TTL)
+    return result
 
 
 @app.get("/api/finops/warehouse/by-service", tags=["FinOps Warehouse"])
@@ -4696,10 +4746,16 @@ async def warehouse_by_service(
     _require_warehouse()
     sub_ids = [subscription_id] if subscription_id else None
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
+    _ck = _fw_cache_key("by-service", subscription_id, months)
+    _hit = cache_svc.get_json(_ck)
+    if _hit is not None:
+        return _hit
+    result = await loop.run_in_executor(
         _pool,
         lambda: finops_warehouse_svc.get_service_breakdown(sub_ids, months),
     )
+    cache_svc.set_json(_ck, result, ttl_seconds=_FW_CACHE_TTL)
+    return result
 
 
 @app.get("/api/finops/warehouse/by-tag", tags=["FinOps Warehouse"])
@@ -4712,10 +4768,16 @@ async def warehouse_by_tag(
     _require_warehouse()
     sub_ids = [subscription_id] if subscription_id else None
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
+    _ck = _fw_cache_key("by-tag", tag_key, subscription_id, months)
+    _hit = cache_svc.get_json(_ck)
+    if _hit is not None:
+        return _hit
+    result = await loop.run_in_executor(
         _pool,
         lambda: finops_warehouse_svc.get_tag_breakdown(tag_key, sub_ids, months),
     )
+    cache_svc.set_json(_ck, result, ttl_seconds=_FW_CACHE_TTL)
+    return result
 
 
 @app.get("/api/database/info", tags=["System"])
@@ -5298,7 +5360,9 @@ async def get_cached_dashboard_instant():
         # Return the snapshot AS-IS for the response: a genuinely old-shape
         # snapshot keeps its (missing/old) stamp so the frontend's version check
         # can still reject it and rebuild rather than render a stale payload shape.
-        snap = persistence_svc.load_latest_dashboard()
+        # Prefer the Redis L2 copy (populated by _ensure_dashboard_in_cache) so we
+        # don't re-read the large payload from Azure SQL a second time.
+        snap = cache_svc.get_json("dash:latest") or persistence_svc.load_latest_dashboard()
         if snap:
             return snap
         return _Response(status_code=204)
@@ -6183,7 +6247,19 @@ def _ensure_dashboard_in_cache() -> Optional[DashboardData]:
     if data:
         return data
     try:
-        snap = persistence_svc.load_latest_dashboard()
+        # L2 (Redis) cache-aside in front of the durable SQL snapshot: a cold
+        # process / second replica gets the full dashboard from Redis instead of
+        # re-reading the large payload from Azure SQL. Falls back to SQL (and then
+        # populates Redis) when the cache is cold or unavailable.
+        snap = cache_svc.get_json("dash:latest")
+        if not snap:
+            snap = persistence_svc.load_latest_dashboard()
+            if snap:
+                try:
+                    _disp_ttl = float(settings_svc.get_value("metrics_display_ttl_hours", 24.0))
+                    cache_svc.set_json("dash:latest", snap, ttl_seconds=int(_disp_ttl * 3600))
+                except Exception:
+                    pass
         if not snap:
             return None
         restored = DashboardData(**{k: v for k, v in snap.items() if k in DashboardData.model_fields})
