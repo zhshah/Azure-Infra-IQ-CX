@@ -208,7 +208,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.14"
+$ScriptVersion = "2026-06-11.15"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -1360,7 +1360,7 @@ if ([string]::IsNullOrWhiteSpace($graphSpObjId)) {
             --headers "Content-Type=application/json" --body $body 2>&1
         if ($LASTEXITCODE -eq 0)                                    { Write-Ok "$($perm.Name) — assigned" }
         elseif ("$res" -match "already exists")                    { Write-Ok "$($perm.Name) — already assigned" }
-        else { Write-Warn2 "$($perm.Name) — needs admin consent"; $permIssues += "az rest --method POST --uri https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments --headers Content-Type=application/json --body '$body'" }
+        else { Write-Warn2 "$($perm.Name) — needs a directory admin to grant (Privileged Role Administrator / Global Admin)"; $permIssues += "az rest --method POST --uri https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments --headers Content-Type=application/json --body '$body'" }
     }
 }
 
@@ -1379,7 +1379,10 @@ if ([string]::IsNullOrWhiteSpace($appObjId)) {
     az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$appObjId" `
         --headers "Content-Type=application/json" --body $spaBody 2>$null
     if ($LASTEXITCODE -eq 0) { Write-Ok "Registered SPA redirect URI: $appUrl" }
-    else { Write-Warn2 "Could not patch redirect URIs — add '$appUrl' manually (SPA platform)." }
+    else {
+        Write-Warn2 "Could not add the SPA redirect URI (needs Application Administrator / app owner) — captured for the admin grants file."
+        $permIssues += "az rest --method PATCH --uri https://graph.microsoft.com/v1.0/applications/$appObjId --headers Content-Type=application/json --body '$spaBody'"
+    }
 }
 
 # ── Summary ────────────────────────────────────────────────────────────────────
@@ -1406,8 +1409,49 @@ if ($isPrivate) {
 Write-Host ""
 if ($DeploySql)  { Write-Host "  SQL admin password: $SqlAdminPassword" -ForegroundColor Yellow }
 if ($permIssues.Count -gt 0) {
-    Write-Host "`n  Some permissions need an admin to run (Graph perms need admin consent):" -ForegroundColor Yellow
-    $permIssues | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkYellow }
+    # The deployment succeeded; these specific grants need Microsoft Entra DIRECTORY ADMIN
+    # rights the deploying account did not have. Write them ALL to a single ready-to-run
+    # script so an admin can grant everything in ONE go (no scattered manual commands).
+    $grantsFile = Join-Path (Get-Location).Path "azure-infra-iq-admin-grants.ps1"
+    $hdr = @(
+        "#!/usr/bin/env pwsh",
+        "# ============================================================================",
+        "# Azure Infra IQ - post-deploy admin permission grants",
+        "# Generated $(Get-Date -Format 'yyyy-MM-dd HH:mm') for app '$ContainerAppName' (MI $principalId)",
+        "#",
+        "# The deployment SUCCEEDED. The commands below could NOT be run by the deploying",
+        "# account because they require Microsoft Entra DIRECTORY ADMIN privileges:",
+        "#   * Privileged Role Administrator or Global Administrator",
+        "#       -> grant Microsoft Graph application permissions to the app managed identity",
+        "#   * Application Administrator (or owner of the Entra app registration)",
+        "#       -> add the app SPA redirect URI",
+        "#   * User Access Administrator / Owner with elevated access at the tenant root",
+        "#       -> tenant-root role assignments (e.g. Reservations Reader)",
+        "#",
+        "# RUN ONCE as such an admin:",
+        "#   az login --tenant $EntraTenantId",
+        "#   ./azure-infra-iq-admin-grants.ps1",
+        "# ============================================================================",
+        "",
+        "`$ErrorActionPreference = 'Continue'",
+        ""
+    )
+    try {
+        ($hdr + $permIssues) | Set-Content -Path $grantsFile -Encoding UTF8
+        $wroteFile = $true
+    } catch { $wroteFile = $false }
+    Write-Host "`n  POST-DEPLOY ADMIN ACTIONS ($($permIssues.Count)) — require a Microsoft Entra directory admin" -ForegroundColor Yellow
+    Write-Host "    Graph application permissions, the SPA redirect URI, and/or tenant-root roles could" -ForegroundColor DarkYellow
+    Write-Host "    not be granted by the deploying account (insufficient DIRECTORY privilege — not a bug)." -ForegroundColor DarkYellow
+    if ($wroteFile) {
+        Write-Host "    All of them were written to a single ready-to-run script:" -ForegroundColor DarkYellow
+        Write-Host "      $grantsFile" -ForegroundColor Cyan
+        Write-Host "    Have an admin sign in (az login --tenant $EntraTenantId) and run that file once." -ForegroundColor DarkYellow
+    } else {
+        Write-Host "    (Could not write the grants file — run these commands as a directory admin:)" -ForegroundColor DarkYellow
+        $permIssues | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkYellow }
+    }
+    Write-Host "    Until then the app deploys and runs; Entra-ID-dependent features stay limited." -ForegroundColor DarkGray
 }
 Write-Host "`n  Sign in at $appUrl with your organizational account." -ForegroundColor Cyan
 if ($deployZureMap -and $useZureMapSp) {
