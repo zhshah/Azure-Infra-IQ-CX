@@ -231,7 +231,7 @@ The script automatically:
 1. ✅ Checks prerequisites and installs required PowerShell modules + the `containerapp` extension
 2. ✅ Registers resource providers
 3. ✅ Creates the Azure Container Registry and **builds + pushes the image remotely**
-4. ✅ Uses your existing Log Analytics workspace (or creates one only if requested) + creates the Container Apps environment
+4. ✅ Creates the Container Apps environment (Log Analytics is optional and disabled by default)
 5. ✅ Creates Azure OpenAI and deploys the **newest GPT model** your quota allows (smart TPM ladder)
 6. ✅ Creates Azure SQL + Redis *(optional — `-DeploySql $false` / `-DeployRedis $false`)*
 7. ✅ Creates the Container App with a **system-assigned Managed Identity**
@@ -343,8 +343,10 @@ subscription** (the hub-spoke pattern most enterprises use).
 ```
 
 Notes:
-- Log Analytics parameters are optional. The script first tries an existing workspace named `azure-infra-iq-logs` in the deployment resource group and creates it automatically if it does not exist.
-- If you want to force an external/customer workspace, pass both `-ExistingLogAnalyticsWorkspaceId` and `-ExistingLogAnalyticsWorkspaceKey`.
+- Log Analytics is skipped by default (`--logs-destination none`) so no workspace is created unless you opt in.
+- To enable monitoring during deployment, either:
+    - pass `-CreateLogAnalyticsWorkspace $true` to create/use `azure-infra-iq-logs`, or
+    - pass both `-ExistingLogAnalyticsWorkspaceId` and `-ExistingLogAnalyticsWorkspaceKey` to use an existing workspace.
 
 After a private deployment the app URL resolves **only from inside the VNet** (or peered /
 on-prem networks via the private DNS). Reach it from a jumpbox/Bastion in the VNet, or over

@@ -67,11 +67,11 @@ param(
     [string]$ImageTag            = "",   # set to reuse an already-built tag and SKIP the build
     [string]$LogAnalyticsName    = "azure-infra-iq-logs",
     # Optional: customer-provided existing Log Analytics workspace credentials.
-    # If omitted, the script reuses a workspace named $LogAnalyticsName in the
-    # deployment RG when present; otherwise it creates one automatically.
+    # If omitted, deployment defaults to logs-destination=none unless
+    # -CreateLogAnalyticsWorkspace $true is set.
     [string]$ExistingLogAnalyticsWorkspaceId = "",
     [string]$ExistingLogAnalyticsWorkspaceKey = "",
-    [bool]$CreateLogAnalyticsWorkspace = $true,
+    [bool]$CreateLogAnalyticsWorkspace = $false,
 
     # Azure OpenAI
     [string]$OpenAIResourceName  = "",
@@ -507,13 +507,15 @@ Write-Ok "Image built: $fullImage"
 $acrUser = az acr credential show --name $ContainerRegistryName --query username -o tsv
 $acrPass = az acr credential show --name $ContainerRegistryName --query "passwords[0].value" -o tsv
 
-# ── Log Analytics + Container Apps environment ─────────────────────────────────
-Write-Step "Step 4: Log Analytics + Container Apps environment"
+# ── Monitoring + Container Apps environment ─────────────────────────────────
+Write-Step "Step 4: Monitoring + Container Apps environment"
 $lawCustomerId = ""
 $lawKey = ""
+$useLogAnalytics = $false
 if (-not [string]::IsNullOrWhiteSpace($ExistingLogAnalyticsWorkspaceId) -and -not [string]::IsNullOrWhiteSpace($ExistingLogAnalyticsWorkspaceKey)) {
     $lawCustomerId = $ExistingLogAnalyticsWorkspaceId
     $lawKey = $ExistingLogAnalyticsWorkspaceKey
+    $useLogAnalytics = $true
     Write-Info "Using customer-provided Log Analytics workspace credentials (no workspace creation)."
 } elseif ($CreateLogAnalyticsWorkspace) {
     $lawExists = az monitor log-analytics workspace show --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName 2>$null
@@ -522,20 +524,10 @@ if (-not [string]::IsNullOrWhiteSpace($ExistingLogAnalyticsWorkspaceId) -and -no
     }
     $lawCustomerId = az monitor log-analytics workspace show --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query customerId -o tsv
     $lawKey        = az monitor log-analytics workspace get-shared-keys --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query primarySharedKey -o tsv
+    $useLogAnalytics = $true
     Write-Info "Created/used deployment-owned Log Analytics workspace '$LogAnalyticsName'."
 } else {
-    $lawExists = az monitor log-analytics workspace show --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName 2>$null
-    if ($lawExists) {
-        $lawCustomerId = az monitor log-analytics workspace show --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query customerId -o tsv
-        $lawKey        = az monitor log-analytics workspace get-shared-keys --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query primarySharedKey -o tsv
-        Write-Info "Using existing workspace '$LogAnalyticsName' in deployment RG (no workspace creation)."
-    } else {
-        az monitor log-analytics workspace create --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --location $Location --output none
-        if ($LASTEXITCODE -ne 0) { Fail "Failed to create Log Analytics workspace '$LogAnalyticsName'." }
-        $lawCustomerId = az monitor log-analytics workspace show --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query customerId -o tsv
-        $lawKey        = az monitor log-analytics workspace get-shared-keys --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query primarySharedKey -o tsv
-        Write-Info "No existing workspace found; created '$LogAnalyticsName' automatically."
-    }
+    Write-Info "No Log Analytics workspace configured. Environment logs destination: none."
 }
 
 $envProvState = az containerapp env show --name $ContainerAppEnvName --resource-group $ResourceGroupName --query "properties.provisioningState" -o tsv 2>$null
@@ -547,9 +539,13 @@ if ($envProvState -and $envProvState -ne "Succeeded") {
 if (-not $envProvState) {
     $envCreateArgs = @(
         "containerapp","env","create",
-        "--name",$ContainerAppEnvName,"--resource-group",$ResourceGroupName,"--location",$Location,
-        "--logs-workspace-id",$lawCustomerId,"--logs-workspace-key",$lawKey
+        "--name",$ContainerAppEnvName,"--resource-group",$ResourceGroupName,"--location",$Location
     )
+    if ($useLogAnalytics) {
+        $envCreateArgs += @("--logs-destination","log-analytics","--logs-workspace-id",$lawCustomerId,"--logs-workspace-key",$lawKey)
+    } else {
+        $envCreateArgs += @("--logs-destination","none")
+    }
     if ($isPrivate) {
         # Inject into the customer VNet with an internal-only load balancer (no public IP).
         $envCreateArgs += @("--infrastructure-subnet-resource-id",$InfraSubnetId,"--internal-only","true")
