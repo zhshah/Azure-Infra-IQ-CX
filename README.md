@@ -347,6 +347,10 @@ Notes:
 - To enable monitoring during deployment, either:
     - pass `-CreateLogAnalyticsWorkspace $true` to create/use `azure-infra-iq-logs`, or
     - pass both `-ExistingLogAnalyticsWorkspaceId` and `-ExistingLogAnalyticsWorkspaceKey` to use an existing workspace.
+- Architecture Map (`/zuremap/`) is embedded by default and uses Container App managed identity.
+    `-ZureMapClientSecret` is optional and only needed if you want service-principal mode.
+- Container App deployment now includes dedicated capacity fallback to reduce capacity failures:
+    `D8 x 2 -> D8 x 1 -> D4 x 2 -> D4 x 1`.
 
 After a private deployment the app URL resolves **only from inside the VNet** (or peered /
 on-prem networks via the private DNS). Reach it from a jumpbox/Bastion in the VNet, or over

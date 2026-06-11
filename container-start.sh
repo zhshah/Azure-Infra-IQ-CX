@@ -10,9 +10,10 @@
 #   - The APP authenticates to Azure with its MANAGED IDENTITY (DefaultAzureCredential).
 #     We therefore must NOT set AZURE_CLIENT_ID/SECRET here (that would force a
 #     service-principal path and override the managed identity).
-#   - ZureMap authenticates its `az` CLI with a SERVICE PRINCIPAL supplied via
-#     ZUREMAP_CLIENT_ID / ZUREMAP_CLIENT_SECRET / ZUREMAP_TENANT_ID (separately named
-#     so they never collide with the app's managed identity).
+#   - ZureMap uses MANAGED IDENTITY by default. If a secret is provided, it falls back
+#     to SERVICE PRINCIPAL mode via ZUREMAP_CLIENT_ID / ZUREMAP_CLIENT_SECRET /
+#     ZUREMAP_TENANT_ID (separately named so they never collide with the app's
+#     managed identity).
 # ==============================================================================
 set -e
 
@@ -27,13 +28,17 @@ if [ -d "$ZM_DIR" ]; then
   sed -i 's#"/api/az#"/zuremap/api/az#g' "$ZM_DIR"/*.js 2>/dev/null || true
 fi
 
-# Authenticate the engine's az CLI non-interactively (service principal). Runs
-# BEFORE the engine starts so its first login-status poll already succeeds.
+# Authenticate the engine's az CLI non-interactively BEFORE it starts so the first
+# login-status poll succeeds.
 if [ -n "$ZUREMAP_CLIENT_ID" ] && [ -n "$ZUREMAP_CLIENT_SECRET" ] && [ -n "$ZUREMAP_TENANT_ID" ]; then
+  echo "[start] Architecture Map auth mode: service principal"
   az login --service-principal -u "$ZUREMAP_CLIENT_ID" -p "$ZUREMAP_CLIENT_SECRET" --tenant "$ZUREMAP_TENANT_ID" --output none 2>/dev/null || true
-  az config set extension.use_dynamic_install=yes_without_prompt 2>/dev/null || true
-  ( az extension add -n resource-graph -y --only-show-errors >/dev/null 2>&1 & )
+else
+  echo "[start] Architecture Map auth mode: managed identity"
+  az login --identity --output none 2>/dev/null || true
 fi
+az config set extension.use_dynamic_install=yes_without_prompt 2>/dev/null || true
+( az extension add -n resource-graph -y --only-show-errors >/dev/null 2>&1 & )
 
 # Start the ZureMap proxy (port 3001) in the background. Mirror its output to the
 # container console (so `az containerapp logs show` surfaces engine errors) AND to

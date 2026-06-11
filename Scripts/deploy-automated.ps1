@@ -22,9 +22,9 @@
     so NO client secret is deployed. Azure OpenAI uses an API key.
 
     The embedded "Architecture Map" (ZureMap) engine ships INSIDE the same image and
-    is served same-origin under /zuremap/ behind an auth-gated reverse proxy. Provide
-    a service principal (with a secret + Reader) via -ZureMapClientSecret to enable it;
-    omit it and the app still deploys (the Architecture Map then shows a sign-in prompt).
+    is served same-origin under /zuremap/ behind an auth-gated reverse proxy.
+    By default it uses the Container App managed identity; optional SP credentials can
+    be provided via -ZureMapClientSecret for non-MI environments.
 
 .EXAMPLE
     # Public deployment (simplest)
@@ -84,12 +84,10 @@ param(
     [string]$EntraAppClientId = "",
     [string]$EntraTenantId    = "",
 
-    # Service principal for the embedded ZureMap "Architecture Map" engine. Its `az`
-    # CLI logs in with this SECRET; the SP also needs Reader on the scanned subs.
-    # Defaults to the same app registration used for login. Leave the secret empty to
-    # deploy the app without the Architecture Map enabled.
+    # Optional service-principal credentials for the embedded ZureMap engine.
+    # If omitted, ZureMap uses the Container App managed identity by default.
     [string]$ZureMapClientId     = "",   # defaults to $EntraAppClientId
-    [string]$ZureMapClientSecret = "",   # required to ENABLE the Architecture Map
+    [string]$ZureMapClientSecret = "",   # optional; only for SP login mode
     [string]$ZureMapTenantId     = "",   # defaults to $EntraTenantId
 
     # Target subscription for the deployment. Defaults to the active az subscription.
@@ -116,10 +114,11 @@ param(
     [string]$RedisSku  = "Standard",
     [string]$RedisVmSize = "c2",
 
-    # Container sizing (Consumption profile — valid CPU:memory pairs up to 4 vCPU / 8Gi).
-    # 4.0 vCPU / 8.0Gi medium+ profile (AI analysis, multi-sub scanning, diagram + PDF rendering).
-    [string]$Cpu    = "4.0",
-    [string]$Memory = "8.0Gi",
+    # Container sizing defaults. The script applies a dedicated capacity fallback ladder:
+    # D8x2 -> D8x1 -> D4x2 -> D4x1. These Cpu/Memory values are the initial target.
+    [string]$Cpu    = "8.0",
+    [string]$Memory = "32.0Gi",
+    [bool]$EnableDedicatedCapacityFallback = $true,
 
     # ── Private / VNet-integrated deployment ──────────────────────────────────
     # 'Public'  : Container Apps environment with a public ingress (default).
@@ -189,7 +188,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.4"
+$ScriptVersion = "2026-06-11.5"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -305,7 +304,8 @@ if ($explicitSubs) {
 }
 if ([string]::IsNullOrWhiteSpace($ZureMapClientId)) { $ZureMapClientId = $EntraAppClientId }
 if ([string]::IsNullOrWhiteSpace($ZureMapTenantId)) { $ZureMapTenantId = $EntraTenantId }
-$deployZureMap = -not [string]::IsNullOrWhiteSpace($ZureMapClientSecret)
+$deployZureMap = $true
+$useZureMapSp = -not [string]::IsNullOrWhiteSpace($ZureMapClientSecret)
 $zuremapSessionKey = -join ((48..57)+(97..122) | Get-Random -Count 48 | ForEach-Object { [char]$_ })
 
 # ── Private (VNet-integrated) networking resolution ────────────────────────-
@@ -551,8 +551,28 @@ if (-not $envProvState) {
         $envCreateArgs += @("--infrastructure-subnet-resource-id",$InfraSubnetId,"--internal-only","true")
         Write-Info "Private mode: environment -> subnet '$SubnetName' (internal-only ingress)."
     }
-    az @envCreateArgs --output none
-    if ($LASTEXITCODE -ne 0) { Fail "Failed to create Container Apps environment (region capacity/quota, or the infrastructure subnet is unusable — needs >= /27 (/23 recommended), empty, delegated to Microsoft.App/environments). Try a different -Location." }
+    $envCreated = $false
+    $lastEnvError = ""
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        Write-Info "Creating Container Apps environment (attempt $attempt/4)..."
+        $envErr = az @envCreateArgs --output none 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $envCreated = $true
+            break
+        }
+
+        $lastEnvError = "$envErr"
+        $isCapacityError = ($lastEnvError -match "AKSCapacityHeavyUsage") -or ($lastEnvError -match "capacity")
+        if ($isCapacityError -and $attempt -lt 4) {
+            Write-Warn2 "Container Apps environment capacity is constrained in '$Location'. Retrying in 45 seconds..."
+            Start-Sleep -Seconds 45
+            continue
+        }
+        break
+    }
+    if (-not $envCreated) {
+        Fail "Failed to create Container Apps environment (region capacity/quota, or the infrastructure subnet is unusable — needs >= /27 (/23 recommended), empty, delegated to Microsoft.App/environments). Last error: $lastEnvError"
+    }
     $envProvState = az containerapp env show --name $ContainerAppEnvName --resource-group $ResourceGroupName --query "properties.provisioningState" -o tsv 2>$null
     if ($envProvState -ne "Succeeded") { Fail "Container Apps environment did not provision successfully (state: $envProvState). Try a different -Location with available capacity." }
 }
@@ -724,8 +744,8 @@ $secrets = @("openai-key=$openaiKey")
 if ($DeploySql)   { $secrets += "sql-conn=$sqlConnectionString" }
 if ($redisUrl)    { $secrets += "redis-url=$redisUrl" }
 if ($deployZureMap) {
-    $secrets += "zuremap-secret=$ZureMapClientSecret"
     $secrets += "zuremap-session-key=$zuremapSessionKey"
+    if ($useZureMapSp) { $secrets += "zuremap-secret=$ZureMapClientSecret" }
 }
 
 # Environment contract (the app's real env — see backend/services/*).
@@ -750,32 +770,74 @@ if ($redisUrl)  { $envVars += "REDIS_URL=secretref:redis-url" }
 # Embedded Architecture Map (ZureMap). ZUREMAP_* are deliberately NOT named AZURE_*
 # so they never override the app's managed identity (DefaultAzureCredential).
 if ($deployZureMap) {
-    $envVars += @(
-        "ZUREMAP_EMBED=proxy",
-        "ZUREMAP_CLIENT_ID=$ZureMapClientId",
-        "ZUREMAP_TENANT_ID=$ZureMapTenantId",
-        "ZUREMAP_CLIENT_SECRET=secretref:zuremap-secret",
-        "ZUREMAP_SESSION_KEY=secretref:zuremap-session-key"
-    )
+    $envVars += @("ZUREMAP_EMBED=proxy", "ZUREMAP_SESSION_KEY=secretref:zuremap-session-key")
+    if ($useZureMapSp) {
+        $envVars += @(
+            "ZUREMAP_USE_MANAGED_IDENTITY=false",
+            "ZUREMAP_CLIENT_ID=$ZureMapClientId",
+            "ZUREMAP_TENANT_ID=$ZureMapTenantId",
+            "ZUREMAP_CLIENT_SECRET=secretref:zuremap-secret"
+        )
+    } else {
+        $envVars += @("ZUREMAP_USE_MANAGED_IDENTITY=true")
+    }
 }
 
 $appExists = az containerapp show --name $ContainerAppName --resource-group $ResourceGroupName 2>$null
-if (-not $appExists) {
-    az containerapp create --name $ContainerAppName --resource-group $ResourceGroupName --environment $ContainerAppEnvName `
-        --image $fullImage --target-port 8000 --ingress $ingressMode --transport auto `
-        --registry-server $acrLoginServer --registry-username $acrUser --registry-password $acrPass `
-        --system-assigned `
-        --cpu $Cpu --memory $Memory --min-replicas 1 --max-replicas 2 `
-        --secrets $secrets --env-vars $envVars --output none
-    if ($LASTEXITCODE -ne 0) { Fail "Failed to create Container App." }
-} else {
+$profileLadder = @(
+    @{ Type="D8"; Name="infraiq-d8"; MinNodes=2; MaxNodes=2; Cpu="8.0";  Memory="32.0Gi"; MaxReplicas=2; Label="D8 x 2" },
+    @{ Type="D8"; Name="infraiq-d8"; MinNodes=1; MaxNodes=1; Cpu="8.0";  Memory="32.0Gi"; MaxReplicas=2; Label="D8 x 1" },
+    @{ Type="D4"; Name="infraiq-d4"; MinNodes=2; MaxNodes=2; Cpu="4.0";  Memory="16.0Gi"; MaxReplicas=2; Label="D4 x 2" },
+    @{ Type="D4"; Name="infraiq-d4"; MinNodes=1; MaxNodes=1; Cpu="4.0";  Memory="16.0Gi"; MaxReplicas=1; Label="D4 x 1" }
+)
+if (-not $EnableDedicatedCapacityFallback) {
+    $profileLadder = @(@{ Type="D4"; Name="infraiq-manual"; MinNodes=1; MaxNodes=1; Cpu=$Cpu; Memory=$Memory; MaxReplicas=2; Label="manual" })
+}
+
+if ($appExists) {
     az containerapp registry set --name $ContainerAppName --resource-group $ResourceGroupName `
         --server $acrLoginServer --username $acrUser --password $acrPass --output none 2>$null
     az containerapp secret set --name $ContainerAppName --resource-group $ResourceGroupName --secrets $secrets --output none
-    az containerapp update --name $ContainerAppName --resource-group $ResourceGroupName `
-        --image $fullImage --set-env-vars $envVars --output none
-    if ($LASTEXITCODE -ne 0) { Fail "Failed to update Container App." }
 }
+
+$profileDeployed = $null
+$lastDeployError = ""
+foreach ($profile in $profileLadder) {
+    Write-Info "Trying dedicated capacity profile: $($profile.Label)"
+    $wpErr = az containerapp env workload-profile set --name $ContainerAppEnvName --resource-group $ResourceGroupName `
+        --workload-profile-name $profile.Name --workload-profile-type $profile.Type `
+        --min-nodes $profile.MinNodes --max-nodes $profile.MaxNodes --output none 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $lastDeployError = "$wpErr"
+        Write-Warn2 "Workload profile '$($profile.Label)' unavailable right now. Trying next fallback profile."
+        continue
+    }
+
+    if (-not $appExists) {
+        $appErr = az containerapp create --name $ContainerAppName --resource-group $ResourceGroupName --environment $ContainerAppEnvName `
+            --image $fullImage --target-port 8000 --ingress $ingressMode --transport auto `
+            --registry-server $acrLoginServer --registry-username $acrUser --registry-password $acrPass `
+            --system-assigned --workload-profile-name $profile.Name `
+            --cpu $profile.Cpu --memory $profile.Memory --min-replicas 1 --max-replicas $profile.MaxReplicas `
+            --secrets $secrets --env-vars $envVars --output none 2>&1
+    } else {
+        $appErr = az containerapp update --name $ContainerAppName --resource-group $ResourceGroupName `
+            --image $fullImage --set-env-vars $envVars --workload-profile-name $profile.Name `
+            --cpu $profile.Cpu --memory $profile.Memory --min-replicas 1 --max-replicas $profile.MaxReplicas --output none 2>&1
+    }
+
+    if ($LASTEXITCODE -eq 0) {
+        $profileDeployed = $profile
+        $Cpu = $profile.Cpu
+        $Memory = $profile.Memory
+        Write-Ok "Container App deployed using profile fallback selection: $($profile.Label)"
+        break
+    }
+
+    $lastDeployError = "$appErr"
+    Write-Warn2 "Container App deployment failed on '$($profile.Label)'. Trying next fallback profile."
+}
+if (-not $profileDeployed) { Fail "Failed to create/update Container App across all dedicated fallback profiles. Last error: $lastDeployError" }
 $fqdn = az containerapp show --name $ContainerAppName --resource-group $ResourceGroupName --query "properties.configuration.ingress.fqdn" -o tsv
 $appUrl = "https://$fqdn"
 Write-Ok "Container App ready: $appUrl"
@@ -876,8 +938,8 @@ foreach ($sid in ($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() } | W
         else { Write-Warn2 "Could not assign $role on $sid"; $permIssues += "az role assignment create --assignee $principalId --role `"$role`" --scope `"/subscriptions/$sid`"" }
     }
 }
-# The ZureMap engine scans Azure with its OWN service principal, so grant it Reader too.
-if ($deployZureMap) {
+# If ZureMap is configured for SP mode, grant its service principal Reader too.
+if ($deployZureMap -and $useZureMapSp) {
     foreach ($sid in ($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
         $zr = az role assignment create --assignee $ZureMapClientId --role "Reader" --scope "/subscriptions/$sid" --output none 2>&1
         if ($LASTEXITCODE -eq 0 -or "$zr" -match "already exists|RoleAssignmentExists") { Write-Ok "ZureMap SP Reader on /subscriptions/$sid" }
@@ -947,6 +1009,7 @@ Write-Host "  App URL:        $appUrl" -ForegroundColor Green
 Write-Host "  Resource group: $ResourceGroupName ($Location)" -ForegroundColor Gray
 Write-Host "  Image:          $fullImage" -ForegroundColor Gray
 Write-Host "  SKUs:           ACR Premium | Container App ${Cpu}/${Memory} | SQL $SqlServiceObjective | Redis $RedisSku $RedisVmSize | OpenAI S0 (PAYG)" -ForegroundColor Gray
+if ($profileDeployed) { Write-Host "  ACA profile:    $($profileDeployed.Label) [$($profileDeployed.Type)]" -ForegroundColor Gray }
 Write-Host "  OpenAI:         $OpenAIResourceName / $OpenAIDeploymentName" -ForegroundColor Gray
 if ($DeploySql)  { Write-Host "  Azure SQL:      $SqlServerName/$SqlDatabaseName (admin: $SqlAdminUser)" -ForegroundColor Gray }
 if ($redisUrl)   { Write-Host "  Redis:          $RedisName" -ForegroundColor Gray }
@@ -968,5 +1031,8 @@ if ($permIssues.Count -gt 0) {
     $permIssues | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkYellow }
 }
 Write-Host "`n  Sign in at $appUrl with your organizational account." -ForegroundColor Cyan
-if ($deployZureMap) { Write-Host "  Architecture Map (ZureMap) is embedded and served at $appUrl/zuremap/ (auth-gated)." -ForegroundColor DarkGray }
-else { Write-Host "  NOTE: Architecture Map disabled (no -ZureMapClientSecret provided)." -ForegroundColor DarkGray }
+if ($deployZureMap -and $useZureMapSp) {
+    Write-Host "  Architecture Map (ZureMap) is embedded at $appUrl/zuremap/ using service-principal mode." -ForegroundColor DarkGray
+} elseif ($deployZureMap) {
+    Write-Host "  Architecture Map (ZureMap) is embedded at $appUrl/zuremap/ using managed identity mode." -ForegroundColor DarkGray
+}
