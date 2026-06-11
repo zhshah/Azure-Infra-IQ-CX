@@ -23,7 +23,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -6324,6 +6324,43 @@ def _archmap_rebrand() -> bool:
 
 
 # ── ZureMap Architecture Diagram Integration ────────────────────────────────
+# ── Reverse proxy for the embedded Architecture Map engine (combined container) ──
+# In the SINGLE combined image there is NO NGINX, so the backend itself must proxy
+# /zuremap/* to the in-container engine on :3001. WITHOUT this route, /zuremap/* falls
+# through to the SPA catch-all ("/{full_path:path}") and returns the PORTAL's index.html
+# — which renders our own app recursively inside the Architecture Map iframe. Registered
+# BEFORE the catch-all so it wins. (In docker-compose, NGINX proxies /zuremap/ directly.)
+_ZM_UPSTREAM = "http://localhost:3001"
+_ZM_HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+                  "te", "trailers", "transfer-encoding", "upgrade", "content-encoding", "content-length"}
+
+@app.api_route("/zuremap", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/zuremap/{path:path}",
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+               include_in_schema=False)
+async def zuremap_proxy(request: Request, path: str = ""):
+    """Reverse-proxy /zuremap/* to the in-container Architecture Map engine (:3001).
+    Auth is enforced upstream by the _entra_auth_gate middleware (zm_sess cookie)."""
+    import httpx
+    target = f"{_ZM_UPSTREAM}/{path}"
+    if request.url.query:
+        target += f"?{request.url.query}"
+    body = await request.body()
+    fwd_headers = {k: v for k, v in request.headers.items()
+                   if k.lower() != "host" and k.lower() not in _ZM_HOP_BY_HOP}
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            up = await client.request(request.method, target, content=body,
+                                      headers=fwd_headers, follow_redirects=False)
+    except Exception as exc:
+        # Never fall through to the SPA (that would render the portal in the iframe).
+        return JSONResponse({"detail": f"Architecture Map engine not reachable: {exc}"}, status_code=502)
+    resp_headers = {k: v for k, v in up.headers.items()
+                    if k.lower() not in _ZM_HOP_BY_HOP and k.lower() != "content-type"}
+    return Response(content=up.content, status_code=up.status_code,
+                    headers=resp_headers, media_type=up.headers.get("content-type"))
+
+
 @app.get("/api/zuremap/status")
 async def zuremap_status():
     """Check if ZureMap container is reachable and authenticated."""
