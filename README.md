@@ -336,14 +336,12 @@ subscription** (the hub-spoke pattern most enterprises use).
     -SubnetName         "container-apps-subnet" `
     -PrivateEndpointSubnetName       "pe-subnet" `
     -PrivateDnsZoneSubscriptionId    "<hub-subscription-id>" `
-    -PrivateDnsZoneResourceGroupName "rg-private-dns-zones" `
-    -ExistingLogAnalyticsWorkspaceId  "<existing-law-customer-id>" `
-    -ExistingLogAnalyticsWorkspaceKey "<existing-law-primary-key>"
+    -PrivateDnsZoneResourceGroupName "rg-private-dns-zones"
 ```
 
 Notes:
-- If `-ExistingLogAnalyticsWorkspaceId` and `-ExistingLogAnalyticsWorkspaceKey` are not passed, the script first tries to use an existing workspace named `azure-infra-iq-logs` in the deployment resource group.
-- The script creates a new Log Analytics workspace only when `-CreateLogAnalyticsWorkspace $true` is set.
+- Log Analytics parameters are optional. The script first tries an existing workspace named `azure-infra-iq-logs` in the deployment resource group and creates it automatically if it does not exist.
+- If you want to force an external/customer workspace, pass both `-ExistingLogAnalyticsWorkspaceId` and `-ExistingLogAnalyticsWorkspaceKey`.
 
 After a private deployment the app URL resolves **only from inside the VNet** (or peered /
 on-prem networks via the private DNS). Reach it from a jumpbox/Bastion in the VNet, or over

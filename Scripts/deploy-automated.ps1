@@ -66,11 +66,12 @@ param(
     [string]$ImageName           = "azure-infra-iq",
     [string]$ImageTag            = "",   # set to reuse an already-built tag and SKIP the build
     [string]$LogAnalyticsName    = "azure-infra-iq-logs",
-    # Use customer-provided Log Analytics workspace by default. If you do not pass
-    # these, set -CreateLogAnalyticsWorkspace $true to let the script create one.
+    # Optional: customer-provided existing Log Analytics workspace credentials.
+    # If omitted, the script reuses a workspace named $LogAnalyticsName in the
+    # deployment RG when present; otherwise it creates one automatically.
     [string]$ExistingLogAnalyticsWorkspaceId = "",
     [string]$ExistingLogAnalyticsWorkspaceKey = "",
-    [bool]$CreateLogAnalyticsWorkspace = $false,
+    [bool]$CreateLogAnalyticsWorkspace = $true,
 
     # Azure OpenAI
     [string]$OpenAIResourceName  = "",
@@ -483,7 +484,11 @@ if (-not [string]::IsNullOrWhiteSpace($ExistingLogAnalyticsWorkspaceId) -and -no
         $lawKey        = az monitor log-analytics workspace get-shared-keys --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query primarySharedKey -o tsv
         Write-Info "Using existing workspace '$LogAnalyticsName' in deployment RG (no workspace creation)."
     } else {
-        Fail "No Log Analytics workspace credentials provided and workspace '$LogAnalyticsName' was not found in RG '$ResourceGroupName'. Pass -ExistingLogAnalyticsWorkspaceId and -ExistingLogAnalyticsWorkspaceKey, or set -CreateLogAnalyticsWorkspace `$true."
+        az monitor log-analytics workspace create --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --location $Location --output none
+        if ($LASTEXITCODE -ne 0) { Fail "Failed to create Log Analytics workspace '$LogAnalyticsName'." }
+        $lawCustomerId = az monitor log-analytics workspace show --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query customerId -o tsv
+        $lawKey        = az monitor log-analytics workspace get-shared-keys --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query primarySharedKey -o tsv
+        Write-Info "No existing workspace found; created '$LogAnalyticsName' automatically."
     }
 }
 
