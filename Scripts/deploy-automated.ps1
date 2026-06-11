@@ -208,7 +208,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.16"
+$ScriptVersion = "2026-06-11.17"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -333,7 +333,14 @@ $zuremapSessionKey = -join ((48..57)+(97..122) | Get-Random -Count 48 | ForEach-
 # missing. $isPrivate / $ingressMode / $InfraSubnetId / $VNetId / $PeSubnetId are
 # ALWAYS defined so the environment + app + private-endpoint steps reference them safely.
 $isPrivate     = ($DeploymentMode -eq "Private")
-$ingressMode   = if ($isPrivate) { "internal" } else { "external" }
+# App ingress is ALWAYS 'external'. Privacy comes from the ENVIRONMENT being internal-only
+# (--internal-only true, set in Step 4), which gives the load balancer a PRIVATE IP only.
+# On an internal-only environment, 'external' means "reachable from the whole VNet (and
+# peered networks / on-prem) via that private IP" — it is NOT public. Using 'internal'
+# would scope the app to other apps INSIDE the Container Apps environment only, so VMs
+# elsewhere in the VNet cannot reach it, and the app FQDN would gain an extra '.internal.'
+# label that the private-DNS wildcard record (Step 8b) does not cover.
+$ingressMode   = "external"
 $InfraSubnetId = ""
 $VNetId        = ""
 $PeSubnetId    = ""
