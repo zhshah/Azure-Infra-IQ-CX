@@ -5,14 +5,14 @@
 
 .DESCRIPTION
     Creates everything needed to run Azure Infra IQ on Azure Container Apps from
-    scratch, test-minimal SKUs by default:
+    scratch, medium production SKUs by default:
 
       - Resource group
-      - Azure Container Registry (Basic) + remote image build (az acr build)
-      - Log Analytics workspace + Container Apps Environment (consumption)
+    - Azure Container Registry (Premium) + remote image build (az acr build)
+    - Container Apps Environment wired to an EXISTING Log Analytics workspace
       - Azure OpenAI (S0) + a chat model deployment (key-based)
-      - Azure SQL (Basic) logical server + database (SQL auth)  [optional]
-      - Azure Cache for Redis (Basic C0)                        [optional]
+    - Azure SQL (General Purpose, 4 vCores) logical server + database (SQL auth)  [optional]
+    - Azure Cache for Redis (Standard C2)                                       [optional]
       - Container App with a SYSTEM-ASSIGNED managed identity
       - RBAC: Reader + Cost Management Reader on each scanned subscription
       - Microsoft Graph application permissions on the managed identity
@@ -66,6 +66,11 @@ param(
     [string]$ImageName           = "azure-infra-iq",
     [string]$ImageTag            = "",   # set to reuse an already-built tag and SKIP the build
     [string]$LogAnalyticsName    = "azure-infra-iq-logs",
+    # Use customer-provided Log Analytics workspace by default. If you do not pass
+    # these, set -CreateLogAnalyticsWorkspace $true to let the script create one.
+    [string]$ExistingLogAnalyticsWorkspaceId = "",
+    [string]$ExistingLogAnalyticsWorkspaceKey = "",
+    [bool]$CreateLogAnalyticsWorkspace = $false,
 
     # Azure OpenAI
     [string]$OpenAIResourceName  = "",
@@ -99,18 +104,19 @@ param(
     [string]$SqlDatabaseName = "infraiqdb",
     [string]$SqlAdminUser   = "infraiqadmin",
     [string]$SqlAdminPassword = "",      # auto-generated if empty
-    [string]$SqlServiceObjective = "Basic",
+    # vCore-based SQL objective for medium profile.
+    [string]$SqlServiceObjective = "GP_Gen5_4",
 
     # Azure Cache for Redis (optional L2 cache)
     [bool]$DeployRedis = $true,
     [string]$RedisName = "",
-    [string]$RedisSku  = "Basic",
-    [string]$RedisVmSize = "c0",
+    [string]$RedisSku  = "Standard",
+    [string]$RedisVmSize = "c2",
 
     # Container sizing (Consumption profile — valid CPU:memory pairs up to 4 vCPU / 8Gi).
-    # 2.0 vCPU / 4.0Gi production size (AI analysis, multi-sub scanning, diagram + PDF rendering).
-    [string]$Cpu    = "2.0",
-    [string]$Memory = "4.0Gi",
+    # 4.0 vCPU / 8.0Gi medium+ profile (AI analysis, multi-sub scanning, diagram + PDF rendering).
+    [string]$Cpu    = "4.0",
+    [string]$Memory = "8.0Gi",
 
     # ── Private / VNet-integrated deployment ──────────────────────────────────
     # 'Public'  : Container Apps environment with a public ingress (default).
@@ -413,7 +419,7 @@ Write-Ok "Resource group ready: $ResourceGroupName"
 Write-Step "Step 3: Container Registry + image build"
 $acrExists = az acr show --name $ContainerRegistryName --resource-group $ResourceGroupName 2>$null
 if (-not $acrExists) {
-    az acr create --name $ContainerRegistryName --resource-group $ResourceGroupName --sku Basic --admin-enabled true --output none
+    az acr create --name $ContainerRegistryName --resource-group $ResourceGroupName --sku Premium --admin-enabled true --output none
     if ($LASTEXITCODE -ne 0) { Fail "Failed to create ACR '$ContainerRegistryName' (name may be taken)." }
 }
 az acr update --name $ContainerRegistryName --admin-enabled true --output none 2>$null
@@ -456,12 +462,30 @@ $acrPass = az acr credential show --name $ContainerRegistryName --query "passwor
 
 # ── Log Analytics + Container Apps environment ─────────────────────────────────
 Write-Step "Step 4: Log Analytics + Container Apps environment"
-$lawExists = az monitor log-analytics workspace show --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName 2>$null
-if (-not $lawExists) {
-    az monitor log-analytics workspace create --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --location $Location --output none
+$lawCustomerId = ""
+$lawKey = ""
+if (-not [string]::IsNullOrWhiteSpace($ExistingLogAnalyticsWorkspaceId) -and -not [string]::IsNullOrWhiteSpace($ExistingLogAnalyticsWorkspaceKey)) {
+    $lawCustomerId = $ExistingLogAnalyticsWorkspaceId
+    $lawKey = $ExistingLogAnalyticsWorkspaceKey
+    Write-Info "Using customer-provided Log Analytics workspace credentials (no workspace creation)."
+} elseif ($CreateLogAnalyticsWorkspace) {
+    $lawExists = az monitor log-analytics workspace show --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName 2>$null
+    if (-not $lawExists) {
+        az monitor log-analytics workspace create --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --location $Location --output none
+    }
+    $lawCustomerId = az monitor log-analytics workspace show --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query customerId -o tsv
+    $lawKey        = az monitor log-analytics workspace get-shared-keys --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query primarySharedKey -o tsv
+    Write-Info "Created/used deployment-owned Log Analytics workspace '$LogAnalyticsName'."
+} else {
+    $lawExists = az monitor log-analytics workspace show --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName 2>$null
+    if ($lawExists) {
+        $lawCustomerId = az monitor log-analytics workspace show --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query customerId -o tsv
+        $lawKey        = az monitor log-analytics workspace get-shared-keys --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query primarySharedKey -o tsv
+        Write-Info "Using existing workspace '$LogAnalyticsName' in deployment RG (no workspace creation)."
+    } else {
+        Fail "No Log Analytics workspace credentials provided and workspace '$LogAnalyticsName' was not found in RG '$ResourceGroupName'. Pass -ExistingLogAnalyticsWorkspaceId and -ExistingLogAnalyticsWorkspaceKey, or set -CreateLogAnalyticsWorkspace `$true."
+    }
 }
-$lawCustomerId = az monitor log-analytics workspace show --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query customerId -o tsv
-$lawKey        = az monitor log-analytics workspace get-shared-keys --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query primarySharedKey -o tsv
 
 $envProvState = az containerapp env show --name $ContainerAppEnvName --resource-group $ResourceGroupName --query "properties.provisioningState" -o tsv 2>$null
 if ($envProvState -and $envProvState -ne "Succeeded") {
@@ -488,7 +512,7 @@ if (-not $envProvState) {
 Write-Ok "Container Apps environment ready: $ContainerAppEnvName ($envProvState)"
 
 # ── Azure OpenAI + model ───────────────────────────────────────────────────────
-Write-Step "Step 5: Azure OpenAI"
+Write-Step "Step 5: Azure OpenAI (S0 PAYG account + model PAYG)"
 $openaiExists = az cognitiveservices account show --name $OpenAIResourceName --resource-group $ResourceGroupName 2>$null
 if (-not $openaiExists) {
     az cognitiveservices account create --name $OpenAIResourceName --resource-group $ResourceGroupName `
@@ -875,6 +899,7 @@ Write-Step "Deployment complete"
 Write-Host "  App URL:        $appUrl" -ForegroundColor Green
 Write-Host "  Resource group: $ResourceGroupName ($Location)" -ForegroundColor Gray
 Write-Host "  Image:          $fullImage" -ForegroundColor Gray
+Write-Host "  SKUs:           ACR Premium | Container App ${Cpu}/${Memory} | SQL $SqlServiceObjective | Redis $RedisSku $RedisVmSize | OpenAI S0 (PAYG)" -ForegroundColor Gray
 Write-Host "  OpenAI:         $OpenAIResourceName / $OpenAIDeploymentName" -ForegroundColor Gray
 if ($DeploySql)  { Write-Host "  Azure SQL:      $SqlServerName/$SqlDatabaseName (admin: $SqlAdminUser)" -ForegroundColor Gray }
 if ($redisUrl)   { Write-Host "  Redis:          $RedisName" -ForegroundColor Gray }
