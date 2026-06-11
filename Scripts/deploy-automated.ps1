@@ -188,7 +188,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.6"
+$ScriptVersion = "2026-06-11.7"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -374,6 +374,151 @@ if ($isPrivate) {
         if ($LASTEXITCODE -eq 0) { Write-Ok "Subnet delegated to Microsoft.App/environments" }
         else { Write-Warn2 "Could not delegate the subnet — delegate it to 'Microsoft.App/environments' manually before re-running." }
     } else { Write-Ok "Subnet already delegated to Microsoft.App/environments" }
+
+    # ── Subnet cleanliness pre-flight ─────────────────────────────────────────
+    # Container Apps requires the subnet to be 100 % empty. A previous failed
+    # deployment can leave the subnet "claimed" (IP configs, load balancer NICs, or
+    # an ACA environment still in CreateFailed state). Detect this BEFORE attempting
+    # the environment create so the admin gets a clear, actionable message instead of
+    # a cryptic ARM error deep inside the retry loop.
+    Write-Info "Checking subnet '$SubnetName' is clean and unoccupied..."
+
+    # 1) IP-configuration check: any allocation = subnet is not empty
+    $subnetIpConfigs = @()
+    if ($subnet.ipConfigurations) { $subnetIpConfigs = @($subnet.ipConfigurations) }
+    $subnetHasIpConfigs = $subnetIpConfigs.Count -gt 0
+
+    # 2) Find any Container Apps environment that references this exact subnet ID.
+    #    Search the deployment RG first (fast), then fall back to subscription-wide.
+    $linkedEnv   = $null
+    $linkedEnvRg = $null
+
+    $envsInRg = az containerapp env list --resource-group $ResourceGroupName --subscription $SubscriptionId --output json 2>$null
+    if ($envsInRg) {
+        ($envsInRg | ConvertFrom-Json) | ForEach-Object {
+            $es = $_.properties.vnetConfiguration.infrastructureSubnetId
+            if ($es -and $es.ToLowerInvariant() -eq $InfraSubnetId.ToLowerInvariant()) {
+                $linkedEnv = $_; $linkedEnvRg = $ResourceGroupName
+            }
+        }
+    }
+    if (-not $linkedEnv) {
+        # Broader subscription-level search (covers envs in other resource groups)
+        $allEnvs = az containerapp env list --subscription $SubscriptionId --output json 2>$null
+        if ($allEnvs) {
+            ($allEnvs | ConvertFrom-Json) | ForEach-Object {
+                $es = $_.properties.vnetConfiguration.infrastructureSubnetId
+                if ($es -and $es.ToLowerInvariant() -eq $InfraSubnetId.ToLowerInvariant()) {
+                    $linkedEnv = $_; $linkedEnvRg = ($_.id -split '/')[4]
+                }
+            }
+        }
+    }
+
+    # 3) Evaluate what we found and decide how to proceed.
+    $subnetBlocked = $false
+    $sep = "  " + ("─" * 72)
+    if ($linkedEnv) {
+        $linkedEnvName  = $linkedEnv.name
+        $linkedEnvState = $linkedEnv.properties.provisioningState
+
+        if ($linkedEnvState -eq "Succeeded" -and
+            $linkedEnvName  -eq $ContainerAppEnvName -and
+            $linkedEnvRg    -eq $ResourceGroupName) {
+            # Same environment, same RG, healthy → this is a re-run. No action needed.
+            Write-Ok "Subnet is held by existing healthy environment '$linkedEnvName' (re-run detected — OK)"
+
+        } elseif ($linkedEnvState -eq "Succeeded") {
+            # A DIFFERENT healthy environment owns this subnet.
+            $subnetBlocked = $true
+            Write-Host ""
+            Write-Host $sep                                                          -ForegroundColor Yellow
+            Write-Host "  SUBNET IN USE  —  $SubnetName"                           -ForegroundColor Yellow
+            Write-Host $sep                                                          -ForegroundColor Yellow
+            Write-Host "  An active Container Apps environment already owns this subnet:" -ForegroundColor Yellow
+            Write-Host "    Environment : $linkedEnvName"                           -ForegroundColor Cyan
+            Write-Host "    State       : $linkedEnvState"                          -ForegroundColor Cyan
+            Write-Host "    Resource group: $linkedEnvRg"                           -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host "  You have two options:"                                    -ForegroundColor Yellow
+            Write-Host "  Option A — Re-run this deployment pointing at a DIFFERENT subnet:" -ForegroundColor White
+            Write-Host "    -SubnetName '<new-empty-subnet-name>'"                  -ForegroundColor Cyan
+            Write-Host "  Option B — Delete the existing environment (only if you own it):" -ForegroundColor White
+            Write-Host "    az containerapp env delete --name $linkedEnvName ``"   -ForegroundColor Cyan
+            Write-Host "        --resource-group $linkedEnvRg --yes"               -ForegroundColor Cyan
+            Write-Host $sep                                                          -ForegroundColor Yellow
+            Write-Host ""
+
+        } elseif ($linkedEnvState -in @("CreateFailed","Failed","Canceled","Error")) {
+            # A FAILED environment is still holding the subnet.
+            $subnetBlocked = $true
+            Write-Host ""
+            Write-Host $sep                                                          -ForegroundColor Red
+            Write-Host "  SUBNET BLOCKED  —  $SubnetName"                          -ForegroundColor Red
+            Write-Host $sep                                                          -ForegroundColor Red
+            Write-Host "  A FAILED Container Apps environment is still associated with this subnet." -ForegroundColor Red
+            Write-Host "  Azure will reject every new environment create until it is removed."       -ForegroundColor Red
+            Write-Host ""
+            Write-Host "    Environment : $linkedEnvName"                           -ForegroundColor Cyan
+            Write-Host "    State       : $linkedEnvState"                          -ForegroundColor Red
+            Write-Host "    Resource group: $linkedEnvRg"                           -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host "  To fix — run BOTH commands (in order) and then re-run this script:" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "    Step 1: Delete the failed environment"                  -ForegroundColor White
+            Write-Host "      az containerapp env delete ``"                        -ForegroundColor Cyan
+            Write-Host "          --name $linkedEnvName ``"                         -ForegroundColor Cyan
+            Write-Host "          --resource-group $linkedEnvRg --yes"             -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host "    Step 2 (optional): If the subnet delegation is stuck after deletion" -ForegroundColor White
+            Write-Host "      az network vnet subnet update ``"                     -ForegroundColor Cyan
+            Write-Host "          --resource-group $VNetResourceGroupName ``"       -ForegroundColor Cyan
+            Write-Host "          --vnet-name $VNetName ``"                         -ForegroundColor Cyan
+            Write-Host "          --name $SubnetName --remove delegations"          -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host "    Alternative: Re-run with a brand-new empty subnet:"    -ForegroundColor White
+            Write-Host "      -SubnetName '<new-empty-subnet-name>'"                -ForegroundColor Cyan
+            Write-Host $sep                                                          -ForegroundColor Red
+            Write-Host ""
+
+        } else {
+            # Provisioning / updating — environment is in transition
+            Write-Warn2 "Environment '$linkedEnvName' in RG '$linkedEnvRg' is currently in state '$linkedEnvState' on this subnet. Proceeding with caution."
+        }
+
+    } elseif ($subnetHasIpConfigs) {
+        # No ACA environment found, but the subnet has connected IP configurations
+        # (e.g. NICs or load balancers left over from a deleted environment).
+        $subnetBlocked = $true
+        $configList = ($subnetIpConfigs | ForEach-Object {
+            $parts = $_.id -split '/'
+            if ($parts.Count -ge 9) { "  • $($parts[6])/$($parts[7])/$($parts[8])" } else { "  • $($_.id)" }
+        }) -join "`n"
+        Write-Host ""
+        Write-Host $sep                                                              -ForegroundColor Red
+        Write-Host "  SUBNET NOT EMPTY  —  $SubnetName"                            -ForegroundColor Red
+        Write-Host $sep                                                              -ForegroundColor Red
+        Write-Host "  The subnet has $($subnetIpConfigs.Count) connected resource(s) but no Container Apps environment was found." -ForegroundColor Red
+        Write-Host "  Container Apps requires a 100% empty, dedicated subnet."     -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  Connected resources:"                                         -ForegroundColor Yellow
+        Write-Host $configList                                                       -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "  Options:"                                                      -ForegroundColor Yellow
+        Write-Host "  Option A — Remove those resources from '$SubnetName' and retry." -ForegroundColor White
+        Write-Host "  Option B — Re-run with a different, empty subnet:"            -ForegroundColor White
+        Write-Host "    -SubnetName '<new-empty-subnet-name>'"                      -ForegroundColor Cyan
+        Write-Host $sep                                                              -ForegroundColor Red
+        Write-Host ""
+
+    } else {
+        Write-Ok "Subnet '$SubnetName' is clean — no connected resources or blocked environments found"
+    }
+
+    if ($subnetBlocked) {
+        Fail "Subnet '$SubnetName' is not available for a new Container Apps deployment. See the instructions above."
+    }
+    # ── End subnet cleanliness pre-flight ─────────────────────────────────────
 
     # 2) Private Endpoint subnet (OpenAI/SQL/Redis PEs). MUST differ from the ACA subnet
     #    (delegated subnets can't host PEs). Use the provided one, or auto-create it.
