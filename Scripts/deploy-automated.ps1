@@ -114,11 +114,25 @@ param(
     [string]$RedisSku  = "Standard",
     [string]$RedisVmSize = "c2",
 
-    # Container sizing defaults. The script applies a dedicated capacity fallback ladder:
-    # D8x2 -> D8x1 -> D4x2 -> D4x1. These Cpu/Memory values are the initial target.
+    # ── Container Apps dedicated capacity selection ───────────────────────────
+    # Choose how the dedicated workload profile (SKU size) for the Container App is picked:
+    #   'Automatic' : try a fallback ladder D8x2 -> D8x1 -> D4x2 -> D4x1 until one succeeds
+    #                 (most resilient against regional capacity constraints).
+    #   'Manual'    : use exactly ONE profile you pick (1-4). If -ManualProfileChoice is
+    #                 omitted in Manual mode, the script shows a 1/2/3/4 menu to choose from.
+    #                 Manual is FASTER (no ladder iteration) and fully deterministic.
+    [ValidateSet("Automatic","Manual")]
+    [string]$CapacityMode = "Automatic",
+    #   1 = D8 x 2 (8 vCPU / 32 GiB, 2 nodes)   2 = D8 x 1 (8 vCPU / 32 GiB, 1 node)
+    #   3 = D4 x 2 (4 vCPU / 16 GiB, 2 nodes)   4 = D4 x 1 (4 vCPU / 16 GiB, 1 node)
+    [ValidateSet("","1","2","3","4")]
+    [string]$ManualProfileChoice = "",
+    # [Deprecated] Backward compatible: -EnableDedicatedCapacityFallback $false is
+    # treated as Manual mode (defaults to profile 4 = D4 x 1 when no choice is given).
+    [bool]$EnableDedicatedCapacityFallback = $true,
+    # Legacy single-profile sizing override (unused by the 1-4 menu profiles).
     [string]$Cpu    = "8.0",
     [string]$Memory = "32.0Gi",
-    [bool]$EnableDedicatedCapacityFallback = $true,
 
     # ── Private / VNet-integrated deployment ──────────────────────────────────
     # 'Public'  : Container Apps environment with a public ingress (default).
@@ -188,7 +202,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.8"
+$ScriptVersion = "2026-06-11.9"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -585,6 +599,38 @@ if ($scanList.Count -gt 10) {
     Write-Info "Scan subscriptions: $($scanList.Count) total (first 5: $preview ...)"
 } else {
     Write-Info "Scan subscriptions: $($scanList -join ',')"
+}
+
+# ── Resolve Container Apps dedicated capacity selection (EARLY, before the long
+#    image build) so any interactive menu is shown up front and the rest of the
+#    deployment runs unattended. The chosen profile is APPLIED later in Step 8. ──
+$capacityProfiles = @(
+    @{ Choice="1"; Type="D8"; Name="infraiq-d8"; MinNodes=2; MaxNodes=2; Cpu="8.0"; Memory="32.0Gi"; MaxReplicas=2; Label="D8 x 2  (8 vCPU / 32 GiB, 2 nodes)" },
+    @{ Choice="2"; Type="D8"; Name="infraiq-d8"; MinNodes=1; MaxNodes=1; Cpu="8.0"; Memory="32.0Gi"; MaxReplicas=2; Label="D8 x 1  (8 vCPU / 32 GiB, 1 node)"  },
+    @{ Choice="3"; Type="D4"; Name="infraiq-d4"; MinNodes=2; MaxNodes=2; Cpu="4.0"; Memory="16.0Gi"; MaxReplicas=2; Label="D4 x 2  (4 vCPU / 16 GiB, 2 nodes)" },
+    @{ Choice="4"; Type="D4"; Name="infraiq-d4"; MinNodes=1; MaxNodes=1; Cpu="4.0"; Memory="16.0Gi"; MaxReplicas=1; Label="D4 x 1  (4 vCPU / 16 GiB, 1 node)"  }
+)
+# Backward compatibility: the old -EnableDedicatedCapacityFallback $false flag = Manual mode.
+$effectiveMode = $CapacityMode
+if (-not $EnableDedicatedCapacityFallback -and $CapacityMode -eq "Automatic") {
+    $effectiveMode = "Manual"
+    if ([string]::IsNullOrWhiteSpace($ManualProfileChoice)) { $ManualProfileChoice = "4" }
+    Write-Info "Legacy -EnableDedicatedCapacityFallback `$false detected -> Manual capacity mode (profile $ManualProfileChoice)."
+}
+if ($effectiveMode -eq "Manual" -and [string]::IsNullOrWhiteSpace($ManualProfileChoice)) {
+    Write-Host ""
+    Write-Host "  Select the Container Apps dedicated capacity profile (Manual mode):" -ForegroundColor Yellow
+    foreach ($p in $capacityProfiles) { Write-Host "    [$($p.Choice)] $($p.Label)" -ForegroundColor Cyan }
+    Write-Host ""
+    while ($ManualProfileChoice -notin @("1","2","3","4")) {
+        $ManualProfileChoice = (Read-Host "  Enter choice (1-4)").Trim()
+    }
+}
+if ($effectiveMode -eq "Manual") {
+    $selProfile = $capacityProfiles | Where-Object { $_.Choice -eq $ManualProfileChoice } | Select-Object -First 1
+    Write-Info "Capacity mode:     Manual -> $($selProfile.Label)"
+} else {
+    Write-Info "Capacity mode:     Automatic -> fallback ladder D8x2 -> D8x1 -> D4x2 -> D4x1"
 }
 
 # ── Providers + containerapp extension ─────────────────────────────────────────
@@ -991,14 +1037,16 @@ if ($deployZureMap) {
 }
 
 $appExists = az containerapp show --name $ContainerAppName --resource-group $ResourceGroupName 2>$null
-$profileLadder = @(
-    @{ Type="D8"; Name="infraiq-d8"; MinNodes=2; MaxNodes=2; Cpu="8.0";  Memory="32.0Gi"; MaxReplicas=2; Label="D8 x 2" },
-    @{ Type="D8"; Name="infraiq-d8"; MinNodes=1; MaxNodes=1; Cpu="8.0";  Memory="32.0Gi"; MaxReplicas=2; Label="D8 x 1" },
-    @{ Type="D4"; Name="infraiq-d4"; MinNodes=2; MaxNodes=2; Cpu="4.0";  Memory="16.0Gi"; MaxReplicas=2; Label="D4 x 2" },
-    @{ Type="D4"; Name="infraiq-d4"; MinNodes=1; MaxNodes=1; Cpu="4.0";  Memory="16.0Gi"; MaxReplicas=1; Label="D4 x 1" }
-)
-if (-not $EnableDedicatedCapacityFallback) {
-    $profileLadder = @(@{ Type="D4"; Name="infraiq-manual"; MinNodes=1; MaxNodes=1; Cpu=$Cpu; Memory=$Memory; MaxReplicas=2; Label="manual" })
+
+# Capacity selection was resolved early (before the image build). Build the profile
+# list to apply: a single chosen profile in Manual mode, or the full ladder in Automatic.
+if ($effectiveMode -eq "Manual") {
+    $sel = $capacityProfiles | Where-Object { $_.Choice -eq $ManualProfileChoice } | Select-Object -First 1
+    $profileLadder = @($sel)
+    Write-Info "Applying Manual capacity profile: $($sel.Label)"
+} else {
+    $profileLadder = $capacityProfiles
+    Write-Info "Applying Automatic capacity ladder: D8x2 -> D8x1 -> D4x2 -> D4x1"
 }
 
 if ($appExists) {
@@ -1010,13 +1058,14 @@ if ($appExists) {
 $profileDeployed = $null
 $lastDeployError = ""
 foreach ($profile in $profileLadder) {
-    Write-Info "Trying dedicated capacity profile: $($profile.Label)"
+    Write-Info "Provisioning dedicated capacity profile: $($profile.Label)"
     $wpErr = az containerapp env workload-profile set --name $ContainerAppEnvName --resource-group $ResourceGroupName `
         --workload-profile-name $profile.Name --workload-profile-type $profile.Type `
         --min-nodes $profile.MinNodes --max-nodes $profile.MaxNodes --output none 2>&1
     if ($LASTEXITCODE -ne 0) {
         $lastDeployError = "$wpErr"
-        Write-Warn2 "Workload profile '$($profile.Label)' unavailable right now. Trying next fallback profile."
+        if ($effectiveMode -eq "Manual") { Write-Warn2 "Workload profile '$($profile.Label)' could not be added (capacity/quota)." }
+        else { Write-Warn2 "Workload profile '$($profile.Label)' unavailable right now. Trying next fallback profile." }
         continue
     }
 
@@ -1037,14 +1086,21 @@ foreach ($profile in $profileLadder) {
         $profileDeployed = $profile
         $Cpu = $profile.Cpu
         $Memory = $profile.Memory
-        Write-Ok "Container App deployed using profile fallback selection: $($profile.Label)"
+        Write-Ok "Container App deployed on capacity profile: $($profile.Label)"
         break
     }
 
     $lastDeployError = "$appErr"
-    Write-Warn2 "Container App deployment failed on '$($profile.Label)'. Trying next fallback profile."
+    if ($effectiveMode -eq "Manual") { Write-Warn2 "Container App deployment failed on '$($profile.Label)'." }
+    else { Write-Warn2 "Container App deployment failed on '$($profile.Label)'. Trying next fallback profile." }
 }
-if (-not $profileDeployed) { Fail "Failed to create/update Container App across all dedicated fallback profiles. Last error: $lastDeployError" }
+if (-not $profileDeployed) {
+    if ($effectiveMode -eq "Manual") {
+        Fail "Manual capacity profile '$($profileLadder[0].Label)' could not be provisioned (capacity/quota). Re-run with -CapacityMode Automatic to auto-fall back, or pick a smaller profile (e.g. -ManualProfileChoice 4). Last error: $lastDeployError"
+    } else {
+        Fail "Failed to create/update Container App across all dedicated fallback profiles (D8x2 -> D8x1 -> D4x2 -> D4x1). Last error: $lastDeployError"
+    }
+}
 $fqdn = az containerapp show --name $ContainerAppName --resource-group $ResourceGroupName --query "properties.configuration.ingress.fqdn" -o tsv
 $appUrl = "https://$fqdn"
 Write-Ok "Container App ready: $appUrl"
@@ -1216,7 +1272,7 @@ Write-Host "  App URL:        $appUrl" -ForegroundColor Green
 Write-Host "  Resource group: $ResourceGroupName ($Location)" -ForegroundColor Gray
 Write-Host "  Image:          $fullImage" -ForegroundColor Gray
 Write-Host "  SKUs:           ACR Premium | Container App ${Cpu}/${Memory} | SQL $SqlServiceObjective | Redis $RedisSku $RedisVmSize | OpenAI S0 (PAYG)" -ForegroundColor Gray
-if ($profileDeployed) { Write-Host "  ACA profile:    $($profileDeployed.Label) [$($profileDeployed.Type)]" -ForegroundColor Gray }
+if ($profileDeployed) { Write-Host "  ACA capacity:   $($profileDeployed.Label) [$effectiveMode mode]" -ForegroundColor Gray }
 Write-Host "  OpenAI:         $OpenAIResourceName / $OpenAIDeploymentName" -ForegroundColor Gray
 if ($DeploySql)  { Write-Host "  Azure SQL:      $SqlServerName/$SqlDatabaseName (admin: $SqlAdminUser)" -ForegroundColor Gray }
 if ($redisUrl)   { Write-Host "  Redis:          $RedisName" -ForegroundColor Gray }

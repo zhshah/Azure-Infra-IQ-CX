@@ -349,8 +349,16 @@ Notes:
     - pass both `-ExistingLogAnalyticsWorkspaceId` and `-ExistingLogAnalyticsWorkspaceKey` to use an existing workspace.
 - Architecture Map (`/zuremap/`) is embedded by default and uses Container App managed identity.
     `-ZureMapClientSecret` is optional and only needed if you want service-principal mode.
-- Container App deployment now includes dedicated capacity fallback to reduce capacity failures:
-    `D8 x 2 -> D8 x 1 -> D4 x 2 -> D4 x 1`.
+- **Container App capacity (SKU) selection** — choose one of two modes:
+    - `-CapacityMode Automatic` (default): tries a fallback ladder `D8 x 2 -> D8 x 1 -> D4 x 2 -> D4 x 1`
+      until one succeeds. Most resilient against regional capacity constraints.
+    - `-CapacityMode Manual`: uses exactly ONE profile you choose. Faster and deterministic
+      (no ladder iteration). Pass `-ManualProfileChoice <1-4>` for non-interactive runs, or omit
+      it to get an interactive `1/2/3/4` menu:
+        - `1` = D8 x 2 (8 vCPU / 32 GiB, 2 nodes)
+        - `2` = D8 x 1 (8 vCPU / 32 GiB, 1 node)
+        - `3` = D4 x 2 (4 vCPU / 16 GiB, 2 nodes)
+        - `4` = D4 x 1 (4 vCPU / 16 GiB, 1 node)
 
 After a private deployment the app URL resolves **only from inside the VNet** (or peered /
 on-prem networks via the private DNS). Reach it from a jumpbox/Bastion in the VNet, or over
