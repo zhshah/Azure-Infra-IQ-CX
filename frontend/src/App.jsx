@@ -70,10 +70,21 @@ const NAV_SECTIONS = [
     { key: 'finops-warehouse', label: '📦 Cost Warehouse',   icon: '/icons/databases/10121-icon-service-SQL-Database.svg' },
     { key: 'finops-compliance', label: '✅ FinOps Compliance', icon: '/icons/management + governance/00003-icon-service-Advisor.svg' },
   ]},
+  // Keep 'About' LAST so it always sits at the bottom of the left-hand menu.
+  { heading: 'About', items: [
+    { key: 'about',          label: 'About',     icon: '/icons/general/10013-icon-service-Help-and-Support.svg' },
+    { key: 'about-features', label: 'Features',  icon: '/icons/general/10008-icon-service-Marketplace.svg' },
+    { key: 'about-faqs',     label: 'FAQs',      icon: '/icons/management + governance/00003-icon-service-Advisor.svg' },
+  ]},
 ]
 
 function SidebarNav({ view, onNavigate, collapsed, onToggle, badges }) {
-  const [expandedSections, setExpandedSections] = React.useState({})
+  // Collapsible sections (e.g. FinOps) start EXPANDED so every blade is open by default.
+  const [expandedSections, setExpandedSections] = React.useState(() => {
+    const init = {}
+    NAV_SECTIONS.forEach(s => { if (s.collapsible) init[s.heading] = true })
+    return init
+  })
   const [hoveredItem, setHoveredItem] = React.useState(null)
 
   // Auto-expand section containing active view
@@ -427,6 +438,9 @@ import TagAnalytics       from './finops/TagAnalytics'
 import FinOpsAlerts       from './finops/FinOpsAlerts'
 import FinOpsWarehouse    from './finops/FinOpsWarehouse'
 import FinOpsComplianceView from './finops/FinOpsComplianceView'
+
+// ── About / Features / FAQs ─────────────────────────────────────────────────
+import About                 from './components/About'
 
 function ErrorView({ message, onRetry }) {
   return (
@@ -2148,6 +2162,11 @@ function AppInner() {
         {view === 'finops-alerts' && <FinOpsAlerts />}
         {view === 'finops-warehouse' && <FinOpsWarehouse />}
         {view === 'finops-compliance' && <FinOpsComplianceView />}
+
+        {/* ── About / Features / FAQs ── */}
+        {view === 'about' && <About tab="about" />}
+        {view === 'about-features' && <About tab="features" />}
+        {view === 'about-faqs' && <About tab="faqs" />}
 
         {/* ── BCDR Assessment ── */}
         {view === 'bcdr' && (<>

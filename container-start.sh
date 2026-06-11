@@ -26,6 +26,29 @@ ZM_DIR=/app/dist/zuremap/browser
 if [ -d "$ZM_DIR" ]; then
   sed -i 's#<base href="/">#<base href="/zuremap/">#g' "$ZM_DIR/index.html" 2>/dev/null || true
   sed -i 's#"/api/az#"/zuremap/api/az#g' "$ZM_DIR"/*.js 2>/dev/null || true
+  # De-brand visible engine text (CapCase 'ZureMap' is display-only) + normalise currency.
+  sed -i 's/ZureMap/Architecture Map/g' "$ZM_DIR"/*.js 2>/dev/null || true
+  sed -i 's/baseCurrency:"EUR"/baseCurrency:"USD"/g' "$ZM_DIR"/*.js 2>/dev/null || true
+  # Inject the dark brand skin so the embedded engine matches the app's dark theme.
+  # The docker-exec rebrand (_archmap_rebrand) is a NO-OP inside the combined container,
+  # so we bake the skin into index.html HERE at startup, before the engine serves it.
+  _BRAND_CSS=/srv/app/assets/zuremap_brand.css
+  if [ -f "$_BRAND_CSS" ]; then
+    python3 - "$ZM_DIR/index.html" "$_BRAND_CSS" <<'PYEOF' 2>/dev/null || true
+import re, sys
+idx, css_path = sys.argv[1], sys.argv[2]
+try:
+    html = open(idx, encoding="utf-8").read()
+    css = open(css_path, encoding="utf-8").read()
+except OSError:
+    sys.exit(0)
+html = re.sub(r'<style id="brand-skin">.*?</style>', "", html, flags=re.S)
+html = html.replace("<title>Zuremap</title>", "<title>Architecture Map</title>")
+if "</head>" in html:
+    html = html.replace("</head>", '<style id="brand-skin">' + css + "</style></head>", 1)
+open(idx, "w", encoding="utf-8").write(html)
+PYEOF
+  fi
 fi
 
 # Authenticate the engine's az CLI for topology scanning. The managed-identity (MSI)
