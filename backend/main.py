@@ -447,6 +447,25 @@ def _compute_cost_score(
     }
 
 
+def _cost_series_empty(*series) -> bool:
+    """True when every provided daily-cost series is missing or entirely zero.
+
+    A list of zeros is truthy (non-empty), so a plain ``not (cm or pm)`` test
+    treats an all-zero array as "present" and skips the snapshot backfill,
+    leaving the Spend Trend rendered as a flat $0 line even though the durable
+    cost snapshot holds real values. Test the actual numbers instead so all-zero
+    series correctly trigger backfill.
+    """
+    for s in series:
+        try:
+            if any(float(x or 0) for x in (s or [])):
+                return False
+        except (TypeError, ValueError):
+            # Unexpected non-numeric payload — treat as having data (don't clobber).
+            return False
+    return True
+
+
 # ── Core build function ────────────────────────────────────────────────────────
 
 async def _build_dashboard(
@@ -552,7 +571,7 @@ async def _build_dashboard(
     # On the fast-open path (skip_metrics) the total-daily series is deferred, and
     # under 429 throttling it degrades to empty. Backfill from the cost_snapshots
     # table so the home SpendTrend never renders $0.00 / empty.
-    if not (total_daily_cm or total_daily_pm):
+    if _cost_series_empty(total_daily_cm, total_daily_pm):
         try:
             # L2 (Redis) cache-aside in front of the durable SQL snapshot so a
             # restarted process / second replica gets the cost series instantly.
@@ -2418,6 +2437,13 @@ async def _finops_cache_warmup() -> None:
             eom_fc = (k.total_cost_current_month / days_elapsed * 30) if days_elapsed > 0 else 0.0
             daily_cm = list(dash_for_warmup.total_daily_cm or [])
             daily_pm = list(dash_for_warmup.total_daily_pm or [])
+            # All-zero arrays render as a flat $0 trend — backfill from the durable
+            # cost snapshot so the warmed FinOps summary matches the live endpoint.
+            if _cost_series_empty(daily_cm, daily_pm):
+                _wc_snap = cache_svc.get_json("snap:cost:latest") or persistence_svc.load_latest_cost_snapshot()
+                if _wc_snap:
+                    daily_cm = list(_wc_snap.get("total_daily_cm") or daily_cm)
+                    daily_pm = list(_wc_snap.get("total_daily_pm") or daily_pm)
             combined = daily_pm + daily_cm
             trend_30d = combined[-30:] if len(combined) >= 30 else ([0.0] * (30 - len(combined)) + combined)
             trend_dates = [str(today_w - timedelta(days=29 - i)) for i in range(30)]
@@ -3041,7 +3067,7 @@ async def finops_summary():
         # The cached dashboard may have been rehydrated from a resource-scan
         # snapshot captured before cost data was available — backfill the cost
         # arrays from the durable cost snapshot so the trend is never empty.
-        if not (any(daily_cm) or any(daily_pm)):
+        if _cost_series_empty(daily_cm, daily_pm):
             _csnap = persistence_svc.load_latest_cost_snapshot()
             if _csnap:
                 daily_cm = list(_csnap.get("total_daily_cm") or [])
@@ -6298,7 +6324,7 @@ def _ensure_dashboard_in_cache() -> Optional[DashboardData]:
         # Backfill the daily cost arrays from the durable cost snapshot so the
         # home Spend Trend and FinOps trend are never empty on the fast path.
         try:
-            if not (getattr(restored, "total_daily_cm", None) or getattr(restored, "total_daily_pm", None)):
+            if _cost_series_empty(getattr(restored, "total_daily_cm", None), getattr(restored, "total_daily_pm", None)):
                 _csnap = persistence_svc.load_latest_cost_snapshot()
                 if _csnap:
                     restored.total_daily_cm = _csnap.get("total_daily_cm") or restored.total_daily_cm
