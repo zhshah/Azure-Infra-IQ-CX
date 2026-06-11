@@ -1525,8 +1525,12 @@ function AppInner() {
   // - If credentials exist but no cache → auto-start scan immediately, skip wizard
   // - If no credentials at all → show wizard (first-time setup only)
   useEffect(() => {
-    api.getSettings()
+    let _settingsCancelled = false
+    let _settingsAttempt = 0
+    const _loadSettings = () => {
+      api.getSettings()
       .then(s => {
+        if (_settingsCancelled) return
         setAppSettings(s)
         // `auth_ready` is true when the backend can reach Azure via a service principal
         // OR a managed identity (Container Apps / App Service / AKS). Using it here makes
@@ -1572,7 +1576,19 @@ function AppInner() {
         }
         // else: no credentials → wizard stays visible for first-time setup
       })
-      .catch(() => setAppSettings({}))
+      .catch(() => {
+        if (_settingsCancelled) return
+        // Backend not reachable yet (transient overload / restart / token refresh).
+        // Do NOT fall back to the manual service-principal setup wizard — that
+        // "manual fetch" screen must never appear in a managed-identity deployment.
+        // Keep the "Connecting…" state and retry with capped backoff; the wizard
+        // only appears when /api/settings SUCCEEDS and reports no credentials.
+        _settingsAttempt += 1
+        setTimeout(_loadSettings, Math.min(1500 * _settingsAttempt, 8000))
+      })
+    }
+    _loadSettings()
+    return () => { _settingsCancelled = true }
   }, [])
 
   // Start scan only after user explicitly clicks Launch (not when loaded from cache)

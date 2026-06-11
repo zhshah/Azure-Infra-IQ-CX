@@ -2561,7 +2561,13 @@ async def _background_refresh_loop() -> None:
         _is_refreshing = True
         _refresh_started_ts = datetime.now(tz=timezone.utc).timestamp()
         try:
-            data = await _build_dashboard(True, None, resource_group_filter=None)
+            # Light scheduled refresh: skip the bulk Azure Monitor metrics pull. The
+            # dedicated, lock-protected metrics-snapshot job keeps utilisation fresh.
+            # A FULL metrics scan here ran on EVERY replica every interval and could
+            # overload the app — making /api/settings time out, which made the SPA
+            # fall back to the manual setup wizard. skip_metrics=True also defers the
+            # heavy cost-trend queries, so the periodic refresh stays cheap.
+            data = await _build_dashboard(True, None, resource_group_filter=None, skip_metrics=True)
             # Persist result in the unfiltered cache slot
             cache_key = "data:*"
             now_ts = datetime.now(tz=timezone.utc).timestamp()
