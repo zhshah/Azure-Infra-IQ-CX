@@ -208,7 +208,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.18"
+$ScriptVersion = "2026-06-11.19"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -1226,7 +1226,10 @@ if (-not $profileDeployed) {
 }
 $fqdn = az containerapp show --name $ContainerAppName --resource-group $ResourceGroupName --query "properties.configuration.ingress.fqdn" -o tsv
 $appUrl = "https://$fqdn"
-$loginRedirectUri = "$appUrl/login"   # MSAL SPA redirect URI the app uses for sign-in / SSO
+# The app's MSAL config uses redirectUri: window.location.origin (frontend/src/auth/auth.js),
+# i.e. the ROOT app URL with NO path. The Entra SPA redirect URI must be exactly this origin
+# (NOT /login, NOT /login.html, no trailing path).
+$redirectUri = $appUrl
 Write-Ok "Container App ready: $appUrl"
 
 # ── Private DNS for the internal ingress ────────────────────────────────-
@@ -1402,18 +1405,17 @@ Write-Step "Step 11: Entra SPA redirect URI"
 $spaRegistered = $false
 $appObjId = az ad app show --id $EntraAppClientId --query id -o tsv 2>$null
 if ([string]::IsNullOrWhiteSpace($appObjId)) {
-    Write-Warn2 "Entra app $EntraAppClientId not found in tenant — add the SPA redirect URI '$loginRedirectUri' manually (see the footer)."
+    Write-Warn2 "Entra app $EntraAppClientId not found in tenant — add the SPA redirect URI '$redirectUri' manually (see the footer)."
 } else {
     $existing = az ad app show --id $EntraAppClientId --query "spa.redirectUris" -o json 2>$null | ConvertFrom-Json
     $uris = @()
     if ($existing) { $uris += $existing }
-    if ($uris -notcontains $appUrl)           { $uris += $appUrl }
-    if ($uris -notcontains "$appUrl/")        { $uris += "$appUrl/" }
-    if ($uris -notcontains $loginRedirectUri) { $uris += $loginRedirectUri }
+    if ($uris -notcontains $redirectUri)      { $uris += $redirectUri }
+    if ($uris -notcontains "$redirectUri/")   { $uris += "$redirectUri/" }
     $spaBody = @{ spa = @{ redirectUris = $uris } } | ConvertTo-Json -Depth 5 -Compress
     az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$appObjId" `
         --headers "Content-Type=application/json" --body $spaBody 2>$null
-    if ($LASTEXITCODE -eq 0) { Write-Ok "Registered SPA redirect URI (incl. $loginRedirectUri)"; $spaRegistered = $true }
+    if ($LASTEXITCODE -eq 0) { Write-Ok "Registered SPA redirect URI: $redirectUri"; $spaRegistered = $true }
     else {
         Write-Warn2 "Could not add the SPA redirect URI (needs Application Administrator / app owner) — see the footer for the exact manual step."
         $permIssues += "az rest --method PATCH --uri https://graph.microsoft.com/v1.0/applications/$appObjId --headers Content-Type=application/json --body '$spaBody'"
@@ -1492,15 +1494,15 @@ $sepLogin = "  " + ("─" * 72)
 Write-Host ""
 if ($spaRegistered) {
     Write-Host "  LOGIN / SSO redirect URI — registered on the Entra app:" -ForegroundColor Green
-    Write-Host "    $loginRedirectUri" -ForegroundColor Cyan
+    Write-Host "    $redirectUri" -ForegroundColor Cyan
 } else {
     Write-Host $sepLogin -ForegroundColor Yellow
     Write-Host "  ACTION REQUIRED FOR LOGIN / SSO TO WORK" -ForegroundColor Yellow
     Write-Host $sepLogin -ForegroundColor Yellow
     Write-Host "  On the Microsoft Entra app registration (App ID: $EntraAppClientId):" -ForegroundColor White
     Write-Host "    1. Authentication  ->  Add a platform  ->  Single-page application (SPA)" -ForegroundColor Gray
-    Write-Host "    2. Add Redirect URI  ->  paste EXACTLY (note the /login path):" -ForegroundColor Gray
-    Write-Host "         $loginRedirectUri" -ForegroundColor Cyan
+    Write-Host "    2. Add Redirect URI  ->  paste EXACTLY the app ROOT URL (no path, no /login):" -ForegroundColor Gray
+    Write-Host "         $redirectUri" -ForegroundColor Cyan
     Write-Host "    3. Save." -ForegroundColor Gray
     Write-Host "  Sign-in / SSO will FAIL with a redirect-URI mismatch until this exact SPA URI is added." -ForegroundColor DarkYellow
     Write-Host $sepLogin -ForegroundColor Yellow
