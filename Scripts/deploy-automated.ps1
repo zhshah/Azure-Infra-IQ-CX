@@ -96,8 +96,10 @@ param(
     [string]$SubscriptionId = "",
 
     # Comma-separated subscriptions the app should SCAN (AZURE_SUBSCRIPTION_IDS).
-    # Defaults to the deployment subscription.
+    # Default is deployment subscription only. Use -DiscoverAllSubscriptions $true
+    # or -SubscriptionIds "auto" to discover and scan all enabled subscriptions.
     [string]$SubscriptionIds = "",
+    [bool]$DiscoverAllSubscriptions = $false,
 
     # Azure SQL (Prompt Library / scan-history persistence)
     [bool]$DeploySql        = $true,
@@ -256,6 +258,13 @@ $acct = az account show -o json | ConvertFrom-Json
 Write-Ok "Subscription: $($acct.name) ($($acct.id))"
 Write-Ok "Tenant:       $($acct.tenantId)"
 
+# If the RG already exists in another region, align deployment region to RG region.
+$existingRgLocation = az group show --name $ResourceGroupName --query location -o tsv 2>$null
+if (-not [string]::IsNullOrWhiteSpace($existingRgLocation) -and $existingRgLocation.ToLowerInvariant() -ne $Location.ToLowerInvariant()) {
+    Write-Warn2 "Resource group '$ResourceGroupName' already exists in '$existingRgLocation'. Overriding -Location '$Location' -> '$existingRgLocation'."
+    $Location = $existingRgLocation
+}
+
 # Entra ID app registration for USER SIGN-IN (REQUIRED). Create it first (SPA platform,
 # delegated User.Read) — see docs/ENTRA_APP_SETUP.md — then provide its Application
 # (client) ID + Directory (tenant) ID (here, or as -EntraAppClientId / -EntraTenantId).
@@ -263,18 +272,19 @@ Write-Ok "Tenant:       $($acct.tenantId)"
 while ([string]::IsNullOrWhiteSpace($EntraAppClientId)) { $EntraAppClientId = (Read-Host "  Entra App (client) ID for user sign-in").Trim() }
 while ([string]::IsNullOrWhiteSpace($EntraTenantId))    { $EntraTenantId    = (Read-Host "  Entra tenant (directory) ID").Trim() }
 
-# Subscription scanning model (mirrors the local server): the app DYNAMICALLY discovers
-# every subscription its managed identity can read at runtime, so the portal's picker
-# always reflects exactly what the identity has access to — no hard-coded list to drift.
-#   * No -SubscriptionIds  -> AZURE_SUBSCRIPTION_IDS=auto (runtime discovery) and we grant
-#                             the identity Reader on every enabled subscription we can see.
-#   * -SubscriptionIds set -> pin to that explicit list (grant + scan only those).
-$explicitSubs = -not [string]::IsNullOrWhiteSpace($SubscriptionIds)
+# Subscription scanning model:
+#   * -SubscriptionIds "id1,id2" -> pin to explicit list.
+#   * -DiscoverAllSubscriptions $true OR -SubscriptionIds "auto" -> discover all enabled.
+#   * default -> deployment subscription only.
+$normalizedSubs = if ([string]::IsNullOrWhiteSpace($SubscriptionIds)) { "" } else { $SubscriptionIds.Trim() }
+$discoverAll = $DiscoverAllSubscriptions -or ($normalizedSubs.ToLowerInvariant() -eq "auto")
+$explicitSubs = (-not [string]::IsNullOrWhiteSpace($normalizedSubs)) -and (-not $discoverAll)
 if ($explicitSubs) {
+    $SubscriptionIds = $normalizedSubs
     $ScanSubscriptionsEnv = $SubscriptionIds
     Write-Ok "Subscription scope: pinned to provided list"
-} else {
-    $ScanSubscriptionsEnv = "auto"   # backend discovers all subs the identity can read
+} elseif ($discoverAll) {
+    $ScanSubscriptionsEnv = "auto"
     Write-Host "  Discovering accessible subscriptions (for RBAC grants)..." -ForegroundColor DarkGray
     $allSubs = az account list --query "[?state=='Enabled'].id" -o tsv 2>$null
     $subList = @($allSubs -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -283,10 +293,14 @@ if ($explicitSubs) {
         Write-Ok "Found $($subList.Count) enabled subscription(s) — granting identity Reader on each; app discovers them at runtime"
     } else {
         $SubscriptionIds = $SubscriptionId
-        Write-Host "  Could not list subscriptions; granting on current ($SubscriptionId)" -ForegroundColor Yellow
+        $ScanSubscriptionsEnv = $SubscriptionId
+        Write-Warn2 "Could not list subscriptions; using current subscription only ($SubscriptionId)."
     }
+} else {
+    $SubscriptionIds = $SubscriptionId
+    $ScanSubscriptionsEnv = $SubscriptionId
+    Write-Ok "Subscription scope: deployment subscription only ($SubscriptionId)"
 }
-if ([string]::IsNullOrWhiteSpace($OpenAILocation))  { $OpenAILocation  = $Location }
 if ([string]::IsNullOrWhiteSpace($ZureMapClientId)) { $ZureMapClientId = $EntraAppClientId }
 if ([string]::IsNullOrWhiteSpace($ZureMapTenantId)) { $ZureMapTenantId = $EntraTenantId }
 $deployZureMap = -not [string]::IsNullOrWhiteSpace($ZureMapClientSecret)
@@ -330,6 +344,13 @@ if ($isPrivate) {
     if (-not $vnet) { Fail "VNet '$VNetName' not found in resource group '$VNetResourceGroupName'." }
     $VNetId = $vnet.id
     Write-Ok "VNet: $VNetName ($VNetResourceGroupName)"
+
+    # ACA environment region must match the VNet region.
+    $vnetLocation = "$($vnet.location)"
+    if (-not [string]::IsNullOrWhiteSpace($vnetLocation) -and $vnetLocation.ToLowerInvariant() -ne $Location.ToLowerInvariant()) {
+        Write-Warn2 "Private mode requires Container Apps environment region to match VNet region. Overriding -Location '$Location' -> '$vnetLocation'."
+        $Location = $vnetLocation
+    }
 
     # 1) Container Apps infrastructure subnet (delegated to Microsoft.App/environments).
     $subnet = az network vnet subnet show --resource-group $VNetResourceGroupName --vnet-name $VNetName --name $SubnetName -o json 2>$null | ConvertFrom-Json
@@ -394,13 +415,21 @@ if ([string]::IsNullOrWhiteSpace($SqlAdminPassword)) {
 $reuseImage = -not [string]::IsNullOrWhiteSpace($ImageTag)
 $imageTag = if ($reuseImage) { $ImageTag } else { "v$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" }
 
+if ([string]::IsNullOrWhiteSpace($OpenAILocation))  { $OpenAILocation  = $Location }
+
 Write-Info "Region:            $Location"
 Write-Info "Resource group:    $ResourceGroupName"
 Write-Info "Container registry:$ContainerRegistryName"
 Write-Info "Container app:     $ContainerAppName"
 Write-Info "OpenAI:            $OpenAIResourceName ($OpenAILocation) / $(if ($OpenAIDeploymentName) { $OpenAIDeploymentName } else { 'newest GPT available' })"
 Write-Info "Deploy SQL:        $DeploySql   Deploy Redis: $DeployRedis"
-Write-Info "Scan subscriptions:$SubscriptionIds"
+$scanList = @($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($scanList.Count -gt 10) {
+    $preview = ($scanList | Select-Object -First 5) -join ','
+    Write-Info "Scan subscriptions: $($scanList.Count) total (first 5: $preview ...)"
+} else {
+    Write-Info "Scan subscriptions: $($scanList -join ',')"
+}
 
 # ── Providers + containerapp extension ─────────────────────────────────────────
 Write-Step "Step 1: Registering providers and CLI extension"
@@ -413,7 +442,16 @@ Write-Ok "containerapp extension ready"
 
 # ── Resource group ─────────────────────────────────────────────────────────────
 Write-Step "Step 2: Resource group"
-az group create --name $ResourceGroupName --location $Location --output none
+$rgLocation = az group show --name $ResourceGroupName --query location -o tsv 2>$null
+if (-not [string]::IsNullOrWhiteSpace($rgLocation)) {
+    if ($rgLocation.ToLowerInvariant() -ne $Location.ToLowerInvariant()) {
+        Write-Warn2 "Resource group '$ResourceGroupName' exists in '$rgLocation'. Continuing with that region."
+        $Location = $rgLocation
+    }
+} else {
+    az group create --name $ResourceGroupName --location $Location --output none
+    if ($LASTEXITCODE -ne 0) { Fail "Failed to create resource group '$ResourceGroupName' in '$Location'." }
+}
 Write-Ok "Resource group ready: $ResourceGroupName"
 
 # ── Azure Container Registry + image build ─────────────────────────────────────

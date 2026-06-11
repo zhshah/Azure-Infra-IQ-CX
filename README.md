@@ -257,7 +257,8 @@ registration → **Authentication → Single-page application**.)
 | `-EntraTenantId` | ✅ | *(prompted)* | Entra directory (tenant) ID |
 | `-Location` | ➖ | `westeurope` | Azure region |
 | `-SubscriptionId` | ➖ | current | Target subscription |
-| `-SubscriptionIds` | ➖ | `auto` | Comma-separated subs to scan (default: all readable) |
+| `-SubscriptionIds` | ➖ | deployment subscription | Comma-separated subs to scan; use `auto` to discover all enabled subscriptions |
+| `-DiscoverAllSubscriptions` | ➖ | `$false` | Opt-in: discover all enabled subscriptions and grant RBAC across them |
 | `-DeploySql` / `-DeployRedis` | ➖ | `$true` | Toggle the optional SQL / Redis resources |
 | `-DeploymentMode` | ➖ | `Public` | `Public` or `Private` (see below) |
 
