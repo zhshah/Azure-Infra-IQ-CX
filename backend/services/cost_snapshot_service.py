@@ -126,6 +126,21 @@ def capture_and_save(subscription_ids: Optional[List[str]] = None) -> Dict[str, 
 
     # ── Stage 1: core total-daily → persist immediately ──────────────────────
     _capture_total_daily(bundle, sub_ids)
+    # Guard against poisoning the home Spend Trend with a flat $0 line: if the
+    # captured series is ZERO across BOTH months, the cost query came back empty
+    # (Cost Management 429, or the managed identity's Cost Management Reader role
+    # had not propagated yet at container startup). A real tenant never has $0
+    # across the entire previous month, so treat this as a transient failure —
+    # do NOT persist, and signal the caller (which retries) to try again.
+    _cm_sum = sum(float(x or 0) for x in (bundle.get("total_daily_cm") or []))
+    _pm_sum = sum(float(x or 0) for x in (bundle.get("total_daily_pm") or []))
+    if (_cm_sum + _pm_sum) <= 0:
+        logger.warning(
+            "Cost snapshot: captured $0 total spend (%d cm / %d pm days) — likely a transient "
+            "cost-API/permission issue; NOT persisting so the next run can retry.",
+            len(bundle.get("total_daily_cm", [])), len(bundle.get("total_daily_pm", [])),
+        )
+        return {"ok": False, "empty": True, "error": "empty cost data (all-zero) — not persisted"}
     persisted = False
     try:
         persistence_svc.save_cost_snapshot(bundle, subscription_key=bundle.get("subscription_key", ""))

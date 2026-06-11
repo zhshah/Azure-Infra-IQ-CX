@@ -2804,9 +2804,24 @@ async def _cost_snapshot_loop() -> None:
 
     try:
         interval_hours = float(settings_svc.get_value("COST_SNAPSHOT_INTERVAL_HOURS", 12.0))
-        if interval_hours > 0 and persistence_svc.load_latest_cost_snapshot() is None:
-            logger.info("Cost snapshot: none on startup — running catch-up capture")
-            await _cost_snapshot_run()
+        # Re-capture on startup when there is NO snapshot OR the latest one is all-zero
+        # (a transient cost-API 429 / managed-identity permission lag at a previous boot
+        # can persist a $0 bundle). Retry with backoff so the home Spend Trend self-heals
+        # instead of staying flat until the next 12h cycle.
+        def _snap_is_empty(s) -> bool:
+            if not s:
+                return True
+            tot = (sum(float(x or 0) for x in (s.get("total_daily_cm") or []))
+                   + sum(float(x or 0) for x in (s.get("total_daily_pm") or [])))
+            return tot <= 0
+        if interval_hours > 0 and _snap_is_empty(persistence_svc.load_latest_cost_snapshot()):
+            for _attempt in range(1, 7):
+                logger.info("Cost snapshot: missing/empty on startup — capture attempt %d", _attempt)
+                _res = await _cost_snapshot_run()
+                if _res and _res.get("ok"):
+                    logger.info("Cost snapshot: startup capture succeeded")
+                    break
+                await asyncio.sleep(min(120 * _attempt, 600))
     except Exception as exc:
         logger.warning("Cost snapshot startup catch-up failed: %s", exc)
 
@@ -2831,11 +2846,20 @@ async def _finops_warehouse_scheduler() -> None:
     """
     await asyncio.sleep(30)  # let the app finish starting up
 
-    # First-run: if the warehouse is empty, collect now
+    # First-run: if the warehouse has no cost ROWS, collect now. The first ETL after
+    # a fresh deploy can come back empty (Cost Management 429, or the managed identity's
+    # Cost Management Reader role not yet propagated at boot), so retry with backoff
+    # until real data lands instead of leaving the Cost Warehouse dashboards empty.
     try:
         if _FINOPS_WAREHOUSE_AVAILABLE and not finops_warehouse_svc.has_warehouse_data():
-            logger.info("FinOps Warehouse: no data found — triggering initial collection")
-            await _run_warehouse_etl_async("startup_initial")
+            for _attempt in range(1, 7):
+                logger.info("FinOps Warehouse: no data — initial collection attempt %d", _attempt)
+                await _run_warehouse_etl_async("startup_initial")
+                if finops_warehouse_svc.has_warehouse_data():
+                    logger.info("FinOps Warehouse: initial collection populated data")
+                    break
+                logger.warning("FinOps Warehouse: still empty after attempt %d — retrying", _attempt)
+                await asyncio.sleep(min(120 * _attempt, 600))
     except Exception as exc:
         logger.warning("FinOps Warehouse: startup initial collection failed: %s", exc)
 

@@ -664,13 +664,20 @@ def is_etl_running() -> bool:
 
 
 def has_warehouse_data() -> bool:
-    """Return True if the warehouse has any data at all."""
+    """Return True if the warehouse actually has cost ROWS.
+
+    Checks for real cost data — NOT merely a 'completed' ETL run. The very first
+    ETL after a fresh deploy can complete with zero rows (Cost Management 429, or
+    the managed identity's Cost Management Reader role not yet propagated at boot).
+    Keying off the completed-run count would then wrongly report 'has data' and the
+    startup re-collection would never fire, leaving the warehouse permanently empty.
+    """
     if not _DB_AVAILABLE:
         return False
     try:
         with _conn() as con:
             row = con.execute(
-                "SELECT COUNT(*) FROM finops_etl_runs WHERE status='completed'"
+                "SELECT COUNT(*) FROM finops_daily_resource_costs"
             ).fetchone()
         return (row[0] if row else 0) > 0
     except Exception:
