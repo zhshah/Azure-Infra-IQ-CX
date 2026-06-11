@@ -6328,6 +6328,12 @@ def _archmap_rebrand() -> bool:
 async def zuremap_status():
     """Check if ZureMap container is reachable and authenticated."""
     import httpx
+    # When embedded in the combined container (ZUREMAP_EMBED=proxy), the engine runs on
+    # localhost:3001 INSIDE the container, but the user's browser is REMOTE — so it must
+    # load the engine through the SAME-ORIGIN /zuremap/ reverse proxy, NOT http://localhost:3001
+    # (which would resolve to the client's own machine and fail). Force mode='proxy' in embed
+    # deployments so the frontend never points the iframe at the client's localhost.
+    embed_proxy = os.environ.get("ZUREMAP_EMBED", "").strip().lower() == "proxy"
     # Probe localhost first: for a locally-run backend that's the mapped port and
     # responds instantly, whereas the docker service name "zuremap" does NOT
     # resolve from the host and stalls on DNS. Inside docker-compose, localhost
@@ -6358,7 +6364,9 @@ async def zuremap_status():
                             asyncio.create_task(asyncio.to_thread(_archmap_rebrand))
                         except Exception:
                             pass
-                    return {"available": True, "url": "/zuremap/", "mode": mode, "loggedIn": logged_in}
+                    # In embed deployments always advertise 'proxy' so the SPA uses /zuremap/.
+                    effective_mode = "proxy" if embed_proxy else mode
+                    return {"available": True, "url": "/zuremap/", "mode": effective_mode, "loggedIn": logged_in}
         except Exception:
             continue
     return {"available": False, "url": None, "mode": None, "loggedIn": False}
