@@ -121,8 +121,10 @@ param(
     # Azure Managed Redis (Microsoft.Cache/redisEnterprise) via `az redisenterprise`.
     [bool]$DeployRedis = $true,
     [string]$RedisName = "",
-    # Azure Managed Redis SKU. Balanced_B0 = smallest/entry tier. See `az redisenterprise create -h`.
-    [string]$RedisSku  = "Balanced_B0",
+    # Azure Managed Redis SKU. Default ComputeOptimized_X5 = 6 GB cache / 4 vCPU with
+    # High-Availability (primary + replica) enabled by default. See `az redisenterprise create -h`
+    # for other SKUs (Balanced_B*, ComputeOptimized_X*, MemoryOptimized_M*).
+    [string]$RedisSku  = "ComputeOptimized_X5",
     [string]$RedisVmSize = "",   # [deprecated] classic-only; ignored for Azure Managed Redis
 
     # ── Container Apps capacity selection ─────────────────────────────────────
@@ -214,7 +216,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.23"
+$ScriptVersion = "2026-06-11.24"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -1102,12 +1104,12 @@ if ($DeploySql) {
 # ── Azure Cache for Redis ──────────────────────────────────────────────────────
 $redisUrl = ""
 if ($DeployRedis) {
-    # Back-compat: legacy classic SKUs are invalid for Azure Managed Redis — map to entry tier.
+    # Back-compat: legacy classic SKUs are invalid for Azure Managed Redis — map to the default tier.
     if ($RedisSku -in @("Basic","Standard","Premium")) {
-        Write-Info "Mapping legacy Redis SKU '$RedisSku' -> Azure Managed Redis 'Balanced_B0'."
-        $RedisSku = "Balanced_B0"
+        Write-Info "Mapping legacy Redis SKU '$RedisSku' -> Azure Managed Redis 'ComputeOptimized_X5'."
+        $RedisSku = "ComputeOptimized_X5"
     }
-    Write-Step "Step 7: Azure Managed Redis ($RedisSku)"
+    Write-Step "Step 7: Azure Managed Redis ($RedisSku, High-Availability)"
     az extension add -n redisenterprise --only-show-errors --output none 2>$null
     $redisExists = az redisenterprise show --cluster-name $RedisName --resource-group $ResourceGroupName 2>$null
     if (-not $redisExists) {
