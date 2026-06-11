@@ -208,7 +208,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.15"
+$ScriptVersion = "2026-06-11.16"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -1309,6 +1309,19 @@ $principalId = az containerapp show --name $ContainerAppName --resource-group $R
 if ([string]::IsNullOrWhiteSpace($principalId)) { Fail "Could not read managed identity principalId." }
 Write-Info "Managed identity principalId: $principalId"
 
+# Wait for the managed identity's service principal to propagate in Entra ID BEFORE
+# assigning roles / Graph permissions. A freshly created MI SP can take a short time to
+# become queryable; without this, grants can fail with 'principal does not exist' even
+# when the engineer running the script IS a Global Administrator.
+Write-Info "Waiting for the managed identity to propagate in Entra ID..."
+$spReady = $false
+for ($i = 1; $i -le 18; $i++) {
+    if (az ad sp show --id $principalId --query id -o tsv 2>$null) { $spReady = $true; break }
+    Start-Sleep -Seconds 5
+}
+if ($spReady) { Write-Ok "Managed identity is resolvable in Entra ID." }
+else { Write-Warn2 "Managed identity SP not resolvable after ~90s; continuing (some grants may need a re-run)." }
+
 $permIssues = @()
 foreach ($sid in ($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
     foreach ($role in @("Reader","Cost Management Reader")) {
@@ -1356,11 +1369,23 @@ if ([string]::IsNullOrWhiteSpace($graphSpObjId)) {
 } else {
     foreach ($perm in $graphPerms) {
         $body = "{`"principalId`":`"$principalId`",`"resourceId`":`"$graphSpObjId`",`"appRoleId`":`"$($perm.Id)`"}"
-        $res = az rest --method POST --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments" `
-            --headers "Content-Type=application/json" --body $body 2>&1
-        if ($LASTEXITCODE -eq 0)                                    { Write-Ok "$($perm.Name) — assigned" }
-        elseif ("$res" -match "already exists")                    { Write-Ok "$($perm.Name) — already assigned" }
-        else { Write-Warn2 "$($perm.Name) — needs a directory admin to grant (Privileged Role Administrator / Global Admin)"; $permIssues += "az rest --method POST --uri https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments --headers Content-Type=application/json --body '$body'" }
+        # Retry to absorb Entra eventual-consistency right after the MI is created, so a
+        # Global Admin grants all permissions in a single run.
+        $granted = $false
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            $res = az rest --method POST --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments" `
+                --headers "Content-Type=application/json" --body $body 2>&1
+            if ($LASTEXITCODE -eq 0)            { Write-Ok "$($perm.Name) - assigned"; $granted = $true; break }
+            if ("$res" -match "already exists")  { Write-Ok "$($perm.Name) - already assigned"; $granted = $true; break }
+            if ("$res" -match "ResourceNotFound|does not exist|Request_ResourceNotFound|InvalidParameter|BadRequest" -and $attempt -lt 3) {
+                Start-Sleep -Seconds 10; continue
+            }
+            break
+        }
+        if (-not $granted) {
+            Write-Warn2 "$($perm.Name) - could not grant (needs Privileged Role Administrator / Global Admin, or still propagating)"
+            $permIssues += "az rest --method POST --uri https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments --headers Content-Type=application/json --body '$body'"
+        }
     }
 }
 
