@@ -214,7 +214,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.22"
+$ScriptVersion = "2026-06-11.23"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -735,7 +735,7 @@ if ($importOk) {
     Write-Info "ACR cache unavailable — build will pull the base image directly during the build. This is a NORMAL fallback, not an error."
 }
 
-Write-Info "Building combined image remotely (SPA build + backend + ODBC + ZureMap engine). This takes ~10-15 min..."
+Write-Info "Building combined image remotely (SPA build + backend + ODBC + Architecture Map engine). This takes ~10-15 min..."
 $buildOk = $false
 for ($attempt = 1; $attempt -le 3; $attempt++) {
     Push-Location $RepoRoot
@@ -1375,8 +1375,8 @@ foreach ($sid in ($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() } | W
 if ($deployZureMap -and $useZureMapSp) {
     foreach ($sid in ($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
         $zr = az role assignment create --assignee $ZureMapClientId --role "Reader" --scope "/subscriptions/$sid" --output none 2>&1
-        if ($LASTEXITCODE -eq 0 -or "$zr" -match "already exists|RoleAssignmentExists") { Write-Ok "ZureMap SP Reader on /subscriptions/$sid" }
-        else { Write-Warn2 "Could not grant ZureMap SP Reader on $sid"; $permIssues += "az role assignment create --assignee $ZureMapClientId --role `"Reader`" --scope `"/subscriptions/$sid`"" }
+        if ($LASTEXITCODE -eq 0 -or "$zr" -match "already exists|RoleAssignmentExists") { Write-Ok "Architecture Map identity Reader on /subscriptions/$sid" }
+        else { Write-Warn2 "Could not grant Architecture Map identity Reader on $sid"; $permIssues += "az role assignment create --assignee $ZureMapClientId --role `"Reader`" --scope `"/subscriptions/$sid`"" }
     }
 }
 # Tenant-wide read roles (best-effort — require elevated rights such as Owner / User
@@ -1543,8 +1543,6 @@ if ($spaRegistered) {
     Write-Host $sepLogin -ForegroundColor Yellow
 }
 Write-Host "`n  Sign in at $appUrl with your organizational account." -ForegroundColor Cyan
-if ($deployZureMap -and $useZureMapSp) {
-    Write-Host "  Architecture Map (ZureMap) is embedded at $appUrl/zuremap/ using service-principal mode." -ForegroundColor DarkGray
-} elseif ($deployZureMap) {
-    Write-Host "  Architecture Map (ZureMap) is embedded at $appUrl/zuremap/ using managed identity mode." -ForegroundColor DarkGray
+if ($deployZureMap) {
+    Write-Host "  Azure Architecture Map: built into the app - open it from the left navigation for live Azure topology diagrams." -ForegroundColor DarkGray
 }
