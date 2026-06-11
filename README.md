@@ -350,15 +350,21 @@ Notes:
 - Architecture Map (`/zuremap/`) is embedded by default and uses Container App managed identity.
     `-ZureMapClientSecret` is optional and only needed if you want service-principal mode.
 - **Container App capacity (SKU) selection** — choose one of two modes:
-    - `-CapacityMode Automatic` (default): tries a fallback ladder `D8 x 2 -> D8 x 1 -> D4 x 2 -> D4 x 1`
-      until one succeeds. Most resilient against regional capacity constraints.
+    - `-CapacityMode Automatic` (default): tries a fallback ladder `D8 x 2 -> D8 x 1 -> D4 x 2 -> D4 x 1 -> Consumption`
+      until one succeeds. Most resilient against regional capacity constraints — Consumption is the
+      final safety net so the deployment still completes even when all dedicated SKUs are constrained.
     - `-CapacityMode Manual`: uses exactly ONE profile you choose. Faster and deterministic
-      (no ladder iteration). Pass `-ManualProfileChoice <1-4>` for non-interactive runs, or omit
-      it to get an interactive `1/2/3/4` menu:
-        - `1` = D8 x 2 (8 vCPU / 32 GiB, 2 nodes)
-        - `2` = D8 x 1 (8 vCPU / 32 GiB, 1 node)
+      (no ladder iteration). Pass `-ManualProfileChoice <1-5>` for non-interactive runs, or omit
+      it to get an interactive `1/2/3/4/5` menu:
+        - `1` = Consumption (serverless, up to 4 vCPU / 8 GiB) — **lightest; best when a region is capacity-constrained**
+        - `2` = D4 x 1 (4 vCPU / 16 GiB, 1 node)
         - `3` = D4 x 2 (4 vCPU / 16 GiB, 2 nodes)
-        - `4` = D4 x 1 (4 vCPU / 16 GiB, 1 node)
+        - `4` = D8 x 1 (8 vCPU / 32 GiB, 1 node)
+        - `5` = D8 x 2 (8 vCPU / 32 GiB, 2 nodes)
+    - Tip: if West Europe (or any region) is short on dedicated capacity, start with
+      `-CapacityMode Manual -ManualProfileChoice 1` (Consumption). The environment is still created as a
+      workload-profiles environment, so you can add a D-series profile and move the app later from the
+      portal/CLI with no redeploy.
 
 After a private deployment the app URL resolves **only from inside the VNet** (or peered /
 on-prem networks via the private DNS). Reach it from a jumpbox/Bastion in the VNet, or over

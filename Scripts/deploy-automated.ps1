@@ -114,23 +114,24 @@ param(
     [string]$RedisSku  = "Standard",
     [string]$RedisVmSize = "c2",
 
-    # ── Container Apps dedicated capacity selection ───────────────────────────
-    # Choose how the dedicated workload profile (SKU size) for the Container App is picked:
-    #   'Automatic' : try a fallback ladder D8x2 -> D8x1 -> D4x2 -> D4x1 until one succeeds
-    #                 (most resilient against regional capacity constraints).
-    #   'Manual'    : use exactly ONE profile you pick (1-4). If -ManualProfileChoice is
-    #                 omitted in Manual mode, the script shows a 1/2/3/4 menu to choose from.
+    # ── Container Apps capacity selection ─────────────────────────────────────
+    # Choose how the workload profile (SKU size) for the Container App is picked:
+    #   'Automatic' : try a fallback ladder D8x2 -> D8x1 -> D4x2 -> D4x1 -> Consumption
+    #                 until one succeeds (most resilient against regional capacity limits).
+    #   'Manual'    : use exactly ONE profile you pick (1-5). If -ManualProfileChoice is
+    #                 omitted in Manual mode, the script shows a 1-5 menu to choose from.
     #                 Manual is FASTER (no ladder iteration) and fully deterministic.
     [ValidateSet("Automatic","Manual")]
     [string]$CapacityMode = "Automatic",
-    #   1 = D8 x 2 (8 vCPU / 32 GiB, 2 nodes)   2 = D8 x 1 (8 vCPU / 32 GiB, 1 node)
-    #   3 = D4 x 2 (4 vCPU / 16 GiB, 2 nodes)   4 = D4 x 1 (4 vCPU / 16 GiB, 1 node)
-    [ValidateSet("","1","2","3","4")]
+    #   1 = Consumption (serverless, up to 4 vCPU / 8 GiB) - lightest, best for capacity-constrained regions
+    #   2 = D4 x 1 (4 vCPU / 16 GiB, 1 node)    3 = D4 x 2 (4 vCPU / 16 GiB, 2 nodes)
+    #   4 = D8 x 1 (8 vCPU / 32 GiB, 1 node)    5 = D8 x 2 (8 vCPU / 32 GiB, 2 nodes)
+    [ValidateSet("","1","2","3","4","5")]
     [string]$ManualProfileChoice = "",
     # [Deprecated] Backward compatible: -EnableDedicatedCapacityFallback $false is
-    # treated as Manual mode (defaults to profile 4 = D4 x 1 when no choice is given).
+    # treated as Manual mode (defaults to profile 2 = D4 x 1 when no choice is given).
     [bool]$EnableDedicatedCapacityFallback = $true,
-    # Legacy single-profile sizing override (unused by the 1-4 menu profiles).
+    # Legacy single-profile sizing override (unused by the 1-5 menu profiles).
     [string]$Cpu    = "8.0",
     [string]$Memory = "32.0Gi",
 
@@ -202,7 +203,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.9"
+$ScriptVersion = "2026-06-11.10"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -605,32 +606,35 @@ if ($scanList.Count -gt 10) {
 #    image build) so any interactive menu is shown up front and the rest of the
 #    deployment runs unattended. The chosen profile is APPLIED later in Step 8. ──
 $capacityProfiles = @(
-    @{ Choice="1"; Type="D8"; Name="infraiq-d8"; MinNodes=2; MaxNodes=2; Cpu="8.0"; Memory="32.0Gi"; MaxReplicas=2; Label="D8 x 2  (8 vCPU / 32 GiB, 2 nodes)" },
-    @{ Choice="2"; Type="D8"; Name="infraiq-d8"; MinNodes=1; MaxNodes=1; Cpu="8.0"; Memory="32.0Gi"; MaxReplicas=2; Label="D8 x 1  (8 vCPU / 32 GiB, 1 node)"  },
-    @{ Choice="3"; Type="D4"; Name="infraiq-d4"; MinNodes=2; MaxNodes=2; Cpu="4.0"; Memory="16.0Gi"; MaxReplicas=2; Label="D4 x 2  (4 vCPU / 16 GiB, 2 nodes)" },
-    @{ Choice="4"; Type="D4"; Name="infraiq-d4"; MinNodes=1; MaxNodes=1; Cpu="4.0"; Memory="16.0Gi"; MaxReplicas=1; Label="D4 x 1  (4 vCPU / 16 GiB, 1 node)"  }
+    @{ Choice="1"; Kind="Consumption"; Type="Consumption"; Name="Consumption"; MinNodes=0; MaxNodes=0; Cpu="2.0"; Memory="4.0Gi";  MaxReplicas=2; Label="Consumption  (serverless, up to 4 vCPU / 8 GiB) - lightest, best for capacity-constrained regions" },
+    @{ Choice="2"; Kind="Dedicated";  Type="D4"; Name="infraiq-d4"; MinNodes=1; MaxNodes=1; Cpu="4.0"; Memory="16.0Gi"; MaxReplicas=1; Label="D4 x 1  (4 vCPU / 16 GiB, 1 node)"  },
+    @{ Choice="3"; Kind="Dedicated";  Type="D4"; Name="infraiq-d4"; MinNodes=2; MaxNodes=2; Cpu="4.0"; Memory="16.0Gi"; MaxReplicas=2; Label="D4 x 2  (4 vCPU / 16 GiB, 2 nodes)" },
+    @{ Choice="4"; Kind="Dedicated";  Type="D8"; Name="infraiq-d8"; MinNodes=1; MaxNodes=1; Cpu="8.0"; Memory="32.0Gi"; MaxReplicas=2; Label="D8 x 1  (8 vCPU / 32 GiB, 1 node)"  },
+    @{ Choice="5"; Kind="Dedicated";  Type="D8"; Name="infraiq-d8"; MinNodes=2; MaxNodes=2; Cpu="8.0"; Memory="32.0Gi"; MaxReplicas=2; Label="D8 x 2  (8 vCPU / 32 GiB, 2 nodes)" }
 )
 # Backward compatibility: the old -EnableDedicatedCapacityFallback $false flag = Manual mode.
 $effectiveMode = $CapacityMode
 if (-not $EnableDedicatedCapacityFallback -and $CapacityMode -eq "Automatic") {
     $effectiveMode = "Manual"
-    if ([string]::IsNullOrWhiteSpace($ManualProfileChoice)) { $ManualProfileChoice = "4" }
+    if ([string]::IsNullOrWhiteSpace($ManualProfileChoice)) { $ManualProfileChoice = "2" }
     Write-Info "Legacy -EnableDedicatedCapacityFallback `$false detected -> Manual capacity mode (profile $ManualProfileChoice)."
 }
 if ($effectiveMode -eq "Manual" -and [string]::IsNullOrWhiteSpace($ManualProfileChoice)) {
     Write-Host ""
-    Write-Host "  Select the Container Apps dedicated capacity profile (Manual mode):" -ForegroundColor Yellow
+    Write-Host "  Select the Container Apps capacity profile (Manual mode):" -ForegroundColor Yellow
     foreach ($p in $capacityProfiles) { Write-Host "    [$($p.Choice)] $($p.Label)" -ForegroundColor Cyan }
     Write-Host ""
-    while ($ManualProfileChoice -notin @("1","2","3","4")) {
-        $ManualProfileChoice = (Read-Host "  Enter choice (1-4)").Trim()
+    Write-Host "  Tip: pick [1] Consumption if a region is capacity-constrained, then scale up later." -ForegroundColor DarkGray
+    Write-Host ""
+    while ($ManualProfileChoice -notin @("1","2","3","4","5")) {
+        $ManualProfileChoice = (Read-Host "  Enter choice (1-5)").Trim()
     }
 }
 if ($effectiveMode -eq "Manual") {
     $selProfile = $capacityProfiles | Where-Object { $_.Choice -eq $ManualProfileChoice } | Select-Object -First 1
     Write-Info "Capacity mode:     Manual -> $($selProfile.Label)"
 } else {
-    Write-Info "Capacity mode:     Automatic -> fallback ladder D8x2 -> D8x1 -> D4x2 -> D4x1"
+    Write-Info "Capacity mode:     Automatic -> ladder D8x2 -> D8x1 -> D4x2 -> D4x1 -> Consumption"
 }
 
 # ── Providers + containerapp extension ─────────────────────────────────────────
@@ -1045,8 +1049,10 @@ if ($effectiveMode -eq "Manual") {
     $profileLadder = @($sel)
     Write-Info "Applying Manual capacity profile: $($sel.Label)"
 } else {
-    $profileLadder = $capacityProfiles
-    Write-Info "Applying Automatic capacity ladder: D8x2 -> D8x1 -> D4x2 -> D4x1"
+    # Automatic: heaviest first, falling back to lighter, with Consumption as the final
+    # safety net so capacity-constrained regions still succeed.
+    $profileLadder = @("5","4","3","2","1" | ForEach-Object { $cc = $_; $capacityProfiles | Where-Object { $_.Choice -eq $cc } })
+    Write-Info "Applying Automatic capacity ladder: D8x2 -> D8x1 -> D4x2 -> D4x1 -> Consumption"
 }
 
 if ($appExists) {
@@ -1058,15 +1064,21 @@ if ($appExists) {
 $profileDeployed = $null
 $lastDeployError = ""
 foreach ($profile in $profileLadder) {
-    Write-Info "Provisioning dedicated capacity profile: $($profile.Label)"
-    $wpErr = az containerapp env workload-profile set --name $ContainerAppEnvName --resource-group $ResourceGroupName `
-        --workload-profile-name $profile.Name --workload-profile-type $profile.Type `
-        --min-nodes $profile.MinNodes --max-nodes $profile.MaxNodes --output none 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $lastDeployError = "$wpErr"
-        if ($effectiveMode -eq "Manual") { Write-Warn2 "Workload profile '$($profile.Label)' could not be added (capacity/quota)." }
-        else { Write-Warn2 "Workload profile '$($profile.Label)' unavailable right now. Trying next fallback profile." }
-        continue
+    Write-Info "Provisioning capacity profile: $($profile.Label)"
+
+    # Dedicated profiles must be added to the environment first. The built-in
+    # 'Consumption' profile always exists in a workload-profiles environment, so it is
+    # used directly with no add step (and needs no scarce D-series capacity).
+    if ($profile.Kind -eq "Dedicated") {
+        $wpErr = az containerapp env workload-profile set --name $ContainerAppEnvName --resource-group $ResourceGroupName `
+            --workload-profile-name $profile.Name --workload-profile-type $profile.Type `
+            --min-nodes $profile.MinNodes --max-nodes $profile.MaxNodes --output none 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            $lastDeployError = "$wpErr"
+            if ($effectiveMode -eq "Manual") { Write-Warn2 "Workload profile '$($profile.Label)' could not be added (capacity/quota)." }
+            else { Write-Warn2 "Workload profile '$($profile.Label)' unavailable right now. Trying next fallback profile." }
+            continue
+        }
     }
 
     if (-not $appExists) {
@@ -1096,9 +1108,9 @@ foreach ($profile in $profileLadder) {
 }
 if (-not $profileDeployed) {
     if ($effectiveMode -eq "Manual") {
-        Fail "Manual capacity profile '$($profileLadder[0].Label)' could not be provisioned (capacity/quota). Re-run with -CapacityMode Automatic to auto-fall back, or pick a smaller profile (e.g. -ManualProfileChoice 4). Last error: $lastDeployError"
+        Fail "Manual capacity profile '$($profileLadder[0].Label)' could not be provisioned (capacity/quota). Re-run with -CapacityMode Automatic to auto-fall back, or pick a lighter profile (e.g. -ManualProfileChoice 1 for Consumption). Last error: $lastDeployError"
     } else {
-        Fail "Failed to create/update Container App across all dedicated fallback profiles (D8x2 -> D8x1 -> D4x2 -> D4x1). Last error: $lastDeployError"
+        Fail "Failed to create/update Container App across all fallback profiles (D8x2 -> D8x1 -> D4x2 -> D4x1 -> Consumption). This usually means the environment itself is unhealthy or the region/subnet is unavailable. Last error: $lastDeployError"
     }
 }
 $fqdn = az containerapp show --name $ContainerAppName --resource-group $ResourceGroupName --query "properties.configuration.ingress.fqdn" -o tsv
