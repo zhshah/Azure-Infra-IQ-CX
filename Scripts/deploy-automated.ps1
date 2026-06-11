@@ -211,7 +211,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.20"
+$ScriptVersion = "2026-06-11.21"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -1459,7 +1459,12 @@ if ($isPrivate) {
     Write-Host "  Networking:     PUBLIC ingress" -ForegroundColor Gray
 }
 Write-Host ""
-if ($DeploySql)  { Write-Host "  SQL admin password: $SqlAdminPassword" -ForegroundColor Yellow }
+if ($DeploySql) {
+    # SECURITY: never print the generated SQL admin password to the console / shell history.
+    # It is stored only inside the Container App secret 'sql-conn' (the app reads it from there).
+    # If an admin ever needs SQL access, reset the password on the SQL server in the Azure portal.
+    Write-Host "  SQL admin user: $SqlAdminUser (password auto-generated and stored only in the Container App secret 'sql-conn' — not displayed. Reset it on the SQL server in the portal if direct access is ever needed)." -ForegroundColor DarkGray
+}
 if ($permIssues.Count -gt 0) {
     # The deployment succeeded; these specific grants need Microsoft Entra DIRECTORY ADMIN
     # rights the deploying account did not have. Write them ALL to a single ready-to-run
