@@ -259,8 +259,8 @@ registration → **Authentication → Single-page application**.)
 | `-EntraTenantId` | ✅ | *(prompted)* | Entra directory (tenant) ID |
 | `-Location` | ➖ | `westeurope` | Azure region |
 | `-SubscriptionId` | ➖ | current | Target subscription |
-| `-SubscriptionIds` | ➖ | deployment subscription | Comma-separated subs to scan; use `auto` to discover all enabled subscriptions |
-| `-DiscoverAllSubscriptions` | ➖ | `$false` | Opt-in: discover all enabled subscriptions and grant RBAC across them |
+| `-SubscriptionIds` | ➖ | auto-discover | Comma-separated subs to pin. Default **auto-discovers every subscription the managed identity can read** (it gets tenant-root Reader), so the multi-subscription dropdown is fully populated |
+| `-DiscoverAllSubscriptions` | ➖ | `$false` | Opt-in: ALSO grant a per-subscription Reader on every enabled subscription at deploy time (otherwise cross-sub visibility comes from the tenant-root Reader grant) |
 | `-DeploySql` / `-DeployRedis` | ➖ | `$true` | Toggle the optional SQL / Redis resources |
 | `-DeploymentMode` | ➖ | `Public` | `Public` or `Private` (see below) |
 

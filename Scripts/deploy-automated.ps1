@@ -99,8 +99,11 @@ param(
     [string]$SubscriptionId = "",
 
     # Comma-separated subscriptions the app should SCAN (AZURE_SUBSCRIPTION_IDS).
-    # Default is deployment subscription only. Use -DiscoverAllSubscriptions $true
-    # or -SubscriptionIds "auto" to discover and scan all enabled subscriptions.
+    # Default: the app AUTO-DISCOVERS every subscription the managed identity can read
+    # (the identity is granted tenant-root Reader in Step 9), so the multi-subscription
+    # dropdown is fully populated — matching local behaviour. Pin a subset with
+    # -SubscriptionIds "id1,id2". Use -DiscoverAllSubscriptions $true to ALSO grant a
+    # per-subscription Reader on every enabled subscription at deploy time.
     [string]$SubscriptionIds = "",
     [bool]$DiscoverAllSubscriptions = $false,
 
@@ -208,7 +211,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.19"
+$ScriptVersion = "2026-06-11.20"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -294,9 +297,11 @@ while ([string]::IsNullOrWhiteSpace($EntraAppClientId)) { $EntraAppClientId = (R
 while ([string]::IsNullOrWhiteSpace($EntraTenantId))    { $EntraTenantId    = (Read-Host "  Entra tenant (directory) ID").Trim() }
 
 # Subscription scanning model:
-#   * -SubscriptionIds "id1,id2" -> pin to explicit list.
-#   * -DiscoverAllSubscriptions $true OR -SubscriptionIds "auto" -> discover all enabled.
-#   * default -> deployment subscription only.
+#   * -SubscriptionIds "id1,id2" -> pin to an explicit list.
+#   * -DiscoverAllSubscriptions $true OR -SubscriptionIds "auto" -> discover all enabled AND
+#     grant a per-subscription Reader on each at deploy time.
+#   * default -> app AUTO-DISCOVERS all subscriptions the identity can read (via the tenant-root
+#     Reader grant); only the deployment subscription gets an explicit per-sub Reader grant.
 $normalizedSubs = if ([string]::IsNullOrWhiteSpace($SubscriptionIds)) { "" } else { $SubscriptionIds.Trim() }
 $discoverAll = $DiscoverAllSubscriptions -or ($normalizedSubs.ToLowerInvariant() -eq "auto")
 $explicitSubs = (-not [string]::IsNullOrWhiteSpace($normalizedSubs)) -and (-not $discoverAll)
@@ -318,9 +323,15 @@ if ($explicitSubs) {
         Write-Warn2 "Could not list subscriptions; using current subscription only ($SubscriptionId)."
     }
 } else {
+    # Default: the app AUTO-DISCOVERS every subscription the managed identity can read at
+    # runtime (AZURE_SUBSCRIPTION_IDS=auto), so the full multi-subscription dropdown is
+    # populated — matching the local server. Cross-subscription visibility comes from the
+    # tenant-root Reader + Cost Management Reader grants (Step 9); only the deployment
+    # subscription gets an explicit per-sub grant here, so there is NO deploy-time per-sub
+    # RBAC flood across large tenants.
     $SubscriptionIds = $SubscriptionId
-    $ScanSubscriptionsEnv = $SubscriptionId
-    Write-Ok "Subscription scope: deployment subscription only ($SubscriptionId)"
+    $ScanSubscriptionsEnv = "auto"
+    Write-Ok "Subscription scope: auto-discover all readable subscriptions (tenant-root Reader granted; deployment sub gets explicit Reader)"
 }
 if ([string]::IsNullOrWhiteSpace($ZureMapClientId)) { $ZureMapClientId = $EntraAppClientId }
 if ([string]::IsNullOrWhiteSpace($ZureMapTenantId)) { $ZureMapTenantId = $EntraTenantId }
@@ -606,12 +617,16 @@ Write-Info "Container registry:$ContainerRegistryName"
 Write-Info "Container app:     $ContainerAppName"
 Write-Info "OpenAI:            $OpenAIResourceName ($OpenAILocation) / $(if ($OpenAIDeploymentName) { $OpenAIDeploymentName } else { 'newest GPT available' })"
 Write-Info "Deploy SQL:        $DeploySql   Deploy Redis: $DeployRedis"
-$scanList = @($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-if ($scanList.Count -gt 10) {
-    $preview = ($scanList | Select-Object -First 5) -join ','
-    Write-Info "Scan subscriptions: $($scanList.Count) total (first 5: $preview ...)"
+if ($ScanSubscriptionsEnv -eq "auto") {
+    Write-Info "Scan subscriptions: auto (app discovers every subscription the identity can read)"
 } else {
-    Write-Info "Scan subscriptions: $($scanList -join ',')"
+    $scanList = @($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($scanList.Count -gt 10) {
+        $preview = ($scanList | Select-Object -First 5) -join ','
+        Write-Info "Scan subscriptions: $($scanList.Count) total (first 5: $preview ...)"
+    } else {
+        Write-Info "Scan subscriptions: $($scanList -join ',')"
+    }
 }
 
 # ── Resolve Container Apps dedicated capacity selection (EARLY, before the long
