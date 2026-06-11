@@ -455,7 +455,7 @@ function AIStatusBadge({ provider, onOpenSettings }) {
   return (
     <button
       onClick={onOpenSettings}
-      title={active ? `AI scoring active — ${providerLabel(provider)}` : 'Enable AI for better scoring'}
+      title={active ? `Global Settings — AI scoring active (${providerLabel(provider)})` : 'Global Settings — enable AI for better scoring'}
       className={clsx(
         'flex items-center gap-1.5 px-2 py-1 rounded-full border text-xs font-medium transition-colors',
         active
@@ -465,7 +465,7 @@ function AIStatusBadge({ provider, onOpenSettings }) {
     >
       <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', active ? 'bg-green-400 animate-pulse' : 'bg-gray-600')} />
       <Brain size={11} />
-      <span className="hidden lg:inline">{active ? providerLabel(provider) : 'AI Off'}</span>
+      <span className="hidden lg:inline">Global Settings</span>
     </button>
   )
 }
