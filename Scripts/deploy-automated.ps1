@@ -116,11 +116,14 @@ param(
     # vCore-based SQL objective for medium profile.
     [string]$SqlServiceObjective = "GP_Gen5_4",
 
-    # Azure Cache for Redis (optional L2 cache)
+    # Azure Managed Redis (optional L2 cache). NOTE: classic "Azure Cache for Redis"
+    # (Microsoft.Cache/Redis) is RETIRED — new creates are rejected — so this uses
+    # Azure Managed Redis (Microsoft.Cache/redisEnterprise) via `az redisenterprise`.
     [bool]$DeployRedis = $true,
     [string]$RedisName = "",
-    [string]$RedisSku  = "Standard",
-    [string]$RedisVmSize = "c2",
+    # Azure Managed Redis SKU. Balanced_B0 = smallest/entry tier. See `az redisenterprise create -h`.
+    [string]$RedisSku  = "Balanced_B0",
+    [string]$RedisVmSize = "",   # [deprecated] classic-only; ignored for Azure Managed Redis
 
     # ── Container Apps capacity selection ─────────────────────────────────────
     # Choose how the workload profile (SKU size) for the Container App is picked:
@@ -211,7 +214,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.21"
+$ScriptVersion = "2026-06-11.22"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -1099,23 +1102,35 @@ if ($DeploySql) {
 # ── Azure Cache for Redis ──────────────────────────────────────────────────────
 $redisUrl = ""
 if ($DeployRedis) {
-    Write-Step "Step 7: Azure Cache for Redis ($RedisSku $RedisVmSize)"
-    $redisExists = az redis show --name $RedisName --resource-group $ResourceGroupName 2>$null
+    # Back-compat: legacy classic SKUs are invalid for Azure Managed Redis — map to entry tier.
+    if ($RedisSku -in @("Basic","Standard","Premium")) {
+        Write-Info "Mapping legacy Redis SKU '$RedisSku' -> Azure Managed Redis 'Balanced_B0'."
+        $RedisSku = "Balanced_B0"
+    }
+    Write-Step "Step 7: Azure Managed Redis ($RedisSku)"
+    az extension add -n redisenterprise --only-show-errors --output none 2>$null
+    $redisExists = az redisenterprise show --cluster-name $RedisName --resource-group $ResourceGroupName 2>$null
     if (-not $redisExists) {
-        Write-Info "Creating Redis (this can take 15-20 minutes)..."
-        $redisErr = az redis create --name $RedisName --resource-group $ResourceGroupName --location $Location `
-            --sku $RedisSku --vm-size $RedisVmSize --minimum-tls-version 1.2 --output none 2>&1
+        Write-Info "Creating Azure Managed Redis (this can take ~5-10 minutes)..."
+        $redisErr = az redisenterprise create --cluster-name $RedisName --resource-group $ResourceGroupName --location $Location `
+            --sku $RedisSku --output none 2>&1
         if ($LASTEXITCODE -ne 0) {
-            Write-Warn2 "Could not create Redis - the app runs fine WITHOUT it (no caching). Continuing."
-            if ("$redisErr" -match "retir") { Write-Warn2 "Azure Cache for Redis is being retired; use Azure Managed Redis (az redisenterprise) or pass -DeployRedis `$false." }
+            Write-Warn2 "Could not create Azure Managed Redis - the app runs fine WITHOUT it (no caching). Continuing."
+            Write-Warn2 ("Redis error: " + (("$redisErr" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)))
             $DeployRedis = $false
         }
     }
     if ($DeployRedis) {
-        $redisHost = az redis show --name $RedisName --resource-group $ResourceGroupName --query hostName -o tsv
-        $redisKey  = az redis list-keys --name $RedisName --resource-group $ResourceGroupName --query primaryKey -o tsv
-        $redisUrl  = "rediss://:$redisKey@${redisHost}:6380"
-        Write-Ok "Redis ready: $redisHost"
+        $redisHost = az redisenterprise show --cluster-name $RedisName --resource-group $ResourceGroupName --query hostName -o tsv 2>$null
+        $redisKey  = az redisenterprise database list-keys --cluster-name $RedisName --database-name default --resource-group $ResourceGroupName --query primaryKey -o tsv 2>$null
+        if ($redisHost -and $redisKey) {
+            # Azure Managed Redis listens on 10000 (TLS). The app reads REDIS_URL (rediss://).
+            $redisUrl  = "rediss://:$redisKey@${redisHost}:10000"
+            Write-Ok "Azure Managed Redis ready: $redisHost"
+        } else {
+            Write-Warn2 "Azure Managed Redis provisioned but host/key not readable yet - continuing without Redis."
+            $DeployRedis = $false
+        }
     }
 }
 
@@ -1314,10 +1329,10 @@ if ($isPrivate) {
     Write-Step "Step 8c: Private Endpoints (OpenAI / SQL / Redis)"
     $aoaiId  = az cognitiveservices account show --name $OpenAIResourceName --resource-group $ResourceGroupName --query id -o tsv 2>$null
     $sqlId   = if ($DeploySql)   { az sql server show --name $SqlServerName --resource-group $ResourceGroupName --query id -o tsv 2>$null } else { "" }
-    $redisId = if ($DeployRedis) { az redis show --name $RedisName --resource-group $ResourceGroupName --query id -o tsv 2>$null } else { "" }
+    $redisId = if ($DeployRedis) { az redisenterprise show --cluster-name $RedisName --resource-group $ResourceGroupName --query id -o tsv 2>$null } else { "" }
     New-ResourcePrivateEndpoint -Name "$ContainerAppName-openai-pe" -ResourceId $aoaiId -GroupId "account" -ZoneName "privatelink.openai.azure.com"
     if ($sqlId)   { New-ResourcePrivateEndpoint -Name "$ContainerAppName-sql-pe"   -ResourceId $sqlId   -GroupId "sqlServer"  -ZoneName "privatelink.database.windows.net" }
-    if ($redisId) { New-ResourcePrivateEndpoint -Name "$ContainerAppName-redis-pe" -ResourceId $redisId -GroupId "redisCache" -ZoneName "privatelink.redis.cache.windows.net" }
+    if ($redisId) { New-ResourcePrivateEndpoint -Name "$ContainerAppName-redis-pe" -ResourceId $redisId -GroupId "redisEnterprise" -ZoneName "privatelink.redis.azure.net" }
     if ($DisablePublicNetworkAccess) {
         Write-Info "Disabling data-plane public network access (the app reaches these privately over the VNet)..."
         if ($aoaiId)  { az resource update --ids $aoaiId  --set properties.publicNetworkAccess=Disabled --output none 2>$null }
@@ -1442,7 +1457,7 @@ Write-Step "Deployment complete"
 Write-Host "  App URL:        $appUrl" -ForegroundColor Green
 Write-Host "  Resource group: $ResourceGroupName ($Location)" -ForegroundColor Gray
 Write-Host "  Image:          $fullImage" -ForegroundColor Gray
-Write-Host "  SKUs:           ACR Premium | Container App ${Cpu}/${Memory} | SQL $SqlServiceObjective | Redis $RedisSku $RedisVmSize | OpenAI S0 (PAYG)" -ForegroundColor Gray
+Write-Host "  SKUs:           ACR Premium | Container App ${Cpu}/${Memory} | SQL $SqlServiceObjective | Managed Redis $RedisSku | OpenAI S0 (PAYG)" -ForegroundColor Gray
 if ($profileDeployed) { Write-Host "  ACA capacity:   $($profileDeployed.Label) [$effectiveMode mode]" -ForegroundColor Gray }
 Write-Host "  OpenAI:         $OpenAIResourceName / $OpenAIDeploymentName" -ForegroundColor Gray
 if ($DeploySql)  { Write-Host "  Azure SQL:      $SqlServerName/$SqlDatabaseName (admin: $SqlAdminUser)" -ForegroundColor Gray }

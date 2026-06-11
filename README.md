@@ -158,7 +158,7 @@ by management-group hierarchy — nothing hard-coded to drift.
 | **Frontend** | React 18, Vite, Tailwind CSS, MSAL.js (Entra SSO) |
 | **Backend** | Python 3.11, FastAPI, Uvicorn |
 | **AI** | Azure OpenAI (newest GPT model available — GPT-5.x / GPT-4.1 family) |
-| **Data** | Azure SQL (persistence) + Azure Cache for Redis (optional L2 cache) |
+| **Data** | Azure SQL (persistence) + Azure Managed Redis (optional L2 cache) |
 | **Azure APIs** | Resource Graph, Cost Management, Monitor, Advisor, ARM, Microsoft Graph, Management Groups |
 | **Architecture Map** | Embedded engine, served same-origin behind the auth gate |
 | **Container** | Docker → Azure Container Apps |
@@ -281,7 +281,7 @@ subscription** (the hub-spoke pattern most enterprises use).
 | **Container App** | VNet injection + **internal-only** ingress (no PE needed) | ❌ |
 | **Azure OpenAI** | Private Endpoint → `privatelink.openai.azure.com` | ❌ Disabled |
 | **Azure SQL** | Private Endpoint → `privatelink.database.windows.net` | ❌ Disabled |
-| **Azure Cache for Redis** | Private Endpoint → `privatelink.redis.cache.windows.net` | ❌ Disabled |
+| **Azure Managed Redis** | Private Endpoint → `privatelink.redis.azure.net` | ❌ Disabled |
 | **Private DNS zones** | Reused if they exist (any subscription), created if missing | N/A |
 | **DNS → VNet links** | Auto-linked for name resolution | N/A |
 
