@@ -188,7 +188,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.5"
+$ScriptVersion = "2026-06-11.6"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -554,6 +554,23 @@ if (-not $envProvState) {
     $envCreated = $false
     $lastEnvError = ""
     for ($attempt = 1; $attempt -le 4; $attempt++) {
+        # Before each attempt: if the environment already exists in a non-Succeeded/non-pending
+        # state (e.g. CreateFailed from a previous attempt), delete it so the create can proceed.
+        $existingProvState = az containerapp env show --name $ContainerAppEnvName --resource-group $ResourceGroupName --query "properties.provisioningState" -o tsv 2>$null
+        if ($existingProvState -and $existingProvState -notin @("Succeeded","Waiting","InProgress","Pending")) {
+            Write-Warn2 "Environment '$ContainerAppEnvName' is in '$existingProvState' state — deleting before retry (attempt $attempt/4)..."
+            az containerapp env delete --name $ContainerAppEnvName --resource-group $ResourceGroupName --yes --output none 2>$null
+            # Wait up to 3 minutes for deletion to complete before retrying
+            $deleted = $false
+            for ($dw = 1; $dw -le 12; $dw++) {
+                $chk = az containerapp env show --name $ContainerAppEnvName --resource-group $ResourceGroupName 2>$null
+                if (-not $chk) { $deleted = $true; break }
+                Write-Info "Waiting for environment deletion... ($($dw * 15)s)"
+                Start-Sleep -Seconds 15
+            }
+            if (-not $deleted) { Write-Warn2 "Environment deletion may still be in progress; proceeding with create anyway." }
+        }
+
         Write-Info "Creating Container Apps environment (attempt $attempt/4)..."
         $envErr = az @envCreateArgs --output none 2>&1
         if ($LASTEXITCODE -eq 0) {
@@ -562,16 +579,18 @@ if (-not $envProvState) {
         }
 
         $lastEnvError = "$envErr"
-        $isCapacityError = ($lastEnvError -match "AKSCapacityHeavyUsage") -or ($lastEnvError -match "capacity")
-        if ($isCapacityError -and $attempt -lt 4) {
-            Write-Warn2 "Container Apps environment capacity is constrained in '$Location'. Retrying in 45 seconds..."
-            Start-Sleep -Seconds 45
+        # Match both the initial AKS capacity hit AND the follow-on 'already in CreateFailed state'
+        # error that Azure returns when the previous failed attempt left a broken environment.
+        $isRetryable = ($lastEnvError -match "AKSCapacityHeavyUsage|capacity|CreateFailed|CreateFail|ManagedEnvironmentIn")
+        if ($isRetryable -and $attempt -lt 4) {
+            Write-Warn2 "Container Apps environment create failed (capacity/transient). Waiting 30 seconds before retry $($attempt + 1)/4..."
+            Start-Sleep -Seconds 30
             continue
         }
         break
     }
     if (-not $envCreated) {
-        Fail "Failed to create Container Apps environment (region capacity/quota, or the infrastructure subnet is unusable — needs >= /27 (/23 recommended), empty, delegated to Microsoft.App/environments). Last error: $lastEnvError"
+        Fail "Failed to create Container Apps environment after retries (region capacity/quota, or the infrastructure subnet is unusable — needs >= /27 (/23 recommended), empty, delegated to Microsoft.App/environments). Last error: $lastEnvError"
     }
     $envProvState = az containerapp env show --name $ContainerAppEnvName --resource-group $ResourceGroupName --query "properties.provisioningState" -o tsv 2>$null
     if ($envProvState -ne "Succeeded") { Fail "Container Apps environment did not provision successfully (state: $envProvState). Try a different -Location with available capacity." }
