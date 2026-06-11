@@ -65,6 +65,11 @@ param(
     [string]$ContainerAppEnvName = "azure-infra-iq-env",
     [string]$ImageName           = "azure-infra-iq",
     [string]$ImageTag            = "",   # set to reuse an already-built tag and SKIP the build
+    # Optional Docker Hub credentials for an AUTHENTICATED base-image import (avoids the
+    # anonymous 'toomanyrequests' pull rate limit). A free Docker Hub account + a read-only
+    # access token works. If omitted, the base image is imported anonymously (usually fine).
+    [string]$DockerHubUsername   = "",
+    [string]$DockerHubToken      = "",
     [string]$LogAnalyticsName    = "azure-infra-iq-logs",
     # Optional: customer-provided existing Log Analytics workspace credentials.
     # If omitted, deployment defaults to logs-destination=none unless
@@ -203,7 +208,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.11"
+$ScriptVersion = "2026-06-11.12"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -674,30 +679,82 @@ Write-Ok "ACR ready: $acrLoginServer"
 if ($reuseImage) {
     Write-Ok "Reusing existing image tag '$imageTag' (skipping build)"
 } else {
-Write-Info "Building combined image remotely (SPA build + backend + ODBC + ZureMap engine). This takes ~10-15 min..."
-Push-Location $RepoRoot
-az acr build --registry $ContainerRegistryName --image "${ImageName}:${imageTag}" --file "Dockerfile" .
-$acrBuildExit = $LASTEXITCODE
-Pop-Location
-if ($acrBuildExit -ne 0) {
-    # az's Windows log-streaming can crash AFTER the remote build was queued (the
-    # server-side build keeps running). Distinguish that from a real build failure by
-    # polling the actual run STATUS: fail fast on Failed/Canceled, wait while Running,
-    # continue once it Succeeds.
-    Write-Warn2 "az acr build reported exit $acrBuildExit — checking the remote build run status..."
-    $ok = $false
-    for ($i = 0; $i -lt 80; $i++) {
-        $run = az acr task list-runs --registry $ContainerRegistryName --top 1 -o json 2>$null | ConvertFrom-Json
-        $st = if ($run) { $run[0].status } else { $null }
-        if ($st -eq "Succeeded") { $ok = $true; break }
-        if ($st -in @("Failed","Canceled","Error","Timeout")) {
-            Fail "ACR build run '$($run[0].runId)' $st. Inspect: az acr task logs --registry $ContainerRegistryName --run-id $($run[0].runId)"
-        }
-        Start-Sleep -Seconds 15
+# Pre-import the Docker Hub Node base image into the customer's ACR so the build pulls it
+# from THIS registry (implicitly authenticated) instead of Docker Hub anonymously — which
+# avoids the 'toomanyrequests' anonymous pull-rate-limit on shared ACR build agents. Once
+# cached the build never touches Docker Hub again (idempotent across re-runs).
+$nodeAcrPath = "base/node:20-bookworm-slim"
+$buildArgs = @()
+$importOk = $false
+if (az acr repository show --name $ContainerRegistryName --image $nodeAcrPath 2>$null) {
+    $importOk = $true
+    Write-Ok "Node base image already cached in ACR: $acrLoginServer/$nodeAcrPath"
+} else {
+    $importArgs = @("acr","import","--name",$ContainerRegistryName,"--source","docker.io/library/node:20-bookworm-slim","--image",$nodeAcrPath,"--force")
+    if (-not [string]::IsNullOrWhiteSpace($DockerHubUsername) -and -not [string]::IsNullOrWhiteSpace($DockerHubToken)) {
+        $importArgs += @("--username",$DockerHubUsername,"--password",$DockerHubToken)
+        Write-Info "Importing Node base image into ACR with Docker Hub credentials..."
+    } else {
+        Write-Info "Importing Node base image into ACR (anonymous; pass -DockerHubUsername/-DockerHubToken if rate-limited)..."
     }
-    if ($ok) { Write-Ok "Remote ACR build Succeeded — continuing." }
-    else { Fail "ACR build did not complete in time." }
+    for ($i = 1; $i -le 3; $i++) {
+        az @importArgs --output none 2>$null
+        if ($LASTEXITCODE -eq 0) { $importOk = $true; break }
+        if ($i -lt 3) { Write-Warn2 "Base image import attempt $i/3 failed. Retrying in 30s..."; Start-Sleep -Seconds 30 }
+    }
 }
+if ($importOk) {
+    $buildArgs = @("--build-arg","NODE_IMAGE=$acrLoginServer/$nodeAcrPath")
+    Write-Ok "Build will use ACR-hosted Node base image (no Docker Hub anonymous pull)."
+} else {
+    Write-Warn2 "Could not pre-import the Node base image; the build will pull it from Docker Hub directly (may hit rate limits)."
+}
+
+Write-Info "Building combined image remotely (SPA build + backend + ODBC + ZureMap engine). This takes ~10-15 min..."
+$buildOk = $false
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    Push-Location $RepoRoot
+    az acr build --registry $ContainerRegistryName --image "${ImageName}:${imageTag}" --file "Dockerfile" @buildArgs .
+    $acrBuildExit = $LASTEXITCODE
+    Pop-Location
+    if ($acrBuildExit -eq 0) { $buildOk = $true; break }
+
+    # az's Windows log-streaming can crash AFTER the build was queued (the server-side
+    # build keeps running). Poll the real run STATUS before deciding.
+    Write-Warn2 "az acr build reported exit $acrBuildExit (attempt $attempt/3) — checking the remote run status..."
+    $run   = az acr task list-runs --registry $ContainerRegistryName --top 1 -o json 2>$null | ConvertFrom-Json
+    $runId = if ($run) { $run[0].runId } else { $null }
+    $st    = if ($run) { $run[0].status } else { $null }
+    if ($st -in @("Running","Queued","Started")) {
+        for ($i = 0; $i -lt 80; $i++) {
+            $run = az acr task list-runs --registry $ContainerRegistryName --top 1 -o json 2>$null | ConvertFrom-Json
+            $st = if ($run) { $run[0].status } else { $null }
+            if ($st -in @("Succeeded","Failed","Canceled","Error","Timeout")) { break }
+            Start-Sleep -Seconds 15
+        }
+    }
+    if ($st -eq "Succeeded") { $buildOk = $true; break }
+
+    # Look for a transient Docker Hub rate-limit signature in the run logs.
+    $logTxt = ""
+    if ($runId) { $logTxt = (az acr task logs --registry $ContainerRegistryName --run-id $runId 2>$null | Out-String) }
+    $isRateLimited = $logTxt -match "toomanyrequests|pull rate limit|429 Too Many Requests"
+    if ($isRateLimited -and $attempt -lt 3) {
+        Write-Warn2 "Docker Hub anonymous pull rate limit hit on the build agent. Retrying in 90s (a fresh agent/IP usually clears it)..."
+        Start-Sleep -Seconds 90
+        continue
+    }
+    if ($isRateLimited) {
+        Fail "ACR build failed: Docker Hub anonymous pull rate limit ('toomanyrequests'). Re-run with -DockerHubUsername/-DockerHubToken (a free Docker Hub account + read-only access token) for an authenticated, rate-limit-free import. Logs: az acr task logs --registry $ContainerRegistryName --run-id $runId"
+    }
+    if ($attempt -lt 3 -and [string]::IsNullOrWhiteSpace($st)) {
+        Write-Warn2 "Could not determine the build status; retrying in 30s..."
+        Start-Sleep -Seconds 30
+        continue
+    }
+    Fail "ACR build run '$runId' $st. Inspect: az acr task logs --registry $ContainerRegistryName --run-id $runId"
+}
+if (-not $buildOk) { Fail "ACR build did not complete after retries." }
 }
 $fullImage = "$acrLoginServer/${ImageName}:${imageTag}"
 Write-Ok "Image built: $fullImage"

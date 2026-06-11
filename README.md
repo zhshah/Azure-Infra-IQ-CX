@@ -365,6 +365,11 @@ Notes:
       `-CapacityMode Manual -ManualProfileChoice 1` (Consumption). The environment is still created as a
       workload-profiles environment, so you can add a D-series profile and move the app later from the
       portal/CLI with no redeploy.
+- **Docker Hub pull rate limit (`toomanyrequests`)** — the image build pulls a Node base image. The
+  script automatically pre-imports it into your ACR (server-side, one time) so the build pulls from
+  your own registry and never hits Docker Hub's anonymous limit. If the one-time import itself is
+  rate-limited, pass a free Docker Hub account for an authenticated import:
+  `-DockerHubUsername "<user>" -DockerHubToken "<read-only-access-token>"`.
 
 After a private deployment the app URL resolves **only from inside the VNet** (or peered /
 on-prem networks via the private DNS). Reach it from a jumpbox/Bastion in the VNet, or over

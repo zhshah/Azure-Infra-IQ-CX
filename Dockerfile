@@ -22,7 +22,11 @@
 # ==============================================================================
 
 # ---- Stage 1: build the React SPA --------------------------------------------
-FROM node:20-bookworm-slim AS web
+# NODE_IMAGE is overridable so the deploy script can point this at a copy of the
+# Node base image pre-imported into the customer's ACR — this avoids the Docker Hub
+# anonymous pull rate limit ('toomanyrequests') on shared ACR build agents.
+ARG NODE_IMAGE=node:20-bookworm-slim
+FROM ${NODE_IMAGE} AS web
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
