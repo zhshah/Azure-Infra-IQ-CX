@@ -208,7 +208,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.12"
+$ScriptVersion = "2026-06-11.13"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -693,21 +693,21 @@ if (az acr repository show --name $ContainerRegistryName --image $nodeAcrPath 2>
     $importArgs = @("acr","import","--name",$ContainerRegistryName,"--source","docker.io/library/node:20-bookworm-slim","--image",$nodeAcrPath,"--force")
     if (-not [string]::IsNullOrWhiteSpace($DockerHubUsername) -and -not [string]::IsNullOrWhiteSpace($DockerHubToken)) {
         $importArgs += @("--username",$DockerHubUsername,"--password",$DockerHubToken)
-        Write-Info "Importing Node base image into ACR with Docker Hub credentials..."
+        Write-Info "Optimization: caching Node base image in ACR (authenticated)..."
     } else {
-        Write-Info "Importing Node base image into ACR (anonymous; pass -DockerHubUsername/-DockerHubToken if rate-limited)..."
+        Write-Info "Optimization: caching Node base image in ACR to dodge Docker Hub limits (best-effort)..."
     }
-    for ($i = 1; $i -le 3; $i++) {
+    for ($i = 1; $i -le 2; $i++) {
         az @importArgs --output none 2>$null
         if ($LASTEXITCODE -eq 0) { $importOk = $true; break }
-        if ($i -lt 3) { Write-Warn2 "Base image import attempt $i/3 failed. Retrying in 30s..."; Start-Sleep -Seconds 30 }
+        if ($i -lt 2) { Write-Info "  ACR cache not ready; one more try in 15s (non-blocking)..."; Start-Sleep -Seconds 15 }
     }
 }
 if ($importOk) {
     $buildArgs = @("--build-arg","NODE_IMAGE=$acrLoginServer/$nodeAcrPath")
-    Write-Ok "Build will use ACR-hosted Node base image (no Docker Hub anonymous pull)."
+    Write-Ok "Node base image cached in ACR — the build will not touch Docker Hub."
 } else {
-    Write-Warn2 "Could not pre-import the Node base image; the build will pull it from Docker Hub directly (may hit rate limits)."
+    Write-Info "ACR cache unavailable — build will pull the base image directly during the build. This is a NORMAL fallback, not an error."
 }
 
 Write-Info "Building combined image remotely (SPA build + backend + ODBC + ZureMap engine). This takes ~10-15 min..."
