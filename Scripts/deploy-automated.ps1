@@ -208,7 +208,7 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.13"
+$ScriptVersion = "2026-06-11.14"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
@@ -877,19 +877,62 @@ if (-not $envProvState) {
             Fail "Subnet '$SubnetName' is already claimed by '$ceName' (RG: $ceRg). Delete that environment first, then re-run."
         }
 
-        # ── Retryable errors: AKS capacity and transient ARM state errors ────────
-        # NOTE: 'ManagedEnvironmentIn' is intentionally scoped to 'InCreateFailedState'
-        # only — do NOT widen it to match 'ManagedEnvironmentSubnetInUse' again.
-        $isRetryable = ($lastEnvError -match "AKSCapacityHeavyUsage|capacity|InCreateFailedState")
+        # ── Regional capacity exhaustion (ManagedEnvironmentCapacityHeavyUsageError /
+        #    AKSCapacityHeavyUsage): Azure has no capacity to create a NEW environment in
+        #    this region right now. Retrying rarely helps, so give ONE quick retry then
+        #    fail FAST with clear, region-specific guidance (instead of churning 4x with
+        #    slow environment deletions between attempts).
+        $isCapacityError = ($lastEnvError -match "CapacityHeavyUsage")
+        if ($isCapacityError) {
+            if ($attempt -lt 2) {
+                Write-Warn2 "Region '$Location' is at capacity for NEW Container Apps environments. One quick retry in 60s..."
+                Start-Sleep -Seconds 60
+                continue
+            }
+            $sep = "  " + ("─" * 70)
+            Write-Host ""
+            Write-Host $sep                                                                       -ForegroundColor Red
+            Write-Host "  REGIONAL CAPACITY UNAVAILABLE  —  $Location"                            -ForegroundColor Red
+            Write-Host $sep                                                                       -ForegroundColor Red
+            Write-Host "  Azure cannot create a NEW Container Apps environment in '$Location'"     -ForegroundColor Yellow
+            Write-Host "  right now due to high demand. This is an Azure CAPACITY limit — NOT a"    -ForegroundColor Yellow
+            Write-Host "  problem with this script, your subnet, or the capacity mode you chose."   -ForegroundColor Yellow
+            Write-Host "  (Note: the Consumption/D-series choice does not affect this — it happens" -ForegroundColor DarkGray
+            Write-Host "   at environment creation, before any workload profile is applied.)"       -ForegroundColor DarkGray
+            Write-Host ""
+            if ($isPrivate) {
+                Write-Host "  PRIVATE mode requires the environment to be in the SAME region as your" -ForegroundColor White
+                Write-Host "  VNet '$VNetName' ($Location) — so just changing -Location will NOT work" -ForegroundColor White
+                Write-Host "  unless you also use a VNet + dedicated subnet in the new region." -ForegroundColor White
+                Write-Host ""
+            }
+            Write-Host "  Options:"                                                                -ForegroundColor White
+            Write-Host "   1) Retry later — regional capacity fluctuates; it often clears within"  -ForegroundColor Cyan
+            Write-Host "      a few hours (no script changes needed)."                             -ForegroundColor Cyan
+            Write-Host "   2) Use an alternate region end-to-end: a VNet + dedicated subnet in e.g." -ForegroundColor Cyan
+            Write-Host "      northeurope / swedencentral / francecentral, then re-run with that"   -ForegroundColor Cyan
+            Write-Host "      VNet, -SubnetName, and -Location set to that region."                -ForegroundColor Cyan
+            if (-not $isPrivate) {
+                Write-Host "   3) Public mode: simply re-run with a different -Location (no VNet needed)." -ForegroundColor Cyan
+            }
+            Write-Host ""
+            Write-Host "  Azure regions list: https://aka.ms/acaregions"                           -ForegroundColor DarkGray
+            Write-Host $sep                                                                       -ForegroundColor Red
+            Write-Host ""
+            Fail "Container Apps environment capacity is unavailable in '$Location' (ManagedEnvironmentCapacityHeavyUsageError). Retry later or use an alternate region — see the guidance above."
+        }
+
+        # ── Other transient ARM state errors (e.g. a prior CreateFailed env) ─────
+        $isRetryable = ($lastEnvError -match "InCreateFailedState")
         if ($isRetryable -and $attempt -lt 4) {
-            Write-Warn2 "Container Apps environment create failed (capacity/transient). Waiting 30 seconds before retry $($attempt + 1)/4..."
+            Write-Warn2 "Container Apps environment create failed (transient). Waiting 30 seconds before retry $($attempt + 1)/4..."
             Start-Sleep -Seconds 30
             continue
         }
         break
     }
     if (-not $envCreated) {
-        Fail "Failed to create Container Apps environment after retries (region capacity/quota, or the infrastructure subnet is unusable — needs >= /27 (/23 recommended), empty, delegated to Microsoft.App/environments). Last error: $lastEnvError"
+        Fail "Failed to create Container Apps environment after retries. Last error: $lastEnvError"
     }
     $envProvState = az containerapp env show --name $ContainerAppEnvName --resource-group $ResourceGroupName --query "properties.provisioningState" -o tsv 2>$null
     if ($envProvState -ne "Succeeded") { Fail "Container Apps environment did not provision successfully (state: $envProvState). Try a different -Location with available capacity." }
