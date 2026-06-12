@@ -484,6 +484,10 @@ async def _build_dashboard(
     executor = ThreadPoolExecutor(max_workers=10)
     cfg      = settings_svc.get()
     sub_ids  = settings_svc.get_subscription_ids()
+    # Full set the identity can access, captured BEFORE any single-subscription
+    # scoping below, so the scope selector can list every switchable subscription
+    # (not only the ones in the current scan).
+    all_accessible_sub_ids = list(sub_ids)
 
     def _fetch_subscription_names(ids: list[str]) -> dict[str, str]:
         try:
@@ -1553,6 +1557,19 @@ async def _build_dashboard(
         if r.is_orphan:
             sub_summaries[sid]["orphan_count"] += 1
         sub_summaries[sid]["advisor_rec_count"] += len(r.advisor_recommendations)
+
+    # Surface EVERY accessible subscription in the scope selector — scanned subs
+    # carry real counts; the rest appear with zeros so the user can switch to them
+    # even when the current scan is scoped to a single subscription.
+    for _sid in all_accessible_sub_ids:
+        if _sid and _sid not in sub_summaries:
+            sub_summaries[_sid] = {"resource_count": 0, "cost_current": 0.0, "cost_previous": 0.0, "orphan_count": 0, "advisor_rec_count": 0}
+    _missing_name_ids = [sid for sid in sub_summaries if sid not in sub_names]
+    if _missing_name_ids:
+        try:
+            sub_names = {**_fetch_subscription_names(_missing_name_ids), **sub_names}
+        except Exception:
+            pass
 
     subscription_list = [
         SubscriptionSummary(
@@ -3266,22 +3283,81 @@ async def finops_dashboard_data(
 
 # ── Subscription List (for filter dropdowns) ──────────────────────────────────
 
+# Cache of accessible subscription display names (id -> name). The scope dropdown
+# must list EVERY subscription the identity can switch to, not only the ones in the
+# current (possibly single-subscription) scan. Resolving names hits ARM, so cache it.
+_sub_names_cache: dict = {"ts": 0.0, "map": {}}
+
+
+def _resolve_all_subscription_names(ttl_seconds: int = 3600) -> dict:
+    """Return {subscription_id: display_name} for every subscription the identity
+    can enumerate (best-effort, cached for ttl_seconds). Empty dict on failure."""
+    import time as _t
+    now = _t.time()
+    if _sub_names_cache["map"] and (now - _sub_names_cache["ts"] < ttl_seconds):
+        return _sub_names_cache["map"]
+    try:
+        from azure.mgmt.subscription import SubscriptionClient
+        from services.azure_auth import get_credential
+        client = SubscriptionClient(get_credential())
+        m = {s.subscription_id: (s.display_name or s.subscription_id)
+             for s in client.subscriptions.list()
+             if getattr(s, "state", "Enabled") in (None, "Enabled")}
+        if m:
+            _sub_names_cache["map"] = m
+            _sub_names_cache["ts"]  = now
+        return m
+    except Exception as _e:
+        logger.debug("subscription-name resolve failed: %s", _e)
+        return _sub_names_cache["map"] or {}
+
+
 @app.get("/api/subscriptions", tags=["FinOps"])
 async def list_subscriptions():
-    """Instant subscription list from dashboard cache — used by frontend filter dropdowns."""
+    """Subscription list for the scope dropdown.
+
+    Returns EVERY subscription the managed identity can access (so the user can
+    switch scope to any of them), enriched with live cost / resource counts from
+    the current scan when present. Previously this returned only the *scanned*
+    subscriptions, so a single-subscription scan collapsed the dropdown to one
+    entry even though the identity could read several.
+    """
     dash: Optional[DashboardData] = _cache.get("data:*") or _cache.get("data")
-    if dash:
+    scanned = {s.subscription_id: s for s in (dash.subscriptions or [])} if dash else {}
+    # Authoritative ID set honours config (explicit pinned list vs auto-discover).
+    try:
+        all_ids = list(finops_data_svc.get_subscription_ids()) if _FINOPS_AVAILABLE else []
+    except Exception:
+        all_ids = []
+    # Always include anything actually scanned, even if config later narrows it.
+    for sid in scanned:
+        if sid not in all_ids:
+            all_ids.append(sid)
+    if not all_ids:
         return [
-            {
-                "subscription_id":   s.subscription_id,
-                "subscription_name": s.subscription_name or s.subscription_id,
-                "cost_current":      round(s.cost_current or 0.0, 2),
-            }
-            for s in (dash.subscriptions or [])
+            {"subscription_id": s.subscription_id,
+             "subscription_name": s.subscription_name or s.subscription_id,
+             "cost_current": round(s.cost_current or 0.0, 2)}
+            for s in scanned.values()
         ]
-    # Fallback: return static IDs from config
-    return [{"subscription_id": sid, "subscription_name": sid, "cost_current": 0.0}
-            for sid in (finops_data_svc.get_subscription_ids() if _FINOPS_AVAILABLE else [])]
+    # Resolve display names only for subscriptions not already enriched by the scan.
+    name_map = _resolve_all_subscription_names() if any(sid not in scanned for sid in all_ids) else {}
+    out = []
+    for sid in all_ids:
+        s = scanned.get(sid)
+        if s:
+            out.append({
+                "subscription_id":   sid,
+                "subscription_name": s.subscription_name or name_map.get(sid) or sid,
+                "cost_current":      round(s.cost_current or 0.0, 2),
+            })
+        else:
+            out.append({
+                "subscription_id":   sid,
+                "subscription_name": name_map.get(sid, sid),
+                "cost_current":      0.0,
+            })
+    return out
 
 
 # ── Filter Options (for Cost Explorer multi-selects) ─────────────────────────
