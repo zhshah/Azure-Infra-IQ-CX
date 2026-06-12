@@ -1927,6 +1927,29 @@ async def stream_dashboard(
                 skip_metrics=fast,
                 subscription_id=subscription,
             )
+            # A scan that comes back EMPTY (0 resources) is almost always transient — a
+            # Cost/ARM throttle, a per-subscription API hiccup, or the managed identity's
+            # Reader role still propagating right after a fresh deploy. NEVER let that blank
+            # a dashboard the user is already looking at: if we have a prior non-empty
+            # result (in memory or the durable snapshot), keep serving it instead of "0".
+            if not (data.resources or []):
+                prior = _cache.get(cache_key)
+                if not (prior is not None and getattr(prior, "resources", None)):
+                    try:
+                        _snap = persistence_svc.load_latest_dashboard()
+                        if _snap and (_snap.get("resources") or []):
+                            prior = DashboardData(**{k: v for k, v in _snap.items() if k in DashboardData.model_fields})
+                    except Exception:
+                        prior = None
+                if prior is not None and getattr(prior, "resources", None):
+                    logger.warning(
+                        "Scan returned 0 resources — serving last-good dashboard (%d resources) "
+                        "instead of blanking the view", len(prior.resources or [])
+                    )
+                    await progress_q.put({"type": "done", "pct": 100, "data": prior.model_dump()})
+                    return
+                # else: genuinely no good data yet (fresh deploy, pre-RBAC) — fall through
+                # and surface the empty result; the startup catch-up will self-heal.
             _cache[cache_key] = data
             _cache[f"{cache_key}:ts"] = datetime.now(tz=timezone.utc).timestamp()
             # Also populate the unkeyed fallback used by /api/dashboard (legacy)
