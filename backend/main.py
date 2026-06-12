@@ -466,6 +466,90 @@ def _cost_series_empty(*series) -> bool:
     return True
 
 
+# ── Resources-first inventory paint ────────────────────────────────────────────
+def _resources_first_payload(resources: List[Dict], sub_ids: List[str],
+                             sub_names: Dict[str, str]) -> DashboardData:
+    """Build a lightweight, inventory-only dashboard straight from the raw resource
+    list (no cost / utilisation / scoring / AI). It lets the portal paint the full
+    resource table, type breakdown, scope selector and tag compliance within seconds
+    of the scan starting — before the slow Cost Management / Azure Monitor / AI calls
+    finish. Cost, scores, orphans, savings and the AI narrative stay at their defaults
+    here and arrive via the later 'partial' (full core) and 'done' (with AI) events.
+    """
+    items: List[ResourceMetrics] = []
+    type_counts: Dict[str, int] = {}
+    sub_counts: Dict[str, int] = {}
+    rgs: set = set()
+    untagged = 0
+    for r in resources:
+        rtype = (r.get("type") or "")
+        rg    = (r.get("resource_group") or "")
+        sid   = (r.get("subscription_id") or "")
+        tags  = r.get("tags") or {}
+        missing = [t for t in REQUIRED_TAGS if t not in tags]
+        if missing:
+            untagged += 1
+        items.append(ResourceMetrics(
+            resource_id=(r.get("id") or ""),
+            resource_name=(r.get("name") or ""),
+            resource_type=rtype,
+            resource_group=rg,
+            location=(r.get("location") or ""),
+            sku=r.get("sku"),
+            subscription_id=sid,
+            missing_tags=missing,
+            portal_url=f"https://portal.azure.com/#@/resource{r.get('id','')}/overview",
+        ))
+        type_counts[rtype] = type_counts.get(rtype, 0) + 1
+        if sid:
+            sub_counts[sid] = sub_counts.get(sid, 0) + 1
+        if rg:
+            rgs.add(rg)
+
+    tag_pct = round((len(items) - untagged) / len(items) * 100, 1) if items else 100.0
+    kpi = KPIData(
+        total_cost_current_month=0.0, total_cost_previous_month=0.0,
+        mom_cost_delta=0.0, mom_cost_delta_pct=0.0,
+        total_resources=len(items), avg_optimization_score=0.0,
+        total_potential_savings=0.0, orphan_count=0, orphan_cost=0.0,
+        subscription_count=(len(sub_ids) or len(sub_counts) or 1),
+    )
+    rts = [
+        ResourceTypeSummary(
+            resource_type=t,
+            display_name=RESOURCE_TYPE_DISPLAY.get(t, (t.split("/")[-1] if t else "Other")),
+            count=c, cost_current_month=0.0, cost_previous_month=0.0, avg_score=0.0,
+        )
+        for t, c in sorted(type_counts.items(), key=lambda kv: -kv[1])
+    ]
+    # Include every scanned subscription (even ones with 0 resources in this scope) so
+    # the scope selector renders the full hierarchy dropdown, not a single-sub badge.
+    _all_sids = list(dict.fromkeys(list(sub_counts.keys()) + list(sub_ids or [])))
+    subs = [
+        SubscriptionSummary(
+            subscription_id=sid,
+            subscription_name=(sub_names.get(sid, "") if sub_names else ""),
+            resource_count=sub_counts.get(sid, 0),
+        )
+        for sid in _all_sids
+    ]
+    return DashboardData(
+        kpi=kpi,
+        score_distribution=[],
+        resource_type_summary=rts,
+        resources=items,
+        orphans=[],
+        savings_recommendations=[],
+        last_refreshed=datetime.now(tz=timezone.utc).isoformat(),
+        subscriptions=subs,
+        resource_groups=sorted(rgs),
+        tag_compliance_pct=tag_pct,
+        total_untagged=untagged,
+        ai_enabled=False,
+        ai_provider="none",
+    )
+
+
 # ── Core build function ────────────────────────────────────────────────────────
 
 async def _build_dashboard(
@@ -558,8 +642,27 @@ async def _build_dashboard(
         except Exception:
             return default
 
-    resources, (curr_costs, prev_costs, cost_fetch_error), advisor_map, daily_costs_raw, monthly_hist_raw, (total_daily_cm, total_daily_pm), sub_names = await asyncio.gather(
-        _guarded(resources_task,     []),
+    # ── Resources-first paint ───────────────────────────────────────
+    # The resource INVENTORY is fast (sub-seconds); cost / advisor / trend queries can
+    # take 30-120s under Cost Management 429 throttling. Await the inventory + the
+    # subscription names on their own and emit them immediately so the portal paints
+    # the full resource table, type breakdown, scope selector and tag compliance within
+    # seconds of the scan starting — instead of staring at an empty screen until cost
+    # resolves. Cost, scores and the AI narrative then fill in via the later 'partial'
+    # (full core) and 'done' (with AI) events. Every task was already launched above,
+    # so awaiting the inventory first does NOT delay the cost / advisor work.
+    resources = await _guarded(resources_task, [])
+    sub_names = await _guarded(sub_names_task, {})
+    if resource_group_filter:
+        resources = [r for r in resources if r["resource_group"].lower() == resource_group_filter.lower()]
+    if progress_cb and resources:
+        try:
+            _rf_payload = _resources_first_payload(resources, sub_ids, sub_names)
+            await progress_cb({"type": "partial", "pct": 18, "data": _rf_payload.model_dump()})
+        except Exception as _rfe:
+            logger.debug("Resources-first paint skipped: %s", _rfe)
+
+    (curr_costs, prev_costs, cost_fetch_error), advisor_map, daily_costs_raw, monthly_hist_raw, (total_daily_cm, total_daily_pm) = await asyncio.gather(
         # If the cost task times out it's almost always tenant-shared 429 throttling,
         # not a permissions problem — carry a throttle-flagged error so the banner
         # renders as a transient (amber) notice rather than a red RBAC failure.
@@ -568,7 +671,6 @@ async def _build_dashboard(
         _guarded(daily_task,         {}, timeout=120),
         _guarded(monthly_hist_task,  {}, timeout=120),
         _guarded(total_daily_task,   ([], []), timeout=120),
-        _guarded(sub_names_task,     {}),
     )
 
     # Credentials successfully used — reset the inactivity timer (SEC1)
