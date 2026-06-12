@@ -1375,7 +1375,7 @@ foreach ($sid in ($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() } | W
     foreach ($role in @("Reader","Cost Management Reader")) {
         $r = az role assignment create --assignee $principalId --role $role --scope "/subscriptions/$sid" --output none 2>&1
         if ($LASTEXITCODE -eq 0 -or "$r" -match "already exists|RoleAssignmentExists") { Write-Ok "$role on /subscriptions/$sid" }
-        else { Write-Warn2 "Could not assign $role on $sid"; $permIssues += "az role assignment create --assignee $principalId --role `"$role`" --scope `"/subscriptions/$sid`"" }
+        else { $why = (("$r" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)); Write-Warn2 "Could not assign $role on ${sid}: $why"; $permIssues += "az role assignment create --assignee $principalId --role `"$role`" --scope `"/subscriptions/$sid`"   # why: $why" }
     }
 }
 # If ZureMap is configured for SP mode, grant its service principal Reader too.
@@ -1383,7 +1383,7 @@ if ($deployZureMap -and $useZureMapSp) {
     foreach ($sid in ($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
         $zr = az role assignment create --assignee $ZureMapClientId --role "Reader" --scope "/subscriptions/$sid" --output none 2>&1
         if ($LASTEXITCODE -eq 0 -or "$zr" -match "already exists|RoleAssignmentExists") { Write-Ok "Architecture Map identity Reader on /subscriptions/$sid" }
-        else { Write-Warn2 "Could not grant Architecture Map identity Reader on $sid"; $permIssues += "az role assignment create --assignee $ZureMapClientId --role `"Reader`" --scope `"/subscriptions/$sid`"" }
+        else { $why = (("$zr" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)); Write-Warn2 "Could not grant Architecture Map identity Reader on ${sid}: $why"; $permIssues += "az role assignment create --assignee $ZureMapClientId --role `"Reader`" --scope `"/subscriptions/$sid`"   # why: $why" }
     }
 }
 # Tenant-wide read roles (best-effort — require elevated rights such as Owner / User
@@ -1397,7 +1397,7 @@ $tenantMgScope = "/providers/Microsoft.Management/managementGroups/$EntraTenantI
 foreach ($role in @("Reader","Cost Management Reader","Management Group Reader")) {
     $rr = az role assignment create --assignee $principalId --role $role --scope $tenantMgScope --output none 2>&1
     if ($LASTEXITCODE -eq 0 -or "$rr" -match "already exists|RoleAssignmentExists") { Write-Ok "$role on Tenant Root MG" }
-    else { Write-Warn2 ("Could not assign $role at tenant root: " + (("$rr" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1))); $permIssues += "az role assignment create --assignee $principalId --role `"$role`" --scope `"$tenantMgScope`"" }
+    else { $why = (("$rr" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)); Write-Warn2 "Could not assign $role at tenant root: $why"; $permIssues += "az role assignment create --assignee $principalId --role `"$role`" --scope `"$tenantMgScope`"   # why: $why" }
 }
 # Reservations Reader is assignable ONLY at /providers/Microsoft.Capacity (its assignableScopes is
 # exactly ["/providers/Microsoft.Capacity"]) — NOT at a management group or root. Assigning it in the
@@ -1405,7 +1405,7 @@ foreach ($role in @("Reader","Cost Management Reader","Management Group Reader")
 $resvRoleId = "582fc458-8989-419f-a480-75249bc5db7e"   # built-in "Reservations Reader"
 $rv = az role assignment create --assignee $principalId --role $resvRoleId --scope "/providers/Microsoft.Capacity" --output none 2>&1
 if ($LASTEXITCODE -eq 0 -or "$rv" -match "already exists|RoleAssignmentExists") { Write-Ok "Reservations Reader on /providers/Microsoft.Capacity" }
-else { Write-Warn2 ("Could not assign Reservations Reader: " + (("$rv" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1))); $permIssues += "az role assignment create --assignee $principalId --role `"$resvRoleId`" --scope `"/providers/Microsoft.Capacity`"" }
+else { $why = (("$rv" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)); Write-Warn2 "Could not assign Reservations Reader: $why"; $permIssues += "az role assignment create --assignee $principalId --role `"$resvRoleId`" --scope `"/providers/Microsoft.Capacity`"   # why: $why" }
 # ── Microsoft Graph application permissions on the MI ─────────────────────────-
 Write-Step "Step 10: Microsoft Graph permissions (Entra ID features)"
 $graphSpId = "00000003-0000-0000-c000-000000000000"
@@ -1445,8 +1445,11 @@ if ([string]::IsNullOrWhiteSpace($graphSpObjId)) {
         }
         Remove-Item $bodyFile -ErrorAction SilentlyContinue
         if (-not $granted) {
-            Write-Warn2 ("$($perm.Name) - could not grant: " + (("$res" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)))
-            $permIssues += "(Graph) appRoleAssignment $($perm.Name) [$($perm.Id)] -> MI SP $principalId"
+            $why = (("$res" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1))
+            Write-Warn2 "$($perm.Name) - could not grant: $why"
+            # Runnable fallback for the admin grants file: the JSON body is in SINGLE quotes so it is
+            # passed literally (avoids the PowerShell quote-mangling that breaks an inline body).
+            $permIssues += "az rest --method POST --uri `"https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments`" --headers `"Content-Type=application/json`" --body '{`"principalId`":`"$principalId`",`"resourceId`":`"$graphSpObjId`",`"appRoleId`":`"$($perm.Id)`"}'   # $($perm.Name) -- why: $why"
         }
     }
 }
