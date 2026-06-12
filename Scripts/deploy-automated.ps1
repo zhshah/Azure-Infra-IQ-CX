@@ -1394,11 +1394,18 @@ if ($deployZureMap -and $useZureMapSp) {
 #   Reservations Reader  -> Reserved Instance inventory & RI recommendations.
 #   Management Group Reader -> management-group hierarchy + cross-subscription enumeration.
 $tenantMgScope = "/providers/Microsoft.Management/managementGroups/$EntraTenantId"
-foreach ($role in @("Reader","Cost Management Reader","Reservations Reader","Management Group Reader")) {
+foreach ($role in @("Reader","Cost Management Reader","Management Group Reader")) {
     $rr = az role assignment create --assignee $principalId --role $role --scope $tenantMgScope --output none 2>&1
     if ($LASTEXITCODE -eq 0 -or "$rr" -match "already exists|RoleAssignmentExists") { Write-Ok "$role on Tenant Root MG" }
-    else { Write-Warn2 "Could not assign $role at tenant root (needs elevated rights)"; $permIssues += "az role assignment create --assignee $principalId --role `"$role`" --scope `"$tenantMgScope`"" }
+    else { Write-Warn2 ("Could not assign $role at tenant root: " + (("$rr" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1))); $permIssues += "az role assignment create --assignee $principalId --role `"$role`" --scope `"$tenantMgScope`"" }
 }
+# Reservations Reader is assignable ONLY at /providers/Microsoft.Capacity (its assignableScopes is
+# exactly ["/providers/Microsoft.Capacity"]) — NOT at a management group or root. Assigning it in the
+# loop above fails with "role doesn't exist". Assign it at the correct scope by role-definition ID.
+$resvRoleId = "582fc458-8989-419f-a480-75249bc5db7e"   # built-in "Reservations Reader"
+$rv = az role assignment create --assignee $principalId --role $resvRoleId --scope "/providers/Microsoft.Capacity" --output none 2>&1
+if ($LASTEXITCODE -eq 0 -or "$rv" -match "already exists|RoleAssignmentExists") { Write-Ok "Reservations Reader on /providers/Microsoft.Capacity" }
+else { Write-Warn2 ("Could not assign Reservations Reader: " + (("$rv" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1))); $permIssues += "az role assignment create --assignee $principalId --role `"$resvRoleId`" --scope `"/providers/Microsoft.Capacity`"" }
 # ── Microsoft Graph application permissions on the MI ─────────────────────────-
 Write-Step "Step 10: Microsoft Graph permissions (Entra ID features)"
 $graphSpId = "00000003-0000-0000-c000-000000000000"
@@ -1416,23 +1423,30 @@ if ([string]::IsNullOrWhiteSpace($graphSpObjId)) {
     Write-Warn2 "Microsoft Graph SP not found — skipping Graph perms."
 } else {
     foreach ($perm in $graphPerms) {
-        $body = "{`"principalId`":`"$principalId`",`"resourceId`":`"$graphSpObjId`",`"appRoleId`":`"$($perm.Id)`"}"
+        # Pass the JSON body via a temp FILE (--body "@file"). Inline `--body "{...}"` on Windows
+        # PowerShell mangles the quotes, so Graph rejects it with BadRequest "Unable to read JSON
+        # request payload" — which previously masqueraded as a permissions failure. A file body is
+        # read verbatim and works on every shell.
+        $bodyObj  = @{ principalId = $principalId; resourceId = $graphSpObjId; appRoleId = $perm.Id }
+        $bodyFile = Join-Path ([IO.Path]::GetTempPath()) ("graphperm_$($perm.Id).json")
+        ($bodyObj | ConvertTo-Json -Compress) | Out-File -Encoding ascii -FilePath $bodyFile
         # Retry to absorb Entra eventual-consistency right after the MI is created, so a
         # Global Admin grants all permissions in a single run.
         $granted = $false
         for ($attempt = 1; $attempt -le 3; $attempt++) {
             $res = az rest --method POST --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments" `
-                --headers "Content-Type=application/json" --body $body 2>&1
+                --headers "Content-Type=application/json" --body "@$bodyFile" 2>&1
             if ($LASTEXITCODE -eq 0)            { Write-Ok "$($perm.Name) - assigned"; $granted = $true; break }
             if ("$res" -match "already exists")  { Write-Ok "$($perm.Name) - already assigned"; $granted = $true; break }
-            if ("$res" -match "ResourceNotFound|does not exist|Request_ResourceNotFound|InvalidParameter|BadRequest" -and $attempt -lt 3) {
+            if ("$res" -match "ResourceNotFound|does not exist|Request_ResourceNotFound" -and $attempt -lt 3) {
                 Start-Sleep -Seconds 10; continue
             }
             break
         }
+        Remove-Item $bodyFile -ErrorAction SilentlyContinue
         if (-not $granted) {
-            Write-Warn2 "$($perm.Name) - could not grant (needs Privileged Role Administrator / Global Admin, or still propagating)"
-            $permIssues += "az rest --method POST --uri https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments --headers Content-Type=application/json --body '$body'"
+            Write-Warn2 ("$($perm.Name) - could not grant: " + (("$res" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)))
+            $permIssues += "(Graph) appRoleAssignment $($perm.Name) [$($perm.Id)] -> MI SP $principalId"
         }
     }
 }
