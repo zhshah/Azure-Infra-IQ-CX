@@ -1114,8 +1114,13 @@ if ($DeployRedis) {
     $redisExists = az redisenterprise show --cluster-name $RedisName --resource-group $ResourceGroupName 2>$null
     if (-not $redisExists) {
         Write-Info "Creating Azure Managed Redis (this can take ~5-10 minutes)..."
+        # --public-network-access is REQUIRED as of redisEnterprise API 2025-07-01 (CLI >= 2.86).
+        #   Created Enabled here; in Private mode Step "Private Endpoints" flips it to Disabled
+        #   (properties.publicNetworkAccess) after the PE + private DNS are wired — same pattern
+        #   as OpenAI/SQL. --access-keys-auth Enabled keeps key-based auth (the app connects with
+        #   the primary key via REDIS_URL); the CLI default is changing to Disabled, so pin it.
         $redisErr = az redisenterprise create --cluster-name $RedisName --resource-group $ResourceGroupName --location $Location `
-            --sku $RedisSku --output none 2>&1
+            --sku $RedisSku --public-network-access Enabled --access-keys-auth Enabled --output none 2>&1
         if ($LASTEXITCODE -ne 0) {
             Write-Warn2 "Could not create Azure Managed Redis - the app runs fine WITHOUT it (no caching). Continuing."
             Write-Warn2 ("Redis error: " + (("$redisErr" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)))
