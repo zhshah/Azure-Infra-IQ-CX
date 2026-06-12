@@ -1591,6 +1591,41 @@ async def _build_dashboard(
     # Use pre-cost-floor resources so RGs with only cheap resources still appear in the dropdown
     rg_list = sorted({r["resource_group"] for r in resources if r.get("resource_group")})
 
+    # ── Resources-first partial render (additive, best-effort) ───────────────
+    # The full CORE dashboard is now computed — resources, cost, scores, KPIs,
+    # charts, orphans, savings, anomalies and spend trends. Only the AI narrative
+    # (an LLM call that can be slow or even hang) and the CPU-only strategic panels
+    # remain. Stream this complete-core snapshot NOW so the portal paints the whole
+    # home view immediately instead of blocking on AI; the final "done" event below
+    # re-sends the same data plus the AI narrative + strategic panels. Purely
+    # additive and best-effort: any failure here is swallowed and never affects the
+    # full DashboardData returned at the end of this function.
+    if progress_cb is not None:
+        try:
+            _core_partial = DashboardData(
+                kpi=kpi, score_distribution=score_distribution,
+                resource_type_summary=resource_type_summary,
+                resources=resource_metrics_list, orphans=orphans_panel,
+                savings_recommendations=savings_recs,
+                last_refreshed=datetime.now(tz=timezone.utc).isoformat(),
+                ai_enabled=ai_enabled, ai_provider=active_provider,
+                ai_narrative=None,
+                demo_mode=False,
+                total_carbon_kg=round(total_carbon, 1),
+                tag_compliance_pct=tag_pct, total_untagged=untagged,
+                cost_anomalies=cost_anomalies, rightsize_opportunities=rightsize_opps,
+                subscriptions=subscription_list, resource_groups=rg_list,
+                active_resource_group=resource_group_filter or "",
+                active_subscription_id=sub_ids[0] if scope_sub and len(sub_ids) == 1 else "",
+                scan_scope_active=scope_active,
+                active_reservations=active_reservations,
+                total_daily_cm=total_daily_cm, total_daily_pm=total_daily_pm,
+                cost_data_warning=None,
+            )
+            await progress_cb({"type": "partial", "pct": 95, "data": _core_partial.model_dump()})
+        except Exception as _cpe:
+            logger.debug("Resources-first partial render skipped: %s", _cpe)
+
     # ── AI Narrative summary ────────────────────────────────────────────────
     ai_narrative: Optional[str] = None
     if ai_enabled:
@@ -5511,6 +5546,19 @@ async def cache_status():
         if key.endswith(":ts"):
             if last_ts is None or val > last_ts:
                 last_ts = val
+
+    # After a fresh process start / replica restart the in-memory cache is empty even though a
+    # durable snapshot exists on disk. Rehydrate it (best-effort) so the portal's background
+    # recovery poll sees the last successful scan instead of reporting "no data" — without this an
+    # already-open page can't auto-recover after the server restarts until the user reloads.
+    if last_ts is None:
+        try:
+            if _ensure_dashboard_in_cache() is not None:
+                for key, val in _cache.items():
+                    if key.endswith(":ts") and (last_ts is None or val > last_ts):
+                        last_ts = val
+        except Exception:
+            pass
 
     interval_hours = int(settings_svc.get_value("auto_refresh_interval_hours", 0))
 

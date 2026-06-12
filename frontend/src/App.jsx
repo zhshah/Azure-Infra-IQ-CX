@@ -1456,12 +1456,19 @@ function AppInner() {
     // Watchdog: if the SSE stream stalls and never reports done/error (e.g. a slow
     // live build with no cached data, or the warehouse DB unreachable), clear the
     // spinner after 3 minutes so the UI never shows "Refreshing…" forever.
-    if (loadWatchdog.current) clearTimeout(loadWatchdog.current)
-    loadWatchdog.current = setTimeout(() => {
-      setRefreshing(false)
-      setLoading(false)
-      loadWatchdog.current = null
-    }, 180000)
+    // The watchdog only fires after a genuine STALL — it is re-armed on every
+    // progress/partial event below, so a slow-but-alive scan keeps its overlay
+    // instead of clearing to an empty page after a fixed 3 minutes.
+    let renderedSomething = false
+    const armWatchdog = () => {
+      if (loadWatchdog.current) clearTimeout(loadWatchdog.current)
+      loadWatchdog.current = setTimeout(() => {
+        setRefreshing(false)
+        setLoading(false)
+        loadWatchdog.current = null
+      }, 180000)
+    }
+    armWatchdog()
 
     // Build query params
     const params = new URLSearchParams()
@@ -1472,18 +1479,34 @@ function AppInner() {
 
     // Try SSE stream first
     const cleanup = api.streamDashboard(
-      // onEvent — progress update
+      // onEvent — progress + resources-first partial
       (event) => {
+        // Any event means the scan is still alive → push the stall watchdog out.
+        armWatchdog()
         if (event.type === 'progress') {
           setProgressPct(event.pct ?? 0)
           setProgressMsg(event.message ?? '')
           if (event.step) {
             setProgressSteps(prev => prev.includes(event.step) ? prev : [...prev, event.step])
           }
+        } else if (event.type === 'partial' && event.data) {
+          // Complete-core dashboard arrived before the AI narrative + strategic
+          // panels finished. Render the full home view now; the remaining panels
+          // fill in when the final 'done' event lands.
+          renderedSomething = true
+          setData(event.data)
+          setIsDemoMode(event.data.demo_mode ?? false)
+          setAiProvider(event.data.ai_provider ?? 'none')
+          setSelectedResourceGroup(event.data.active_resource_group ?? '')
+          if (event.data.active_subscription_id) setSelectedSubscription(event.data.active_subscription_id)
+          setLoading(false)     // hide the full-screen overlay — show data immediately
+          setRefreshing(true)   // keep a subtle "finishing analysis…" indicator
+          setProgressPct(event.pct ?? 95)
         }
       },
       // onDone — full dashboard payload
       (dashboardData) => {
+        renderedSomething = true
         setData(dashboardData)
         setIsDemoMode(dashboardData.demo_mode ?? false)
         setAiProvider(dashboardData.ai_provider ?? 'none')
@@ -1497,16 +1520,29 @@ function AppInner() {
         sseCleanup.current = null
         if (loadWatchdog.current) { clearTimeout(loadWatchdog.current); loadWatchdog.current = null }
       },
-      // onError — fall back to regular endpoint
+      // onError — the SSE dropped (slow build, ingress idle-timeout, restart).
+      // The build keeps running server-side and persists a snapshot, so prefer
+      // the saved snapshot over launching ANOTHER full scan, and never blank a
+      // view we already rendered (e.g. the resources-first partial).
       async (err) => {
-        console.warn('SSE failed, falling back to REST:', err.message)
+        console.warn('SSE ended, recovering from snapshot:', err.message)
         try {
-          const result = await api.getDashboard(forceRefresh)
-          setData(result)
-          setIsDemoMode(result.demo_mode ?? false)
-          setAiProvider(result.ai_provider ?? 'none')
+          const cached = await api.getCachedDashboard()
+          if (cached) {
+            renderedSomething = true
+            setData(cached)
+            setIsDemoMode(cached.demo_mode ?? false)
+            setAiProvider(cached.ai_provider ?? 'none')
+          } else if (!renderedSomething) {
+            const result = await api.getDashboard(forceRefresh)
+            setData(result)
+            setIsDemoMode(result.demo_mode ?? false)
+            setAiProvider(result.ai_provider ?? 'none')
+          }
+          // else: keep what's already on screen; the 60s cache poll swaps in the
+          // full snapshot once the background build finishes.
         } catch (fetchErr) {
-          setError(fetchErr.message)
+          if (!renderedSomething) setError(fetchErr.message)
         } finally {
           setLoading(false)
           setRefreshing(false)
