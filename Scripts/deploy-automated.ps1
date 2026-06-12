@@ -1128,14 +1128,35 @@ if ($DeployRedis) {
         }
     }
     if ($DeployRedis) {
-        $redisHost = az redisenterprise show --cluster-name $RedisName --resource-group $ResourceGroupName --query hostName -o tsv 2>$null
-        $redisKey  = az redisenterprise database list-keys --cluster-name $RedisName --database-name default --resource-group $ResourceGroupName --query primaryKey -o tsv 2>$null
+        # Azure Managed Redis (redisenterprise) has exactly ONE database, always named "default",
+        # auto-created by 'az redisenterprise create'. CRITICAL: 'database list-keys' accepts ONLY
+        # --cluster-name / --resource-group -- there is NO --database-name argument (redisenterprise
+        # ext 1.4.0). The old call passed '--database-name default', which made the command fail, so
+        # the key came back empty and the deploy fell back to "host/key not readable". Read host+key
+        # with a short retry in case the default database is still settling right after create.
+        $redisHost = ""; $redisKey = ""; $redisReadErr = ""
+        for ($redisTry = 1; $redisTry -le 8; $redisTry++) {
+            if (-not $redisHost) {
+                $redisHost = az redisenterprise show --cluster-name $RedisName --resource-group $ResourceGroupName --query "hostName" -o tsv 2>$null
+                if ([string]::IsNullOrWhiteSpace($redisHost)) {
+                    $redisHost = az redisenterprise show --cluster-name $RedisName --resource-group $ResourceGroupName --query "properties.hostName" -o tsv 2>$null
+                }
+            }
+            if (-not $redisKey) {
+                $keyOut = az redisenterprise database list-keys --cluster-name $RedisName --resource-group $ResourceGroupName --query "primaryKey" -o tsv 2>&1
+                if ($LASTEXITCODE -eq 0) { $redisKey = ("$keyOut").Trim() } else { $redisReadErr = "$keyOut" }
+            }
+            if ($redisHost -and $redisKey) { break }
+            Start-Sleep -Seconds 10
+        }
         if ($redisHost -and $redisKey) {
             # Azure Managed Redis listens on 10000 (TLS). The app reads REDIS_URL (rediss://).
             $redisUrl  = "rediss://:$redisKey@${redisHost}:10000"
             Write-Ok "Azure Managed Redis ready: $redisHost"
         } else {
-            Write-Warn2 "Azure Managed Redis provisioned but host/key not readable yet - continuing without Redis."
+            Write-Warn2 "Azure Managed Redis host/key not readable after retries - continuing without Redis caching."
+            if ([string]::IsNullOrWhiteSpace($redisHost)) { Write-Warn2 "  hostName empty (cluster '$RedisName' not ready or wrong name)." }
+            if ([string]::IsNullOrWhiteSpace($redisKey))  { Write-Warn2 ("  key read failed: " + (("$redisReadErr" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1))) }
             $DeployRedis = $false
         }
     }
