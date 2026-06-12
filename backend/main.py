@@ -1932,12 +1932,26 @@ async def stream_dashboard(
             # Also populate the unkeyed fallback used by /api/dashboard (legacy)
             _cache["data"] = data
             _cache["cached_at"] = _cache[f"{cache_key}:ts"]
-            # Durable snapshot — persisted to the DB so the portal opens instantly
-            # with last-good data after a restart (stale-while-revalidate).
-            try:
-                persistence_svc.save_dashboard(json.loads(data.model_dump_json()))
-            except Exception as _pe:
-                logger.warning("Could not persist dashboard snapshot: %s", _pe)
+            # Durable snapshot — persisted to the DB (and mirrored to Redis L2) so the
+            # portal opens instantly with last-good data after a restart
+            # (stale-while-revalidate). Skip persisting an EMPTY (0-resource) scan: on a
+            # fresh deploy the first scan can run before the managed identity's Reader
+            # role has finished propagating and read 0 resources — saving that would make
+            # the empty result stick until a manual refresh. Keeping the prior good
+            # snapshot (or none) lets the startup catch-up self-heal once RBAC is ready.
+            if data.resources:
+                try:
+                    _dash_json = json.loads(data.model_dump_json())
+                    persistence_svc.save_dashboard(_dash_json)
+                    if cache_svc.is_enabled():
+                        cache_svc.set_json("dash:latest", _dash_json, ttl_seconds=24 * 3600)
+                except Exception as _pe:
+                    logger.warning("Could not persist dashboard snapshot: %s", _pe)
+            else:
+                logger.warning(
+                    "Skipping dashboard snapshot persist: scan returned 0 resources "
+                    "(managed-identity Reader role may still be propagating)"
+                )
             await progress_q.put({"type": "done", "pct": 100, "data": data.model_dump()})
         except Exception as exc:
             logger.exception("Dashboard build failed")
@@ -2916,6 +2930,66 @@ async def _cost_snapshot_loop() -> None:
             await _cost_snapshot_run()
         except Exception as exc:
             logger.error("Cost snapshot loop error: %s", exc)
+
+
+async def _dashboard_snapshot_catchup() -> None:
+    """Startup self-heal for the durable dashboard (resource) snapshot.
+
+    A fresh deployment gets its own managed identity, and the very first dashboard
+    scan can run before that identity's Reader role has propagated — so it reads 0
+    resources. Unlike the cost / warehouse snapshots (which already self-heal), the
+    resource scan had no catch-up, so an empty snapshot would stick and the portal
+    would show "0 resources" until a manual refresh or the next scheduled refresh.
+
+    This runs once on startup: if the persisted dashboard snapshot is missing or has
+    0 resources, it re-scans with backoff until resources land, then populates the
+    in-memory cache + durable snapshot (DB + Redis L2). It is a no-op on a healthy
+    restart (a non-empty snapshot already exists) and exits early if another replica
+    or a user refresh populates the snapshot first.
+    """
+    await asyncio.sleep(35)  # let the app initialise and give RBAC a moment to settle
+    try:
+        snap = persistence_svc.load_latest_dashboard()
+        if snap and (snap.get("resources") or []):
+            return  # already have a good snapshot — nothing to heal
+
+        for _attempt in range(1, 7):
+            # Re-check each round so we stop as soon as another worker / a user
+            # refresh has populated the snapshot.
+            snap = persistence_svc.load_latest_dashboard()
+            if snap and (snap.get("resources") or []):
+                logger.info("Dashboard snapshot catch-up: snapshot already populated — done")
+                return
+
+            logger.info("Dashboard snapshot: missing/empty on startup — scan attempt %d", _attempt)
+            try:
+                data = await _build_dashboard(True, None, skip_metrics=True)
+                if data.resources:
+                    _ts = datetime.now(tz=timezone.utc).timestamp()
+                    _cache["data:*"]    = data
+                    _cache["data:*:ts"] = _ts
+                    _cache["data"]      = data
+                    _cache["cached_at"] = _ts
+                    try:
+                        _dash_json = json.loads(data.model_dump_json())
+                        persistence_svc.save_dashboard(_dash_json)
+                        if cache_svc.is_enabled():
+                            cache_svc.set_json("dash:latest", _dash_json, ttl_seconds=24 * 3600)
+                    except Exception as _pe:
+                        logger.warning("Dashboard snapshot catch-up persist failed: %s", _pe)
+                    logger.info(
+                        "Dashboard snapshot: startup scan populated %d resources", len(data.resources)
+                    )
+                    return
+                logger.warning(
+                    "Dashboard snapshot: scan returned 0 resources (attempt %d) — "
+                    "managed-identity Reader role may still be propagating", _attempt
+                )
+            except Exception as _se:
+                logger.warning("Dashboard snapshot: startup scan attempt %d failed: %s", _attempt, _se)
+            await asyncio.sleep(min(120 * _attempt, 600))
+    except Exception as exc:
+        logger.warning("Dashboard snapshot startup catch-up failed: %s", exc)
 
 
 async def _finops_warehouse_scheduler() -> None:
@@ -5338,6 +5412,17 @@ async def start_auto_refresh_scheduler() -> None:
         logger.info("Startup: cost-bundle snapshot loop scheduled")
     except Exception as _cse:
         logger.warning("Startup: could not start cost snapshot loop: %s", _cse)
+
+    # ── Dashboard resource-scan self-heal (fresh-deploy RBAC race) ────────────
+    # If the durable dashboard snapshot is missing or empty (a first scan that ran
+    # before the managed identity's Reader role propagated persisted 0 resources),
+    # re-scan with backoff until resources land so the portal self-populates instead
+    # of showing "0 resources" until a manual refresh. No-op on a healthy restart.
+    try:
+        asyncio.create_task(_dashboard_snapshot_catchup())
+        logger.info("Startup: dashboard snapshot catch-up scheduled")
+    except Exception as _dse:
+        logger.warning("Startup: could not start dashboard snapshot catch-up: %s", _dse)
 
     # ── Start FinOps warm-cache loop ──────────────────────────────────────────
     # Pre-fetches forecast, savings, commitments into memory every 30 minutes
