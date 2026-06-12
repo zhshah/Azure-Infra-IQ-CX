@@ -1700,6 +1700,14 @@ function AppInner() {
     return p ? new Set(p.resource_ids) : null
   }, [activeProjectId, projects])
 
+  // The scope selector value is either a single subscription id or, when a management group is
+  // selected, a comma-separated list of the subscription ids beneath it. Treat it as a set so
+  // every client-side filter scopes to all subscriptions in the selection.
+  const subScopeSet = useMemo(() => {
+    const ids = String(selectedSubscription || '').split(',').map(s => s.trim()).filter(Boolean)
+    return ids.length ? new Set(ids) : null
+  }, [selectedSubscription])
+
   const filteredResources = useMemo(() => {
     if (!data?.resources) return []
     let rs = data.resources
@@ -1707,7 +1715,7 @@ function AppInner() {
     if (activeProjectResourceSet) {
       rs = rs.filter(r => activeProjectResourceSet.has((r.resource_id || r.id || '').toLowerCase()))
     }
-    if (selectedSubscription) rs = rs.filter(r => r.subscription_id === selectedSubscription)
+    if (subScopeSet) rs = rs.filter(r => subScopeSet.has(r.subscription_id))
     if (selectedResourceGroup) rs = rs.filter(r => r.resource_group?.toLowerCase() === selectedResourceGroup.toLowerCase())
     if (selectedLocation)     rs = rs.filter(r => r.location === selectedLocation)
     if (selectedResourceType) rs = rs.filter(r => r.resource_type === selectedResourceType)
@@ -1720,7 +1728,7 @@ function AppInner() {
       })
     }
     return rs
-  }, [data?.resources, activeProjectResourceSet, selectedSubscription, selectedResourceGroup, selectedLocation, selectedResourceType, selectedTagKey, selectedTagValue])
+  }, [data?.resources, activeProjectResourceSet, subScopeSet, selectedResourceGroup, selectedLocation, selectedResourceType, selectedTagKey, selectedTagValue])
 
   const isFiltered = !!(activeProjectId || selectedSubscription || selectedResourceGroup || selectedLocation || selectedResourceType || selectedTagKey)
 
@@ -1767,33 +1775,33 @@ function AppInner() {
     if (!data?.orphans) return []
     if (!isFiltered) return data.orphans
     return data.orphans.filter(o => {
-      if (selectedSubscription && o.subscription_id && o.subscription_id !== selectedSubscription) return false
+      if (subScopeSet && o.subscription_id && !subScopeSet.has(o.subscription_id)) return false
       if (selectedResourceGroup && o.resource_group && o.resource_group.toLowerCase() !== selectedResourceGroup.toLowerCase()) return false
       return true
     })
-  }, [data?.orphans, isFiltered, selectedSubscription, selectedResourceGroup])
+  }, [data?.orphans, isFiltered, subScopeSet, selectedResourceGroup])
 
   // Savings recommendations filtered
   const filteredSavingsRecs = useMemo(() => {
     if (!data?.savings_recommendations) return []
     if (!isFiltered) return data.savings_recommendations
     return data.savings_recommendations.filter(r => {
-      if (selectedSubscription && r.subscription_id && r.subscription_id !== selectedSubscription) return false
+      if (subScopeSet && r.subscription_id && !subScopeSet.has(r.subscription_id)) return false
       if (selectedResourceGroup && r.resource_group && r.resource_group.toLowerCase() !== selectedResourceGroup.toLowerCase()) return false
       return true
     })
-  }, [data?.savings_recommendations, isFiltered, selectedSubscription, selectedResourceGroup])
+  }, [data?.savings_recommendations, isFiltered, subScopeSet, selectedResourceGroup])
 
   // Rightsize opportunities filtered
   const filteredRightsize = useMemo(() => {
     if (!data?.rightsize_opportunities) return []
     if (!isFiltered) return data.rightsize_opportunities
     return data.rightsize_opportunities.filter(r => {
-      if (selectedSubscription && r.subscription_id && r.subscription_id !== selectedSubscription) return false
+      if (subScopeSet && r.subscription_id && !subScopeSet.has(r.subscription_id)) return false
       if (selectedResourceGroup && r.resource_group && r.resource_group.toLowerCase() !== selectedResourceGroup.toLowerCase()) return false
       return true
     })
-  }, [data?.rightsize_opportunities, isFiltered, selectedSubscription, selectedResourceGroup])
+  }, [data?.rightsize_opportunities, isFiltered, subScopeSet, selectedResourceGroup])
 
   // ── Subscription/filter-scoped data for the PDF export ───────────────────────
   // The "Export PDF" button must mirror EXACTLY what the home page shows: when a
@@ -1831,8 +1839,8 @@ function AppInner() {
     }
 
     const subId = selectedSubscription || ''
-    const bySub = (arr) => (subId && Array.isArray(arr))
-      ? arr.filter(x => !x.subscription_id || x.subscription_id === subId)
+    const bySub = (arr) => (subScopeSet && Array.isArray(arr))
+      ? arr.filter(x => !x.subscription_id || subScopeSet.has(x.subscription_id))
       : arr
 
     return {
@@ -1854,7 +1862,7 @@ function AppInner() {
       active_resource_group:       selectedResourceGroup || '',
     }
   }, [data, isFiltered, filteredResources, filteredOrphans, filteredSavingsRecs, filteredRightsize,
-      filteredScoreDist, filteredTypeSummary, selectedSubscription, selectedResourceGroup])
+      filteredScoreDist, filteredTypeSummary, subScopeSet, selectedSubscription, selectedResourceGroup])
 
   // Compute sidebar badge counts from dashboard data
   const sidebarBadges = useMemo(() => {
