@@ -2760,24 +2760,35 @@ async def _metrics_snapshot_run() -> dict:
         # Monitor calls.
         try:
             data = await _build_dashboard(False, None, resource_group_filter=None, skip_metrics=True)
-            _now_ts = datetime.now(tz=timezone.utc).timestamp()
-            _cache["data:*"] = data
-            _cache["data:*:ts"] = _now_ts
-            _cache["data"] = data
-            _cache["cached_at"] = _now_ts
-            _dash_json = json.loads(data.model_dump_json())
-            await loop.run_in_executor(
-                _pool, partial(persistence_svc.save_dashboard, _dash_json)
-            )
-            # Mirror the rebuilt dashboard into Redis so a restarted process or a
-            # second replica serves a warm Waste-Quadrant-populated dashboard
-            # instantly instead of rebuilding under throttle.
-            try:
-                _disp_ttl = float(settings_svc.get_value("metrics_display_ttl_hours", 24.0))
-                cache_svc.set_json("dash:latest", _dash_json, ttl_seconds=int(_disp_ttl * 3600))
-            except Exception:
-                pass
-            logger.info("Metrics snapshot: dashboard snapshot rebuilt with fresh utilisation")
+            # Don't let an empty rebuild overwrite a good snapshot or persist an empty one:
+            # on a fresh deploy the managed identity's Reader role may not have propagated
+            # yet, so this scan can return 0 resources. Persisting that would defeat the
+            # dashboard self-heal (the portal would serve an empty snapshot). Only cache /
+            # persist when the rebuild actually returned resources.
+            if data.resources:
+                _now_ts = datetime.now(tz=timezone.utc).timestamp()
+                _cache["data:*"] = data
+                _cache["data:*:ts"] = _now_ts
+                _cache["data"] = data
+                _cache["cached_at"] = _now_ts
+                _dash_json = json.loads(data.model_dump_json())
+                await loop.run_in_executor(
+                    _pool, partial(persistence_svc.save_dashboard, _dash_json)
+                )
+                # Mirror the rebuilt dashboard into Redis so a restarted process or a
+                # second replica serves a warm Waste-Quadrant-populated dashboard
+                # instantly instead of rebuilding under throttle.
+                try:
+                    _disp_ttl = float(settings_svc.get_value("metrics_display_ttl_hours", 24.0))
+                    cache_svc.set_json("dash:latest", _dash_json, ttl_seconds=int(_disp_ttl * 3600))
+                except Exception:
+                    pass
+                logger.info("Metrics snapshot: dashboard snapshot rebuilt with fresh utilisation")
+            else:
+                logger.warning(
+                    "Metrics snapshot: dashboard rebuild returned 0 resources — not persisting "
+                    "(managed-identity Reader role may still be propagating)"
+                )
         except Exception as _de:
             logger.warning("Metrics snapshot: dashboard rebuild failed: %s", _de)
 
