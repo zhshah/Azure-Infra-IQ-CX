@@ -161,14 +161,19 @@ export default function FilterBar({
 
   const subOptions = [
     { value: '', label: `All ${subscriptions.length} subscriptions`, description: 'Show every accessible subscription' },
-    ...mgGroups
-      .map(mg => ({
-        value: (mg.subscription_ids || []).join(','),
+    ...mgGroups.map(mg => {
+      const ids = mg.subscription_ids || []
+      return {
+        value: ids.length ? ids.join(',') : `mg:${mg.id}`,
         label: mg.name,
         group: 'Management Groups',
-        description: `${(mg.subscription_ids || []).length} subscription${(mg.subscription_ids || []).length === 1 ? '' : 's'}`,
-      }))
-      .filter(o => o.value),
+        level: mg.level || 0,
+        disabled: ids.length === 0,
+        description: ids.length
+          ? `${ids.length} subscription${ids.length === 1 ? '' : 's'}`
+          : 'No accessible subscriptions',
+      }
+    }),
     ...subscriptions.map(s => ({
       value: s.subscription_id,
       label: s.subscription_name || s.subscription_id.slice(0, 8) + '\u2026',

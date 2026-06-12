@@ -116,7 +116,7 @@ export default function SearchableSelect({
           break
         case 'Enter':
           e.preventDefault()
-          if (filtered[highlightIdx]) {
+          if (filtered[highlightIdx] && !filtered[highlightIdx].disabled) {
             onChange(filtered[highlightIdx].value)
             setOpen(false)
             setSearch('')
@@ -318,20 +318,21 @@ export default function SearchableSelect({
                 )}
                 <div
                   data-option
-                  onClick={() => select(o.value)}
+                  onClick={() => !o.disabled && select(o.value)}
                   onMouseEnter={() => setHighlightIdx(idx)}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
                     gap: 8,
-                    padding: o.group ? '8px 12px 8px 22px' : '8px 12px',
-                    cursor: 'pointer',
-                    background: isHighlighted
+                    padding: `8px 12px 8px ${(o.group ? 22 : 12) + (o.level ? o.level * 16 : 0)}px`,
+                    cursor: o.disabled ? 'default' : 'pointer',
+                    background: isHighlighted && !o.disabled
                       ? 'rgba(0, 120, 212, 0.1)'
                       : isSelected
                         ? 'rgba(0, 120, 212, 0.06)'
                         : 'transparent',
-                    color: isSelected ? '#e2e8f0' : '#94a3b8',
+                    color: o.disabled ? '#5b6472' : (isSelected ? '#e2e8f0' : '#94a3b8'),
+                    opacity: o.disabled ? 0.75 : 1,
                     fontSize: 13,
                     transition: 'background 0.1s',
                     borderLeft: isSelected ? '2px solid #0078d4' : '2px solid transparent',

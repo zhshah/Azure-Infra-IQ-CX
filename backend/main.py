@@ -3415,8 +3415,17 @@ async def list_management_groups():
             accessible = set(all_ids)
             flat = []
 
-            def walk(node):
+            def walk(node, depth):
                 props = node.get("properties") or node
+                # Append this MG first (pre-order) so a parent lists above its children; `level`
+                # (0 for the tenant root's direct children) drives the UI indentation.
+                entry = {
+                    "id": node.get("name"),
+                    "name": props.get("displayName") or node.get("name"),
+                    "level": max(depth - 1, 0),
+                    "subscription_ids": [],
+                }
+                flat.append(entry)
                 descendant = set()
                 for ch in (props.get("children") or []):
                     ctype = (ch.get("type") or "").lower()
@@ -3425,18 +3434,17 @@ async def list_management_groups():
                         if sid:
                             descendant.add(sid)
                     elif "managementgroup" in ctype:
-                        descendant |= walk(ch)
-                visible = sorted([s for s in descendant if s in accessible]) if accessible else sorted(descendant)
-                flat.append({
-                    "id": node.get("name"),
-                    "name": props.get("displayName") or node.get("name"),
-                    "subscription_ids": visible,
-                })
+                        descendant |= walk(ch, depth + 1)
+                entry["subscription_ids"] = (
+                    sorted([s for s in descendant if s in accessible]) if accessible else sorted(descendant)
+                )
                 return descendant
 
-            walk(tree)
-            # Drop the tenant root (== "All") and any MG with no accessible subscriptions.
-            return [m for m in flat if m["id"] != root_id and m["subscription_ids"]]
+            walk(tree, 0)
+            # Drop only the synthetic tenant root (represented by "All subscriptions"). Keep every
+            # other MG so the full hierarchy is visible; MGs with no subscriptions this identity can
+            # read are returned with an empty list and shown as non-selectable in the UI.
+            return [m for m in flat if m["id"] != root_id]
         except Exception as exc:
             logger.info("Management-group hierarchy unavailable (needs Management Group Reader): %s", exc)
             return []
