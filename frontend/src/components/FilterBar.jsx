@@ -146,11 +146,14 @@ export default function FilterBar({
     return { value: t, label, count: typeCounts[t] || 0 }
   })
 
-  const subOptions = subscriptions.map(s => ({
-    value: s.subscription_id,
-    label: s.subscription_name || s.subscription_id.slice(0, 8) + '…',
-    description: `$${s.cost_current?.toFixed(0)}/mo · ${s.resource_count} resources`,
-  }))
+  const subOptions = [
+    { value: '', label: `All ${subscriptions.length} subscriptions`, description: 'Show every accessible subscription' },
+    ...subscriptions.map(s => ({
+      value: s.subscription_id,
+      label: s.subscription_name || s.subscription_id.slice(0, 8) + '…',
+      description: `$${s.cost_current?.toFixed(0)}/mo · ${s.resource_count} resources`,
+    })),
+  ]
 
   const tagKeyOptions = tagKeys.map(k => ({ value: k, label: k }))
   const tagValueOptions = tagValues.map(v => ({ value: v, label: v }))

@@ -30,7 +30,7 @@ const NAV_SECTIONS = [
   { heading: 'AI Assessments', items: [
     { key: 'waf',              label: 'Well-Architected',        icon: '/icons/management + governance/00003-icon-service-Advisor.svg' },
     { key: 'caf',              label: 'Cloud Adoption (CAF)',    icon: '/icons/migrate/10281-icon-service-Azure-Migrate.svg' },
-    { key: 'sql-modernization', label: 'SQL Modernization',      icon: '/icons/databases/10121-icon-service-SQL-Database.svg' },
+    { key: 'sql-modernization', label: 'SQL Modernization',      icon: '/icons/databases/10130-icon-service-SQL-Database.svg' },
     { key: 'appservice',       label: 'App Service',             icon: '/icons/compute/10035-icon-service-App-Services.svg' },
     { key: 'vm-performance',    label: 'VM Performance',          icon: '/icons/compute/10021-icon-service-Virtual-Machine.svg' },
     { key: 'entra',            label: 'Identity & Access',  icon: '/icons/security/10241-icon-service-Microsoft-Defender-for-Cloud.svg' },
@@ -67,7 +67,7 @@ const NAV_SECTIONS = [
     { key: 'finops-savings',  label: 'Savings Optimizer',   icon: '/icons/migrate/10281-icon-service-Azure-Migrate.svg' },
     { key: 'finops-tags',     label: 'Tag Cost Analytics',  icon: '/icons/general/10001-icon-service-All-Resources.svg' },
     { key: 'finops-alerts',   label: 'FinOps Alerts',       icon: '/icons/security/10241-icon-service-Microsoft-Defender-for-Cloud.svg' },
-    { key: 'finops-warehouse', label: '📦 Cost Warehouse',   icon: '/icons/databases/10121-icon-service-SQL-Database.svg' },
+    { key: 'finops-warehouse', label: 'Cost Warehouse',   icon: '/icons/databases/00036-icon-service-SQL-Data-Warehouses.svg' },
     { key: 'finops-compliance', label: '✅ FinOps Compliance', icon: '/icons/management + governance/00003-icon-service-Advisor.svg' },
   ]},
   // Keep 'About' LAST so it always sits at the bottom of the left-hand menu.

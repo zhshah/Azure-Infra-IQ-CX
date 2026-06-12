@@ -76,6 +76,22 @@ zm_auth_loop() {
       fi
       az extension add -n resource-graph -y --only-show-errors >/dev/null 2>&1 || true
       echo "[start] Architecture Map: az logged in (scope: $(az account show --query name -o tsv 2>/dev/null))"
+      # `az login` caches the subscription LIST at login time. In managed-identity mode an early
+      # login (before the tenant-root Reader RBAC propagates) only enumerates the deployment sub,
+      # which made the map's "Select all" show a single subscription. Keep re-logging in the
+      # background as RBAC settles so the enumerated list grows to EVERY readable subscription.
+      # (SP credentials are stable, so only refresh in MI mode.)
+      if [ -z "$ZUREMAP_CLIENT_SECRET" ]; then
+        (
+          r=0
+          while [ "$r" -lt 8 ]; do
+            sleep 60
+            az login --identity --output none 2>/dev/null || true
+            [ -n "$AZURE_SUBSCRIPTION_ID" ] && az account set --subscription "$AZURE_SUBSCRIPTION_ID" 2>/dev/null || true
+            r=$((r + 1))
+          done
+        ) &
+      fi
       return 0
     fi
     i=$((i + 1))

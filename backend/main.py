@@ -6376,7 +6376,12 @@ def _ensure_dashboard_in_cache() -> Optional[DashboardData]:
     endpoints return 404 "No resource data" after a fresh process start.
     """
     data: Optional[DashboardData] = _cache.get("data:*") or _cache.get("data")
-    if data:
+    # Only trust the in-memory dashboard when it actually carries resources. A snapshot-first
+    # instant-load shell (or a scoped/partial build) can be cached with KPIs but an EMPTY
+    # resources array; returning it here makes every resource-dependent endpoint (AI analysis,
+    # assessments, health score) 404 "No resource data" even though the durable snapshot holds the
+    # full resource list. When resources are missing, fall through and rehydrate from the snapshot.
+    if data and (getattr(data, "resources", None) or []):
         return data
     try:
         # L2 (Redis) cache-aside in front of the durable SQL snapshot: a cold
@@ -6393,7 +6398,7 @@ def _ensure_dashboard_in_cache() -> Optional[DashboardData]:
                 except Exception:
                     pass
         if not snap:
-            return None
+            return data
         restored = DashboardData(**{k: v for k, v in snap.items() if k in DashboardData.model_fields})
         # The dashboard snapshot may have been captured before cost data was
         # available (cost is fetched on a separate, throttle-tolerant cadence).
@@ -6439,7 +6444,7 @@ def _ensure_dashboard_in_cache() -> Optional[DashboardData]:
         return restored
     except Exception as e:
         logger.warning("Could not rehydrate dashboard from snapshot: %s", e)
-        return None
+        return data
 
 
 def _get_resources_list() -> List[dict]:
