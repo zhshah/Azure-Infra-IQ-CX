@@ -1502,7 +1502,7 @@ Write-Step "Deployment complete"
 Write-Host "  App URL:        $appUrl" -ForegroundColor Green
 Write-Host "  Resource group: $ResourceGroupName ($Location)" -ForegroundColor Gray
 Write-Host "  Image:          $fullImage" -ForegroundColor Gray
-Write-Host "  SKUs:           ACR Premium | Container App ${Cpu}/${Memory} | SQL $SqlServiceObjective | Managed Redis $RedisSku | OpenAI S0 (PAYG)" -ForegroundColor Gray
+Write-Host "  SKUs:           ACR Premium | Container App ${Cpu}/${Memory} | SQL $SqlServiceObjective$(if($redisUrl){" | Managed Redis $RedisSku"}else{" | Redis: skipped"}) | OpenAI S0 (PAYG)" -ForegroundColor Gray
 if ($profileDeployed) { Write-Host "  ACA capacity:   $($profileDeployed.Label) [$effectiveMode mode]" -ForegroundColor Gray }
 Write-Host "  OpenAI:         $OpenAIResourceName / $OpenAIDeploymentName" -ForegroundColor Gray
 if ($DeploySql)  { Write-Host "  Azure SQL:      $SqlServerName/$SqlDatabaseName (admin: $SqlAdminUser)" -ForegroundColor Gray }
