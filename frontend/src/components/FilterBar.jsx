@@ -83,6 +83,19 @@ export default function FilterBar({
 }) {
   const [expanded, setExpanded] = useState(false)
   const [tagValues, setTagValues] = useState([])
+  const [mgGroups, setMgGroups] = useState([])
+
+  // Fetch the management-group hierarchy so the scope picker can show MGs (selecting one scopes
+  // to every subscription under it). Degrades silently to a flat subscription list if MG data is
+  // unavailable (e.g. no Management Group Reader).
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/management-groups')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (!cancelled && d && Array.isArray(d.management_groups)) setMgGroups(d.management_groups) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   // Fetch tag values when tag key changes
   useEffect(() => {
@@ -148,9 +161,18 @@ export default function FilterBar({
 
   const subOptions = [
     { value: '', label: `All ${subscriptions.length} subscriptions`, description: 'Show every accessible subscription' },
+    ...mgGroups
+      .map(mg => ({
+        value: (mg.subscription_ids || []).join(','),
+        label: mg.name,
+        group: 'Management Groups',
+        description: `${(mg.subscription_ids || []).length} subscription${(mg.subscription_ids || []).length === 1 ? '' : 's'}`,
+      }))
+      .filter(o => o.value),
     ...subscriptions.map(s => ({
       value: s.subscription_id,
-      label: s.subscription_name || s.subscription_id.slice(0, 8) + '…',
+      label: s.subscription_name || s.subscription_id.slice(0, 8) + '\u2026',
+      group: 'Subscriptions',
       description: `$${s.cost_current?.toFixed(0)}/mo · ${s.resource_count} resources`,
     })),
   ]

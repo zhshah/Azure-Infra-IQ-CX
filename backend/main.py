@@ -511,12 +511,15 @@ async def _build_dashboard(
 
     scope_active = bool(scope_sub or scope_rg)
 
-    # ── Live single-subscription scoping ─────────────────────────────────────
-    # When a subscription is selected in the UI, scope the entire build to just
-    # that subscription so the panel loads quickly with live data.
+    # ── Live subscription scoping ────────────────────────────────────────────
+    # When a subscription (or a comma-separated set — e.g. every subscription under a
+    # selected management group) is chosen in the UI, scope the entire build to just
+    # those subscriptions so the panel loads quickly with live data.
     if subscription_id:
-        sub_ids = [subscription_id]
-        scope_active = True
+        _scoped = [s.strip() for s in str(subscription_id).split(",") if s.strip()]
+        if _scoped:
+            sub_ids = _scoped
+            scope_active = True
     if settings_svc.check_and_wipe_if_expired():
         raise EnvironmentError(
             "Credentials have been automatically cleared after the configured timeout. "
@@ -3358,6 +3361,89 @@ async def list_subscriptions():
                 "cost_current":      0.0,
             })
     return out
+
+
+@app.get("/api/management-groups", tags=["FinOps"])
+async def list_management_groups():
+    """Management-group hierarchy for the scope selector.
+
+    Returns every management group the identity can read — each with the subscription IDs
+    nested under it (recursively) — plus the flat subscription list, so the scope dropdown can
+    render an "All / Management Groups / Subscriptions" tree and a group selection expands to all
+    of its child subscriptions. Uses the Management Groups REST API (needs Management Group
+    Reader, granted at the tenant root); the az CLI is avoided because it tries to register a
+    resource provider (write). Degrades to subscriptions-only when MG data is unavailable.
+    """
+    import urllib.request
+
+    dash: Optional[DashboardData] = _cache.get("data:*") or _cache.get("data")
+    scanned = {s.subscription_id: s for s in (dash.subscriptions or [])} if dash else {}
+    try:
+        all_ids = list(finops_data_svc.get_subscription_ids()) if _FINOPS_AVAILABLE else []
+    except Exception:
+        all_ids = []
+    for sid in scanned:
+        if sid not in all_ids:
+            all_ids.append(sid)
+    name_map = _resolve_all_subscription_names() if all_ids else {}
+
+    def _sub_name(sid):
+        s = scanned.get(sid)
+        return (s.subscription_name if s else None) or name_map.get(sid) or sid
+
+    subs_flat = [{"subscription_id": sid, "subscription_name": _sub_name(sid)} for sid in all_ids]
+
+    def _mg_tree():
+        try:
+            from services.azure_auth import get_credential
+            tok = get_credential().get_token("https://management.azure.com/.default").token
+
+            def _get(path):
+                req = urllib.request.Request("https://management.azure.com" + path,
+                                             headers={"Authorization": f"Bearer {tok}"})
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return json.loads(r.read().decode())
+
+            root_id = (settings_svc.get_value("ENTRA_TENANT_ID", "") or os.environ.get("ENTRA_TENANT_ID", "") or "").strip()
+            if not root_id:
+                listing = _get("/providers/Microsoft.Management/managementGroups?api-version=2020-05-01")
+                vals = listing.get("value", [])
+                root_id = vals[0]["name"] if vals else ""
+            if not root_id:
+                return []
+            tree = _get(f"/providers/Microsoft.Management/managementGroups/{root_id}?api-version=2020-05-01&$expand=children&$recurse=true")
+            accessible = set(all_ids)
+            flat = []
+
+            def walk(node):
+                props = node.get("properties") or node
+                descendant = set()
+                for ch in (props.get("children") or []):
+                    ctype = (ch.get("type") or "").lower()
+                    if "subscription" in ctype:
+                        sid = ch.get("name")
+                        if sid:
+                            descendant.add(sid)
+                    elif "managementgroup" in ctype:
+                        descendant |= walk(ch)
+                visible = sorted([s for s in descendant if s in accessible]) if accessible else sorted(descendant)
+                flat.append({
+                    "id": node.get("name"),
+                    "name": props.get("displayName") or node.get("name"),
+                    "subscription_ids": visible,
+                })
+                return descendant
+
+            walk(tree)
+            # Drop the tenant root (== "All") and any MG with no accessible subscriptions.
+            return [m for m in flat if m["id"] != root_id and m["subscription_ids"]]
+        except Exception as exc:
+            logger.info("Management-group hierarchy unavailable (needs Management Group Reader): %s", exc)
+            return []
+
+    loop = asyncio.get_event_loop()
+    mgs = await loop.run_in_executor(_pool, _mg_tree)
+    return {"available": bool(mgs), "management_groups": mgs, "subscriptions": subs_flat}
 
 
 # ── Filter Options (for Cost Explorer multi-selects) ─────────────────────────

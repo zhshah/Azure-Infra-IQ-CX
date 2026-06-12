@@ -308,9 +308,15 @@ export default function SearchableSelect({
             {filtered.map((o, idx) => {
               const isSelected = o.value === value
               const isHighlighted = idx === highlightIdx
+              const showHeader = o.group && o.group !== (idx > 0 ? filtered[idx - 1].group : undefined)
               return (
+                <React.Fragment key={(o.value || o.label || idx) + ':' + (o.group || '')}>
+                {showHeader && (
+                  <div style={{ padding: '7px 12px 3px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#64748b', background: '#0c1322' }}>
+                    {o.group}
+                  </div>
+                )}
                 <div
-                  key={o.value}
                   data-option
                   onClick={() => select(o.value)}
                   onMouseEnter={() => setHighlightIdx(idx)}
@@ -318,7 +324,7 @@ export default function SearchableSelect({
                     display: 'flex',
                     alignItems: 'center',
                     gap: 8,
-                    padding: '8px 12px',
+                    padding: o.group ? '8px 12px 8px 22px' : '8px 12px',
                     cursor: 'pointer',
                     background: isHighlighted
                       ? 'rgba(0, 120, 212, 0.1)'
@@ -381,6 +387,7 @@ export default function SearchableSelect({
                   )}
                   {isSelected && <Check size={14} style={{ color: '#0078d4', flexShrink: 0 }} />}
                 </div>
+                </React.Fragment>
               )
             })}
           </div>
