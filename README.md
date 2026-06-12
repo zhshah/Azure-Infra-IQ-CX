@@ -342,6 +342,34 @@ subscription** (the hub-spoke pattern most enterprises use).
     -PrivateDnsZoneResourceGroupName "rg-private-dns-zones"
 ```
 
+**Manual capacity (SKU) selection** — pick a specific Container App workload profile at deploy
+time instead of the automatic fallback ladder. Append `-CapacityMode Manual` to any command
+(add `-ManualProfileChoice <1-5>` for a fully non-interactive run):
+
+```powershell
+.\deploy-automated.ps1 `
+    -ResourceGroupName  "rg-azure-infra-iq" `
+    -Location           "westeurope" `
+    -ContainerRegistryName "infraiqacr2026" `
+    -ContainerAppName   "azure-infra-iq" `
+    -EntraAppClientId   "<your-entra-app-client-id>" `
+    -EntraTenantId      "<your-entra-tenant-id>" `
+    -SubscriptionId     "<your-subscription-id>" `
+    -DeploymentMode     "Private" `
+    -VNetResourceGroupName "rg-networking" `
+    -VNetName           "corp-vnet" `
+    -SubnetName         "container-apps-subnet" `
+    -PrivateEndpointSubnetName       "pe-subnet" `
+    -PrivateDnsZoneSubscriptionId    "<hub-subscription-id>" `
+    -PrivateDnsZoneResourceGroupName "rg-private-dns-zones" `
+    -CapacityMode Manual
+```
+
+> `-CapacityMode Manual` shows an interactive `1–5` profile menu (`1` Consumption · `2` D4×1 ·
+> `3` D4×2 · `4` D8×1 · `5` D8×2). Pass `-ManualProfileChoice <1-5>` to choose without the
+> prompt in automated runs. Works with both `Public` and `Private` deployments, and applies to
+> any of the commands above.
+
 Notes:
 - Log Analytics is skipped by default (`--logs-destination none`) so no workspace is created unless you opt in.
 - To enable monitoring during deployment, either:
