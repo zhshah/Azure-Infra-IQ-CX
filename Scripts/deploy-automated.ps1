@@ -113,8 +113,14 @@ param(
     [string]$SqlDatabaseName = "infraiqdb",
     [string]$SqlAdminUser   = "infraiqadmin",
     [string]$SqlAdminPassword = "",      # auto-generated if empty
-    # vCore-based SQL objective for medium profile.
-    [string]$SqlServiceObjective = "GP_Gen5_4",
+    # SQL service objective for the INITIAL deploy. Default 'Basic' = DTU-based Basic tier — the
+    # lightest, most capacity-resilient option. It minimises the chance of regional capacity gates
+    # (e.g. 'RegionDoesNotAllowProvisioning' in West Europe) interrupting the overall deployment.
+    # Upgrade to General Purpose AFTER deployment (see the post-deploy note in the summary).
+    # Pass -SqlServiceObjective to override (e.g. GP_Gen5_4).
+    [string]$SqlServiceObjective = "Basic",
+    # Recommended post-deploy target SKU (General Purpose) shown in the capacity banner + upgrade guidance.
+    [string]$SqlTargetServiceObjective = "GP_Gen5_4",
 
     # Azure Managed Redis (optional L2 cache). NOTE: classic "Azure Cache for Redis"
     # (Microsoft.Cache/Redis) is RETIRED — new creates are rejected — so this uses
@@ -1071,11 +1077,36 @@ if ($depExists) {
 $sqlConnectionString = ""
 if ($DeploySql) {
     Write-Step "Step 6: Azure SQL ($SqlServiceObjective)"
+    # ── Capacity-resilience banner ───────────────────────────────────────────────
+    # Some regions (notably West Europe) intermittently gate NEW SQL provisioning with
+    # 'RegionDoesNotAllowProvisioning'. The DTU 'Basic' tier is the lightest footprint and the
+    # most likely to provision in a constrained region, so we deploy on it FIRST to keep the
+    # overall app deployment moving, then advise upgrading to General Purpose afterwards.
+    if ($SqlServiceObjective -in @("Basic","S0","S1","S2","S3")) {
+        Write-Info "To cover regional capacity limits (e.g. 'RegionDoesNotAllowProvisioning'), Azure SQL is being deployed on the DTU '$SqlServiceObjective' tier. RECOMMENDED: after this script completes, upgrade the database to '$SqlTargetServiceObjective' (General Purpose) — the summary prints the exact command."
+    }
     $sqlExists = az sql server show --name $SqlServerName --resource-group $ResourceGroupName 2>$null
     if (-not $sqlExists) {
-        az sql server create --name $SqlServerName --resource-group $ResourceGroupName --location $Location `
-            --admin-user $SqlAdminUser --admin-password $SqlAdminPassword --output none
-        if ($LASTEXITCODE -ne 0) { Fail "Failed to create SQL server." }
+        # The SQL *logical server* create is what hits 'RegionDoesNotAllowProvisioning' — a regional
+        # gate independent of the database SKU. Retry a few times in case the gate is transient.
+        $sqlSrvErr = ""
+        for ($sqlSrvTry = 1; $sqlSrvTry -le 3; $sqlSrvTry++) {
+            $sqlSrvErr = az sql server create --name $SqlServerName --resource-group $ResourceGroupName --location $Location `
+                --admin-user $SqlAdminUser --admin-password $SqlAdminPassword --output none 2>&1
+            if ($LASTEXITCODE -eq 0) { break }
+            if ("$sqlSrvErr" -match "RegionDoesNotAllowProvisioning|ProvisioningDisabled|Capacity") {
+                Write-Warn2 "SQL server create attempt $sqlSrvTry/3 hit a regional capacity gate in '$Location'. Retrying in 30s..."
+                Start-Sleep -Seconds 30
+            } else { break }
+        }
+        if ($LASTEXITCODE -ne 0) {
+            $sqlSrvMsg = ("$sqlSrvErr" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+            if ("$sqlSrvErr" -match "RegionDoesNotAllowProvisioning") {
+                Fail "Azure is temporarily not accepting NEW SQL servers in '$Location' (RegionDoesNotAllowProvisioning). This is a REGIONAL capacity gate on the logical server, independent of the database SKU — switching to DTU/Basic does not bypass it. Options: (1) re-run later (the gate usually clears within a few hours); (2) deploy to an alternate region via -Location; or (3) pre-create the SQL server in an available region and re-run (the script reuses an existing server). Last error: $sqlSrvMsg"
+            } else {
+                Fail "Failed to create SQL server. $sqlSrvMsg"
+            }
+        }
         az sql server firewall-rule create --resource-group $ResourceGroupName --server $SqlServerName `
             --name "AllowAzureServices" --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0 --output none 2>$null
     } else {
@@ -1095,6 +1126,14 @@ if ($DeploySql) {
     if (-not $dbExists) {
         az sql db create --name $SqlDatabaseName --server $SqlServerName --resource-group $ResourceGroupName `
             --service-objective $SqlServiceObjective --backup-storage-redundancy Local --output none
+        if ($LASTEXITCODE -ne 0 -and $SqlServiceObjective -ne "Basic") {
+            # DB-level capacity fallback: if the requested (e.g. General Purpose) objective is
+            # capacity-constrained, drop to DTU 'Basic' so the deploy continues; upgrade post-deploy.
+            Write-Warn2 "SQL database create on '$SqlServiceObjective' failed (often regional capacity). Falling back to the DTU 'Basic' tier — upgrade to '$SqlTargetServiceObjective' (General Purpose) after deployment."
+            $SqlServiceObjective = "Basic"
+            az sql db create --name $SqlDatabaseName --server $SqlServerName --resource-group $ResourceGroupName `
+                --service-objective $SqlServiceObjective --backup-storage-redundancy Local --output none
+        }
         if ($LASTEXITCODE -ne 0) { Fail "Failed to create SQL database." }
     }
     $sqlConnectionString = "Driver={ODBC Driver 18 for SQL Server};Server=tcp:$SqlServerName.database.windows.net,1433;Database=$SqlDatabaseName;Uid=$SqlAdminUser;Pwd=$SqlAdminPassword;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
@@ -1524,6 +1563,17 @@ if ($DeploySql) {
     # It is stored only inside the Container App secret 'sql-conn' (the app reads it from there).
     # If an admin ever needs SQL access, reset the password on the SQL server in the Azure portal.
     Write-Host "  SQL admin user: $SqlAdminUser (password auto-generated and stored only in the Container App secret 'sql-conn' — not displayed. Reset it on the SQL server in the portal if direct access is ever needed)." -ForegroundColor DarkGray
+    if ($SqlServiceObjective -in @("Basic","S0","S1","S2","S3")) {
+        # POST-DEPLOY: the DB was provisioned on a lightweight DTU tier for capacity resilience.
+        # Advise the customer to scale it up to General Purpose once the app is running.
+        Write-Host ""
+        Write-Host "  POST-DEPLOY ACTION — upgrade Azure SQL from DTU '$SqlServiceObjective' to General Purpose" -ForegroundColor Yellow
+        Write-Host "    To keep this deployment resilient against regional capacity limits, the database was" -ForegroundColor DarkYellow
+        Write-Host "    provisioned on the DTU '$SqlServiceObjective' tier. Once the app is up, the customer is advised to" -ForegroundColor DarkYellow
+        Write-Host "    upgrade it to '$SqlTargetServiceObjective' (General Purpose) for production performance — no app change or redeploy needed:" -ForegroundColor DarkYellow
+        Write-Host "      az sql db update --resource-group $ResourceGroupName --server $SqlServerName --name $SqlDatabaseName --service-objective $SqlTargetServiceObjective" -ForegroundColor Cyan
+        Write-Host "    (The connection string is unchanged; the SKU upgrade is an online operation.)" -ForegroundColor DarkGray
+    }
 }
 if ($permIssues.Count -gt 0) {
     # The deployment succeeded; these specific grants need Microsoft Entra DIRECTORY ADMIN
