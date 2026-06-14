@@ -334,9 +334,8 @@ export default function SettingsPanel({ open, onClose, onSaved, subscriptions = 
               <button onClick={testAzure} disabled={testing} className="btn-ghost flex items-center gap-2 text-sm">
                 {testing && <Loader size={14} className="animate-spin" />} Test Azure Connection
               </button>
-              </>)}
 
-              {/* ── Scan Scope ── */}
+              {/* ── Scan Scope (Test Mode) ── hidden: scan config is managed by the deployment ── */}
               <div className="pt-3 border-t border-gray-800">
                 <div className="flex items-center gap-2 mb-2">
                   <FlaskConical size={13} className="text-amber-400" />
@@ -395,6 +394,7 @@ export default function SettingsPanel({ open, onClose, onSaved, subscriptions = 
                     : 'Credentials persist until manually cleared.'}
                 />
               </div>
+              </>)}
             </>
           )}
 
@@ -657,10 +657,13 @@ export default function SettingsPanel({ open, onClose, onSaved, subscriptions = 
         {/* Footer */}
         <div className="px-5 py-4 border-t border-gray-800 flex gap-3 justify-end">
           <button onClick={onClose} className="btn-ghost text-sm">Cancel</button>
+          {/* Save is hidden on the Azure tab — the connection is managed by the deployment and is read-only. */}
+          {tab !== 'azure' && (
           <button onClick={save} disabled={loading} className="btn-primary flex items-center gap-2 text-sm">
             {loading && <Loader size={14} className="animate-spin" />}
             Save Settings
           </button>
+          )}
         </div>
       </div>
     </div>
