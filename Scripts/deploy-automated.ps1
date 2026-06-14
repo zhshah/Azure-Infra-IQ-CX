@@ -685,10 +685,10 @@ if ($DeploySql -and -not $PSBoundParameters.ContainsKey('SqlServiceObjective')) 
     Write-Host ""
     Write-Host "  Tip: pick [2] Basic if the region is capacity-constrained (e.g. West Europe 'RegionDoesNotAllowProvisioning'), then upgrade to General Purpose later." -ForegroundColor DarkGray
     Write-Host ""
-    $sqlSkuChoice = ""
-    while ($sqlSkuChoice -notin @("","1","2")) {
+    # do/while so the prompt is ALWAYS shown at least once; Enter (empty) accepts the [1] default.
+    do {
         $sqlSkuChoice = (Read-Host "  Enter choice (1-2) [1]").Trim()
-    }
+    } while ($sqlSkuChoice -notin @("","1","2"))
     if ($sqlSkuChoice -eq "2") { $SqlServiceObjective = "Basic" }
 }
 if ($DeploySql) {
