@@ -113,13 +113,12 @@ param(
     [string]$SqlDatabaseName = "infraiqdb",
     [string]$SqlAdminUser   = "infraiqadmin",
     [string]$SqlAdminPassword = "",      # auto-generated if empty
-    # SQL service objective for the INITIAL deploy. Default 'Basic' = DTU-based Basic tier — the
-    # lightest, most capacity-resilient option. It minimises the chance of regional capacity gates
-    # (e.g. 'RegionDoesNotAllowProvisioning' in West Europe) interrupting the overall deployment.
-    # Upgrade to General Purpose AFTER deployment (see the post-deploy note in the summary).
-    # Pass -SqlServiceObjective to override (e.g. GP_Gen5_4).
-    [string]$SqlServiceObjective = "Basic",
-    # Recommended post-deploy target SKU (General Purpose) shown in the capacity banner + upgrade guidance.
+    # Azure SQL service objective. DEFAULT 'GP_Gen5_4' (General Purpose, vCore). When -SqlServiceObjective
+    # is NOT passed on the command line, the deploy shows an early prompt: [1] GP_Gen5_4 (default) or
+    # [2] Basic (DTU-based — lightest / most capacity-resilient for constrained regions like West Europe).
+    # When deployed on a DTU tier, the summary advises upgrading to General Purpose post-deploy.
+    [string]$SqlServiceObjective = "GP_Gen5_4",
+    # General Purpose target SKU shown in the SKU prompt + post-deploy upgrade guidance.
     [string]$SqlTargetServiceObjective = "GP_Gen5_4",
 
     # Azure Managed Redis (optional L2 cache). NOTE: classic "Azure Cache for Redis"
@@ -673,6 +672,27 @@ if ($effectiveMode -eq "Manual") {
     Write-Info "Capacity mode:     Manual -> $($selProfile.Label)"
 } else {
     Write-Info "Capacity mode:     Automatic -> ladder D8x2 -> D8x1 -> D4x2 -> D4x1 -> Consumption"
+}
+
+# ── Resolve Azure SQL SKU (EARLY, before the long image build) so the prompt is shown up
+#    front and the rest of the deploy runs unattended. The chosen SKU is APPLIED later in Step 6.
+#    Skipped if SQL deployment is disabled, or if the caller pinned -SqlServiceObjective explicitly. ──
+if ($DeploySql -and -not $PSBoundParameters.ContainsKey('SqlServiceObjective')) {
+    Write-Host ""
+    Write-Host "  Select the Azure SQL SKU:" -ForegroundColor Yellow
+    Write-Host "    [1] $SqlServiceObjective  (General Purpose, vCore - production performance) [Default]" -ForegroundColor Cyan
+    Write-Host "    [2] Basic      (DTU-based - lightest, most capacity-resilient for constrained regions)" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Tip: pick [2] Basic if the region is capacity-constrained (e.g. West Europe 'RegionDoesNotAllowProvisioning'), then upgrade to General Purpose later." -ForegroundColor DarkGray
+    Write-Host ""
+    $sqlSkuChoice = ""
+    while ($sqlSkuChoice -notin @("","1","2")) {
+        $sqlSkuChoice = (Read-Host "  Enter choice (1-2) [1]").Trim()
+    }
+    if ($sqlSkuChoice -eq "2") { $SqlServiceObjective = "Basic" }
+}
+if ($DeploySql) {
+    Write-Info "Azure SQL SKU:     $(if ($SqlServiceObjective -eq 'Basic') { 'Basic (DTU-based) - upgrade to General Purpose post-deploy' } else { "$SqlServiceObjective (General Purpose)" })"
 }
 
 # ── Providers + containerapp extension ─────────────────────────────────────────
