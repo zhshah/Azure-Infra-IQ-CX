@@ -219,6 +219,6 @@ Write-Info "Workload profiles now in the environment:"
 az containerapp env workload-profile list --name $ContainerAppEnvName --resource-group $ResourceGroupName `
     --query "[].{name:name,type:properties.workloadProfileType,min:properties.minimumCount,max:properties.maximumCount,nodes:properties.currentNodeCount}" -o table 2>$null
 Write-Host ""
-Write-Warn2 "Cost note: dedicated nodes bill while provisioned. To remove this profile later (no app may be using it):"
+Write-Info "To remove this profile later (when no app is using it):"
 Write-Info  "  az containerapp env workload-profile delete --name $ContainerAppEnvName --resource-group $ResourceGroupName --workload-profile-name $($chosen.ProfileName)"
 Write-Host ""
