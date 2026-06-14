@@ -286,7 +286,26 @@ export default function SettingsPanel({ open, onClose, onSaved, subscriptions = 
                 </div>
               )}
 
-              {/* ── Service Principal instructions ── */}
+              {/* ── Azure connection is managed by the deployment identity (SP inputs hidden) ── */}
+              <div className="rounded-lg border border-blue-800/40 bg-blue-950/20 p-4 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Info size={13} className="text-blue-400 shrink-0" />
+                  <p className="text-xs font-semibold text-blue-300">Azure connection is managed by the deployment</p>
+                </div>
+                <p className="text-xs text-gray-400">
+                  This instance is already connected to your Azure tenant using its deployment identity —
+                  no tenant, subscription, client ID or secret needs to be entered here. These values are
+                  managed centrally and cannot be changed.
+                </p>
+                <ul className="text-xs text-gray-500 space-y-1 pl-1 pt-1">
+                  <li><strong className="text-gray-400">Reader</strong> — enumerate resources and their properties</li>
+                  <li><strong className="text-gray-400">Cost Management Reader</strong> — pull spend and billing data</li>
+                  <li><strong className="text-gray-400">Monitoring Reader</strong> — fetch CPU, memory and network metrics</li>
+                </ul>
+              </div>
+
+              {/* Service-principal inputs below are HIDDEN — the deployment identity handles auth. */}
+              {false && (<>
               <div className="rounded-lg border border-blue-800/40 bg-blue-950/20 p-4 space-y-2">
                 <div className="flex items-center gap-2">
                   <Info size={13} className="text-blue-400 shrink-0" />
@@ -315,6 +334,7 @@ export default function SettingsPanel({ open, onClose, onSaved, subscriptions = 
               <button onClick={testAzure} disabled={testing} className="btn-ghost flex items-center gap-2 text-sm">
                 {testing && <Loader size={14} className="animate-spin" />} Test Azure Connection
               </button>
+              </>)}
 
               {/* ── Scan Scope ── */}
               <div className="pt-3 border-t border-gray-800">
