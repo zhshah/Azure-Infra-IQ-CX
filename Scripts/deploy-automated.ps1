@@ -14,7 +14,7 @@
     - Azure SQL (General Purpose, 4 vCores) logical server + database (SQL auth)  [optional]
     - Azure Cache for Redis (Standard C2)                                       [optional]
       - Container App with a SYSTEM-ASSIGNED managed identity
-      - RBAC: Reader + Cost Management Reader on each scanned subscription
+      - RBAC: Reader + Cost Management Reader + Monitoring Reader on each scanned subscription
       - Microsoft Graph application permissions on the managed identity
       - Registers the Container App URL as a SPA redirect URI on the Entra app
 
@@ -1432,7 +1432,7 @@ if ($isPrivate) {
 }
 
 # ── Managed identity + RBAC ────────────────────────────────────────────────────
-Write-Step "Step 9: RBAC (Reader + Cost Management Reader)"
+Write-Step "Step 9: RBAC (Reader + Cost Management Reader + Monitoring Reader)"
 $principalId = az containerapp show --name $ContainerAppName --resource-group $ResourceGroupName --query "identity.principalId" -o tsv
 if ([string]::IsNullOrWhiteSpace($principalId)) { Fail "Could not read managed identity principalId." }
 Write-Info "Managed identity principalId: $principalId"
@@ -1452,7 +1452,7 @@ else { Write-Warn2 "Managed identity SP not resolvable after ~90s; continuing (s
 
 $permIssues = @()
 foreach ($sid in ($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
-    foreach ($role in @("Reader","Cost Management Reader")) {
+    foreach ($role in @("Reader","Cost Management Reader","Monitoring Reader")) {
         $r = az role assignment create --assignee $principalId --role $role --scope "/subscriptions/$sid" --output none 2>&1
         if ($LASTEXITCODE -eq 0 -or "$r" -match "already exists|RoleAssignmentExists") { Write-Ok "$role on /subscriptions/$sid" }
         else { $why = (("$r" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)); Write-Warn2 "Could not assign $role on ${sid}: $why"; $permIssues += "az role assignment create --assignee $principalId --role `"$role`" --scope `"/subscriptions/$sid`"   # why: $why" }
@@ -1471,10 +1471,11 @@ if ($deployZureMap -and $useZureMapSp) {
 #   Reader + Cost Management Reader -> read EVERY in-tenant subscription's resources & cost
 #     in a SINGLE assignment (so the dynamic AZURE_SUBSCRIPTION_IDS=auto picker shows all
 #     subs and cost is never $0 — even subscriptions created after this deploy).
+#   Monitoring Reader -> read Azure Monitor metrics (CPU / memory / network) across all subs.
 #   Reservations Reader  -> Reserved Instance inventory & RI recommendations.
 #   Management Group Reader -> management-group hierarchy + cross-subscription enumeration.
 $tenantMgScope = "/providers/Microsoft.Management/managementGroups/$EntraTenantId"
-foreach ($role in @("Reader","Cost Management Reader","Management Group Reader")) {
+foreach ($role in @("Reader","Cost Management Reader","Monitoring Reader","Management Group Reader")) {
     $rr = az role assignment create --assignee $principalId --role $role --scope $tenantMgScope --output none 2>&1
     if ($LASTEXITCODE -eq 0 -or "$rr" -match "already exists|RoleAssignmentExists") { Write-Ok "$role on Tenant Root MG" }
     else { $why = (("$rr" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)); Write-Warn2 "Could not assign $role at tenant root: $why"; $permIssues += "az role assignment create --assignee $principalId --role `"$role`" --scope `"$tenantMgScope`"   # why: $why" }
