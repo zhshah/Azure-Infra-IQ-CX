@@ -2,6 +2,7 @@ import React, { useMemo, useState, useEffect, useCallback } from 'react'
 import { Layers, FolderOpen, ChevronDown, MapPin, Tag, Box, X, Filter, FolderPlus } from 'lucide-react'
 import SearchableSelect from './shared/SearchableSelect'
 import SearchableMultiSelect from './shared/SearchableMultiSelect'
+import { prettyResourceType } from '../utils/resourceTypes'
 
 // ── Active filter chip ─────────────────────────────────────────────────────────
 function Chip({ label, onRemove, color = '#0078d4' }) {
@@ -178,13 +179,11 @@ export default function FilterBar({
 
   const rgOptions = resourceGroups.map(rg => ({ value: rg, label: rg, count: rgCounts[rg] || 0 }))
   const locOptions = locations.map(l => ({ value: l, label: l, count: locCounts[l] || 0 }))
-  const typeOptions = resourceTypes.map(t => {
-    const parts = t.split('/')
-    const label = parts[parts.length - 1]
-      .replace(/([a-z])([A-Z])/g, '$1 $2')
-      .replace(/^./, s => s.toUpperCase())
-    return { value: t, label, count: typeCounts[t] || 0 }
-  })
+  const typeOptions = resourceTypes.map(t => ({
+    value: t,
+    label: prettyResourceType(t),
+    count: typeCounts[t] || 0,
+  }))
 
   const subOptions = [
     { value: '', label: `All ${effectiveSubs.length} subscriptions`, description: 'Show every accessible subscription' },

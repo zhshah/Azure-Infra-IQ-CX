@@ -477,6 +477,7 @@ export default function ProjectWorkspace({ project, allResources = [], onBack, o
 // ── Manage resources (add from estate / remove) ───────────────────────────────
 function ManageResourcesModal({ project, allResources, currentIds, onClose, onAdd, onRemove }) {
   const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
 
   const currentSet = useMemo(() => new Set((currentIds || []).map(s => (s || '').toLowerCase())), [currentIds])
   const rname = (r) => r.resource_name || (r.resource_id || r.id || '').split('/').slice(-1)[0]
@@ -491,8 +492,14 @@ function ManageResourcesModal({ project, allResources, currentIds, onClose, onAd
     [allResources, currentSet],
   )
 
-  const doAdd = async (ids) => { setBusy(true); try { await onAdd(ids) } catch { /* surfaced upstream */ } finally { setBusy(false) } }
-  const doRemove = async (id) => { setBusy(true); try { await onRemove([id]) } catch { /* noop */ } finally { setBusy(false) } }
+  const doAdd = async (ids) => {
+    if (!project?.id) { setErr('This project has no id — reopen it from the Projects list and try again.'); return }
+    setBusy(true); setErr('')
+    try { await onAdd(ids) }
+    catch (e) { setErr(e?.message || 'Failed to add the selected resources — please retry.') }
+    finally { setBusy(false) }
+  }
+  const doRemove = async (id) => { setBusy(true); setErr(''); try { await onRemove([id]) } catch (e) { setErr(e?.message || 'Failed to remove resource.') } finally { setBusy(false) } }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -507,6 +514,11 @@ function ManageResourcesModal({ project, allResources, currentIds, onClose, onAd
         </div>
 
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {err && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-900/30 border border-red-700/50 text-xs text-red-300">
+              <X size={13} className="shrink-0" /> {err}
+            </div>
+          )}
           {/* Current members — compact chips with remove */}
           {inProject.length > 0 && (
             <div>

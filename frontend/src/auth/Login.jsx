@@ -73,24 +73,13 @@ export default function Login() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-          <div
-            style={{
-              width: 40,
-              height: 40,
-              borderRadius: 6,
-              background: 'linear-gradient(135deg, #0078d4, #00a4ef)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M4 19h16" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" />
-              <rect x="5" y="11" width="3" height="6" rx="1" fill="#fff" />
-              <rect x="10.5" y="7" width="3" height="10" rx="1" fill="#fff" />
-              <rect x="16" y="9" width="3" height="8" rx="1" fill="#fff" />
-            </svg>
-          </div>
+          <img
+            src="/branding/logo-mark.svg"
+            alt="Azure Infra IQ"
+            width={40}
+            height={40}
+            style={{ width: 40, height: 40, borderRadius: 6 }}
+          />
           <div>
             <div style={{ fontSize: 18, fontWeight: 600, color: COLORS.textStrong, lineHeight: 1.2 }}>
               Azure Infra IQ

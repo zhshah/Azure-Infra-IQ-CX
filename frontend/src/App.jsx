@@ -120,18 +120,14 @@ function SidebarNav({ view, onNavigate, collapsed, onToggle, badges }) {
         display: 'flex', alignItems: 'center',
         gap: 12,
       }}>
-        {/* Azure logo mark */}
-        <div style={{
-          width: 32, height: 32, flexShrink: 0,
-          borderRadius: 8,
-          background: 'linear-gradient(135deg, #0078d4 0%, #00b7c3 100%)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          boxShadow: '0 2px 8px rgba(0, 120, 212, 0.3)',
-        }}>
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-            <path d="M7.5 2L2 14h4l1-2.5h4L12 14h4L10.5 2h-3zm1.5 3l1.5 4.5h-3L9 5z" fill="white" fillOpacity="0.95"/>
-          </svg>
-        </div>
+        {/* Brand logo mark */}
+        <img
+          src="/branding/logo-mark.svg"
+          alt="Azure Infra IQ"
+          width={32}
+          height={32}
+          style={{ width: 32, height: 32, flexShrink: 0, borderRadius: 8, boxShadow: '0 2px 8px rgba(0, 120, 212, 0.3)' }}
+        />
         {!collapsed && (
           <div style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
             <div style={{ color: '#f1f5f9', fontSize: 13, fontWeight: 700, lineHeight: 1.3, letterSpacing: '-0.01em' }}>Azure Infra IQ</div>
@@ -1979,15 +1975,17 @@ function AppInner() {
   if (!launched) {
     return (
       <div className="fixed inset-0 bg-gray-950 flex flex-col items-center justify-center gap-4">
-        <div style={{
-          width: 52, height: 52, borderRadius: 14,
-          background: 'linear-gradient(135deg, #0078d4 0%, #00b7c3 100%)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          boxShadow: '0 4px 20px rgba(0, 120, 212, 0.3)',
-        }}>
-          <Loader size={24} className="text-white animate-spin" />
+        <img
+          src="/branding/logo-mark.svg"
+          alt="Azure Infra IQ"
+          width={64}
+          height={64}
+          style={{ width: 64, height: 64, borderRadius: 16, boxShadow: '0 4px 20px rgba(0, 120, 212, 0.3)' }}
+        />
+        <div className="flex items-center gap-2 text-gray-500">
+          <Loader size={14} className="animate-spin" />
+          <p className="text-xs font-medium">{bootReconnecting ? 'Reconnecting to backend…' : 'Connecting to backend…'}</p>
         </div>
-        <p className="text-xs text-gray-500 font-medium">{bootReconnecting ? 'Reconnecting to backend…' : 'Connecting to backend…'}</p>
       </div>
     )
   }
@@ -3466,7 +3464,51 @@ function InnovationView({ data, filteredResources, moduleListMode, setModuleList
 
 function MigrationView({ data, filteredResources, moduleListMode, setModuleListMode, tableFilter, setTableFilter, projects, setProjects, setSelectedResourceIds, setSaveProjectModalOpen }) {
   const [tab, setTab] = React.useState('dashboard')
-  const opps = data?.modernization_opportunities ?? []
+  const [assess, setAssess] = React.useState(null)
+  React.useEffect(() => {
+    let alive = true
+    api._request('/migration/assessment').then(d => { if (alive) setAssess(d) }).catch(() => {})
+    return () => { alive = false }
+  }, [])
+
+  // Prefer the assessment opportunities (6R `five_r` is populated there); fall back to the dashboard copy.
+  const opps  = (assess?.opportunities?.length ? assess.opportunities : data?.modernization_opportunities) ?? []
+  const fiveR = assess?.five_r_summary ?? []
+
+  const SIXR_COLOR = { Rehost: '#60a5fa', Refactor: '#34d399', Rearchitect: '#a78bfa', Rebuild: '#f472b6', Replace: '#fbbf24', Retain: '#94a3b8' }
+  const migColumns = [
+    { key: 'resource_name', label: 'Resource' },
+    { key: 'resource_type', label: 'Current Type', kind: 'resourceType', filterable: true },
+    { key: 'five_r', label: '6R Strategy', filterable: true,
+      render: v => v ? <span className="px-1.5 py-0.5 rounded text-xs font-medium" style={{ background: (SIXR_COLOR[v] || '#64748b') + '22', color: SIXR_COLOR[v] || '#94a3b8' }}>{v}</span> : '—' },
+    { key: 'target_service', label: 'Target Service' },
+    { key: 'complexity', label: 'Complexity', filterable: true },
+    { key: 'estimated_savings_pct', label: 'Est. Savings', render: v => v ? `${Math.round(v)}%` : '—' },
+    { key: 'estimated_effort_days', label: 'Effort (days)' },
+    { key: 'migration_wave', label: 'Wave', filterable: true },
+    { key: 'reason', label: 'Recommendation', render: v => <span title={v} className="block max-w-[24rem] truncate">{v}</span> },
+  ]
+  const reportTable = (
+    <DataTable
+      title="Modernization Opportunities Report (6R)"
+      exportFilename="migration-6r-opportunities"
+      columns={migColumns}
+      data={opps}
+      emptyMsg="No modernization opportunities found — resources are classified Retain (no clear migration benefit yet)."
+    />
+  )
+  const sixRSummary = fiveR.length > 0 ? (
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+      {fiveR.map(r => (
+        <div key={r.category} className="rounded-xl border border-gray-800 bg-gray-900/40 p-3" title={r.description}>
+          <div className="text-xs text-gray-400">{r.category}</div>
+          <div className="text-2xl font-bold" style={{ color: SIXR_COLOR[r.category] || '#94a3b8' }}>{r.count}</div>
+          <div className="text-[10px] text-gray-600 truncate">{r.description}</div>
+        </div>
+      ))}
+    </div>
+  ) : null
+
   return (
     <div className="space-y-4">
       <ModuleTabBar tabs={[
@@ -3478,48 +3520,20 @@ function MigrationView({ data, filteredResources, moduleListMode, setModuleListM
         <div className="space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <SharedKPI label="Migration Opportunities" value={opps.length} color="blue" icon={RefreshCw} />
-            <SharedKPI label="Legacy Resources" value={opps.filter(o => o.category === 'legacy' || o.migration_type === 'modernize').length} color="amber" icon={AlertTriangle} />
-            <SharedKPI label="Quick Wins" value={opps.filter(o => o.effort === 'low' || o.priority === 'high').length} color="green" icon={Zap} />
-            <SharedKPI label="Total Resources" value={filteredResources.length} color="cyan" icon={Monitor} />
+            <SharedKPI label="Quick Wins (Low effort)" value={opps.filter(o => (o.complexity || '').toLowerCase() === 'low').length} color="green" icon={Zap} />
+            <SharedKPI label="Total Effort (days)" value={assess?.total_effort_days ?? opps.reduce((s, o) => s + (o.estimated_effort_days || 0), 0)} color="amber" icon={AlertTriangle} />
+            <SharedKPI label="Resources Assessed" value={assess?.total_resources_assessed ?? filteredResources.length} color="cyan" icon={Monitor} />
           </div>
+          {sixRSummary}
           <ModuleViewToggle label="Migration" listMode={moduleListMode} onToggle={setModuleListMode} />
-          {moduleListMode ? (
-            <DataTable
-              title="Modernization Opportunities Report"
-              exportFilename="migration-opportunities"
-              columns={[
-                { key: 'resource_name', label: 'Resource' },
-                { key: 'resource_type', label: 'Current Type' },
-                { key: 'target', label: 'Target Service' },
-                { key: 'category', label: 'Category' },
-                { key: 'effort', label: 'Effort' },
-                { key: 'priority', label: 'Priority' },
-                { key: 'recommendation', label: 'Recommendation' },
-              ]}
-              data={opps}
-              emptyMsg="No modernization opportunities found"
-            />
-          ) : (
-            <MigrationDashboard legacyOpps={opps} />
-          )}
+          {moduleListMode ? reportTable : <MigrationDashboard legacyOpps={opps} />}
         </div>
       )}
       {tab === 'reports' && (
-        <DataTable
-          title="Modernization Opportunities Report"
-          exportFilename="migration-opportunities"
-          columns={[
-            { key: 'resource_name', label: 'Resource' },
-            { key: 'resource_type', label: 'Current Type' },
-            { key: 'target', label: 'Target Service' },
-            { key: 'category', label: 'Category' },
-            { key: 'effort', label: 'Effort' },
-            { key: 'priority', label: 'Priority' },
-            { key: 'recommendation', label: 'Recommendation' },
-          ]}
-          data={opps}
-          emptyMsg="No modernization opportunities found"
-        />
+        <div className="space-y-4">
+          {sixRSummary}
+          {reportTable}
+        </div>
       )}
       {tab === 'ai' && <MigrationAIAnalysis />}
     </div>
@@ -3529,6 +3543,23 @@ function MigrationView({ data, filteredResources, moduleListMode, setModuleListM
 function BackupView({ data, filteredResources, moduleListMode, setModuleListMode, tableFilter, setTableFilter, projects, setProjects, setSelectedResourceIds, setSaveProjectModalOpen }) {
   const [tab, setTab] = React.useState('dashboard')
   const bc = data?.backup_coverage
+  const gaps = bc?.gaps ?? []
+  const SEV = { Critical: '#ef4444', High: '#f97316', Medium: '#f59e0b', Low: '#94a3b8' }
+  const sevBadge = v => v ? <span className="px-1.5 py-0.5 rounded text-xs font-medium" style={{ background: (SEV[v] || '#64748b') + '22', color: SEV[v] || '#94a3b8' }}>{v}</span> : '—'
+  const bkCols = [
+    { key: 'resource_name', label: 'Resource' },
+    { key: 'resource_type', label: 'Type', kind: 'resourceType', filterable: true },
+    { key: 'resource_group', label: 'Resource Group', filterable: true },
+    { key: 'backup_category', label: 'Category', filterable: true },
+    { key: 'severity', label: 'Severity', filterable: true, render: sevBadge },
+    { key: 'backup_solution', label: 'Recommended Solution' },
+    { key: 'estimated_monthly_cost', label: 'Est. Cost/mo', render: v => v ? `$${Number(v).toFixed(2)}` : '—' },
+    { key: 'recommendation', label: 'Recommendation', render: v => <span title={v} className="block max-w-[22rem] truncate">{v}</span> },
+  ]
+  const bkReport = (
+    <DataTable title="Backup Gap Report" exportFilename="backup-gaps" columns={bkCols} data={gaps}
+      emptyMsg="No backup gaps — all eligible resources are protected." />
+  )
   return (
     <div className="space-y-4">
       <ModuleTabBar tabs={[
@@ -3539,46 +3570,16 @@ function BackupView({ data, filteredResources, moduleListMode, setModuleListMode
       {tab === 'dashboard' && (
         <div className="space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <SharedKPI label="Protected" value={bc?.protected_count || 0} color="green" icon={Shield} subtitle={`${bc?.coverage_pct || 0}% coverage`} />
-            <SharedKPI label="Unprotected" value={bc?.unprotected_count || 0} color="red" icon={AlertTriangle} />
-            <SharedKPI label="Total Assessed" value={bc?.total_resources || 0} color="blue" icon={Database} />
-            <SharedKPI label="Vaults" value={bc?.vault_count || 0} color="purple" icon={HardDrive} />
+            <SharedKPI label="Protected" value={bc?.total_protected || 0} color="green" icon={Shield} subtitle={`${bc?.coverage_pct || 0}% coverage`} />
+            <SharedKPI label="Backup Gaps" value={bc?.total_gaps || 0} color="red" icon={AlertTriangle} subtitle={`${bc?.critical_gaps || 0} critical · ${bc?.high_gaps || 0} high`} />
+            <SharedKPI label="Eligible" value={bc?.total_eligible || 0} color="blue" icon={Database} />
+            <SharedKPI label="Critical Gaps" value={bc?.critical_gaps || 0} color="amber" icon={Shield} />
           </div>
-          <ModuleViewToggle label="Backup & Resilience" listMode={moduleListMode} onToggle={setModuleListMode} />
-          {moduleListMode ? (
-            <DataTable
-              title="Backup Coverage Report"
-              exportFilename="backup-coverage"
-              columns={[
-                { key: 'name', label: 'Resource' },
-                { key: 'resource_type', label: 'Type' },
-                { key: 'resource_group', label: 'Resource Group' },
-                { key: 'location', label: 'Location' },
-                { key: 'backup_status', label: 'Backup Status' },
-              ]}
-              data={filteredResources.map(r => ({ ...r, name: r.name || r.resource_name || r.resource_id?.split('/').pop(), backup_status: r.is_protected ? 'Protected' : 'Unprotected' }))}
-              emptyMsg="No backup data available"
-            />
-          ) : (
-            <BackupResiliencePanel backupCoverage={bc} />
-          )}
+          <ModuleViewToggle label="Backup & DR" listMode={moduleListMode} onToggle={setModuleListMode} />
+          {moduleListMode ? bkReport : <BackupResiliencePanel backupCoverage={bc} />}
         </div>
       )}
-      {tab === 'reports' && (
-        <DataTable
-          title="Backup Coverage Report"
-          exportFilename="backup-coverage"
-          columns={[
-            { key: 'name', label: 'Resource' },
-            { key: 'resource_type', label: 'Type' },
-            { key: 'resource_group', label: 'Resource Group' },
-            { key: 'location', label: 'Location' },
-            { key: 'backup_status', label: 'Backup Status' },
-          ]}
-          data={filteredResources.map(r => ({ ...r, name: r.name || r.resource_name || r.resource_id?.split('/').pop(), backup_status: r.is_protected ? 'Protected' : 'Unprotected' }))}
-          emptyMsg="No backup data available"
-        />
-      )}
+      {tab === 'reports' && bkReport}
       {tab === 'ai' && <BackupAIAnalysis />}
     </div>
   )
@@ -3586,6 +3587,28 @@ function BackupView({ data, filteredResources, moduleListMode, setModuleListMode
 
 function ResilienceView({ data, filteredResources, moduleListMode, setModuleListMode, tableFilter, setTableFilter, projects, setProjects, setSelectedResourceIds, setSaveProjectModalOpen }) {
   const [tab, setTab] = React.useState('dashboard')
+  const [resil, setResil] = React.useState(null)
+  React.useEffect(() => {
+    let a = true
+    api._request('/resilience/analysis').then(d => { if (a) setResil(d) }).catch(() => {})
+    return () => { a = false }
+  }, [])
+  const findings = resil?.findings ?? []
+  const RISK = { Critical: '#ef4444', High: '#f97316', Medium: '#f59e0b', Low: '#94a3b8' }
+  const riskBadge = v => v ? <span className="px-1.5 py-0.5 rounded text-xs font-medium" style={{ background: (RISK[v] || '#64748b') + '22', color: RISK[v] || '#94a3b8' }}>{v}</span> : '—'
+  const rsCols = [
+    { key: 'resource_name', label: 'Resource' },
+    { key: 'resource_type', label: 'Type', kind: 'resourceType', filterable: true },
+    { key: 'category', label: 'Risk Category', filterable: true },
+    { key: 'risk', label: 'Risk', filterable: true, render: riskBadge },
+    { key: 'description', label: 'Finding', render: v => <span title={v} className="block max-w-[24rem] truncate">{v}</span> },
+    { key: 'cost_usd', label: 'Cost/mo', render: v => v ? `$${Number(v).toFixed(0)}` : '—' },
+    { key: 'recommendation', label: 'Recommendation', render: v => <span title={v} className="block max-w-[22rem] truncate">{v}</span> },
+  ]
+  const rsReport = (
+    <DataTable title="Resilience Findings Report" exportFilename="resilience-findings" columns={rsCols} data={findings}
+      emptyMsg="No resilience risks found." />
+  )
   return (
     <div className="space-y-4">
       <ModuleTabBar tabs={[
@@ -3596,48 +3619,16 @@ function ResilienceView({ data, filteredResources, moduleListMode, setModuleList
       {tab === 'dashboard' && (
         <div className="space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <SharedKPI label="Total Resources" value={filteredResources.length} color="blue" icon={Monitor} />
-            <SharedKPI label="HA Configured" value={filteredResources.filter(r => r.ha_enabled || r.zone_redundant).length} color="green" icon={Shield} />
-            <SharedKPI label="Single Instance" value={filteredResources.filter(r => !r.ha_enabled && !r.zone_redundant).length} color="amber" icon={AlertTriangle} />
-            <SharedKPI label="Zone Redundant" value={filteredResources.filter(r => r.zone_redundant).length} color="cyan" icon={Globe} />
+            <SharedKPI label="Resilience Score" value={resil?.score != null ? `${resil.score}` : '—'} color="blue" icon={Shield} subtitle={resil?.risk_level || ''} />
+            <SharedKPI label="Critical Risks" value={resil?.critical_count || 0} color="red" icon={AlertTriangle} />
+            <SharedKPI label="High Risks" value={resil?.high_count || 0} color="amber" icon={AlertTriangle} />
+            <SharedKPI label="Total Findings" value={resil?.total_findings ?? findings.length} color="cyan" icon={Zap} />
           </div>
           <ModuleViewToggle label="Resilience & SLA" listMode={moduleListMode} onToggle={setModuleListMode} />
-          {moduleListMode ? (
-            <DataTable
-              title="Resilience & SLA Report"
-              exportFilename="resilience-sla"
-              columns={[
-                { key: 'name', label: 'Resource' },
-                { key: 'resource_type', label: 'Type' },
-                { key: 'location', label: 'Location' },
-                { key: 'sla', label: 'SLA' },
-                { key: 'availability', label: 'Availability' },
-                { key: 'redundancy', label: 'Redundancy' },
-              ]}
-              data={filteredResources.map(r => ({ ...r, name: r.name || r.resource_name || r.resource_id?.split('/').pop(), redundancy: r.zone_redundant ? 'Zone Redundant' : r.ha_enabled ? 'HA' : 'Single Instance', sla: r.sla || 'N/A', availability: r.availability || 'N/A' }))}
-              emptyMsg="No resilience data available"
-            />
-          ) : (
-            <ResiliencePanel resources={filteredResources} />
-          )}
+          {moduleListMode ? rsReport : <ResiliencePanel resources={filteredResources} />}
         </div>
       )}
-      {tab === 'reports' && (
-        <DataTable
-          title="Resilience & SLA Report"
-          exportFilename="resilience-sla"
-          columns={[
-            { key: 'name', label: 'Resource' },
-            { key: 'resource_type', label: 'Type' },
-            { key: 'location', label: 'Location' },
-            { key: 'sla', label: 'SLA' },
-            { key: 'availability', label: 'Availability' },
-            { key: 'redundancy', label: 'Redundancy' },
-          ]}
-          data={filteredResources.map(r => ({ ...r, name: r.name || r.resource_name || r.resource_id?.split('/').pop(), redundancy: r.zone_redundant ? 'Zone Redundant' : r.ha_enabled ? 'HA' : 'Single Instance', sla: r.sla || 'N/A', availability: r.availability || 'N/A' }))}
-          emptyMsg="No resilience data available"
-        />
-      )}
+      {tab === 'reports' && rsReport}
       {tab === 'ai' && <ResilienceAIAnalysis />}
     </div>
   )
@@ -3647,6 +3638,42 @@ function LicensingViewEnhanced({ data, filteredResources, moduleListMode, setMod
   const [tab, setTab] = React.useState('dashboard')
   const opps = data?.licensing_opportunities ?? []
   const reservations = data?.active_reservations ?? []
+  const recs = data?.reservation_recommendations ?? []
+  // Show BOTH the (often thin) licensing opportunities AND the richer reservation recommendations.
+  const licReport = (
+    <div className="space-y-4">
+      {recs.length > 0 && (
+        <DataTable
+          title="Reservation (RI) Recommendations"
+          exportFilename="reservation-recommendations"
+          columns={[
+            { key: 'resource_type', label: 'Resource Type', kind: 'resourceType', filterable: true },
+            { key: 'sku', label: 'SKU' },
+            { key: 'term', label: 'Term', filterable: true },
+            { key: 'recommended_quantity', label: 'Qty' },
+            { key: 'net_savings_monthly', label: 'Net Savings/mo', render: v => v != null ? `$${Number(v).toFixed(2)}` : '\u2014' },
+            { key: 'scope', label: 'Scope', filterable: true },
+            { key: 'look_back_period', label: 'Look-back' },
+          ]}
+          data={recs}
+          emptyMsg="No reservation recommendations."
+        />
+      )}
+      <DataTable
+        title="Licensing Opportunities Report"
+        exportFilename="licensing-opportunities"
+        columns={[
+          { key: 'resource_name', label: 'Resource' },
+          { key: 'resource_type', label: 'Type', kind: 'resourceType', filterable: true },
+          { key: 'opportunity_type', label: 'Opportunity', filterable: true },
+          { key: 'savings_potential', label: 'Savings', render: v => v != null && v !== '' ? (typeof v === 'number' ? `$${v.toLocaleString()}` : v) : '\u2014' },
+          { key: 'recommendation', label: 'Recommendation', render: v => v ? <span title={v} className="block max-w-[26rem] truncate">{v}</span> : '\u2014' },
+        ]}
+        data={opps}
+        emptyMsg={recs.length ? 'No additional licensing opportunities (Azure Hybrid Benefit) detected.' : 'No licensing opportunities or reservation recommendations found.'}
+      />
+    </div>
+  )
   return (
     <div className="space-y-4">
       <ModuleTabBar tabs={[
@@ -3659,24 +3686,10 @@ function LicensingViewEnhanced({ data, filteredResources, moduleListMode, setMod
             <SharedKPI label="Licensing Opportunities" value={opps.length} color="green" icon={DollarSign} />
             <SharedKPI label="Active Reservations" value={reservations.length} color="blue" icon={Shield} />
             <SharedKPI label="Over-Commitment" value={`$${(data?.reservation_over_commitment_usd || 0).toLocaleString()}`} color="red" icon={AlertTriangle} />
-            <SharedKPI label="Recommendations" value={data?.reservation_recommendations?.length || 0} color="purple" icon={Lightbulb} />
+            <SharedKPI label="RI Recommendations" value={recs.length} color="purple" icon={Lightbulb} />
           </div>
           <ModuleViewToggle label="Licensing & Reservation" listMode={moduleListMode} onToggle={setModuleListMode} />
-          {moduleListMode ? (
-            <DataTable
-              title="Licensing Opportunities Report"
-              exportFilename="licensing-opportunities"
-              columns={[
-                { key: 'resource_name', label: 'Resource' },
-                { key: 'resource_type', label: 'Type' },
-                { key: 'opportunity_type', label: 'Opportunity' },
-                { key: 'savings_potential', label: 'Savings' },
-                { key: 'recommendation', label: 'Recommendation' },
-              ]}
-              data={opps}
-              emptyMsg="No licensing opportunities found"
-            />
-          ) : (
+          {moduleListMode ? licReport : (
             <>
               <LicensingHero opps={opps} />
               <LicensingPanel licensingOpportunities={opps} />
@@ -3690,21 +3703,7 @@ function LicensingViewEnhanced({ data, filteredResources, moduleListMode, setMod
           )}
         </div>
       )}
-      {tab === 'reports' && (
-        <DataTable
-          title="Licensing Opportunities Report"
-          exportFilename="licensing-opportunities"
-          columns={[
-            { key: 'resource_name', label: 'Resource' },
-            { key: 'resource_type', label: 'Type' },
-            { key: 'opportunity_type', label: 'Opportunity' },
-            { key: 'savings_potential', label: 'Savings' },
-            { key: 'recommendation', label: 'Recommendation' },
-          ]}
-          data={opps}
-          emptyMsg="No licensing opportunities found"
-        />
-      )}
+      {tab === 'reports' && licReport}
     </div>
   )
 }

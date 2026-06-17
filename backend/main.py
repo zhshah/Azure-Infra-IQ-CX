@@ -3910,6 +3910,51 @@ async def finops_cost_explorer(query: FinOpsCostExplorerQuery):
 
 # ── Cost Allocation ────────────────────────────────────────────────────────────
 
+# ── FinOps subscription-name resolution (GUID → display name) ───────────────────
+_SUB_NAME_CACHE: Dict[str, str] = {}
+_SUB_NAME_CACHE_TS: float = 0.0
+
+
+def _sub_name_map() -> Dict[str, str]:
+    """Cached {subscription_id: display_name} (1h TTL) so FinOps/cost views show
+    real subscription names instead of raw GUIDs without an Azure call per request."""
+    global _SUB_NAME_CACHE, _SUB_NAME_CACHE_TS
+    import time as _t
+    now = _t.time()
+    if _SUB_NAME_CACHE and (now - _SUB_NAME_CACHE_TS) < 3600:
+        return _SUB_NAME_CACHE
+    names: Dict[str, str] = {}
+    try:
+        from services import finops_data_service as _fds
+        names = _fds.get_subscription_names() or {}
+    except Exception as exc:
+        logger.debug("sub-name map fetch failed: %s", exc)
+    if names:
+        _SUB_NAME_CACHE = names
+        _SUB_NAME_CACHE_TS = now
+    return _SUB_NAME_CACHE or names
+
+
+def _apply_sub_names(report, dimension: str):
+    """Remap a FinOps allocation report's subscription-GUID dimension_values to
+    display names (keeps the GUID when a name can't be resolved)."""
+    try:
+        if report is None or "subscription" not in (dimension or "").lower():
+            return report
+        names = _sub_name_map()
+        if not names:
+            return report
+        for it in (getattr(report, "items", None) or []):
+            dv = getattr(it, "dimension_value", "") or ""
+            mapped = names.get(dv)
+            if mapped:
+                it.dimension_value = mapped
+        return report
+    except Exception as exc:
+        logger.debug("apply_sub_names failed: %s", exc)
+        return report
+
+
 def _warehouse_allocation(dimension: str) -> Optional[FinOpsAllocationReport]:
     """Build a cost-allocation report from the warehouse (Azure SQL) so the tab
     loads instantly from stored data when live Cost Management is slow/throttled."""
@@ -4129,16 +4174,17 @@ async def finops_allocation(
     # 1. Warehouse-first: instant paint from stored data (sub-second).
     wh = await loop.run_in_executor(_pool, lambda: _warehouse_allocation(dimension))
     if wh is not None and wh.items:
-        return wh
+        return _apply_sub_names(wh, dimension)
     # 2. No warehouse data → bounded live query, else 503.
     try:
-        return await asyncio.wait_for(
+        live = await asyncio.wait_for(
             loop.run_in_executor(
                 _pool,
                 lambda: finops_svc.get_cost_allocation(dimension=dimension, time_range=time_range),
             ),
             timeout=12,
         )
+        return _apply_sub_names(live, dimension)
     except Exception as exc:
         logger.warning("finops_allocation live failed/slow: %s", exc)
         raise HTTPException(status_code=503, detail="Cost allocation temporarily unavailable — retry shortly")
