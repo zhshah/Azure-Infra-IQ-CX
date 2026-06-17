@@ -468,8 +468,8 @@ const ALL_COLS = [
   { key: 'score_label',               label: 'Status',            sortable: true,  alwaysVisible: false, defaultVisible: true  },
   { key: 'final_score',               label: 'Score',             sortable: true,  alwaysVisible: false, defaultVisible: true  },
   { key: 'cost_current_month',        label: 'Cost / Mo',         sortable: true,  alwaysVisible: false, defaultVisible: true  },
-  { key: 'primary_utilization_pct',   label: 'Utilisation',       sortable: true,  alwaysVisible: false, defaultVisible: true  },
-  { key: 'daily_costs',               label: '30-Day Trend',      sortable: false, alwaysVisible: false, defaultVisible: true  },
+  { key: 'primary_utilization_pct',   label: 'Utilisation (30d)', sortable: true,  alwaysVisible: false, defaultVisible: true  },
+  { key: 'daily_costs',               label: 'Cost Trend (MoM)',  sortable: false, alwaysVisible: false, defaultVisible: true  },
   { key: 'estimated_monthly_savings', label: 'Est. Savings',      sortable: true,  alwaysVisible: false, defaultVisible: true  },
   { key: 'connections',               label: 'Map',               sortable: false, alwaysVisible: false, defaultVisible: true  },
   { key: 'ai_action',                 label: 'Advisor',           sortable: false, alwaysVisible: false, defaultVisible: true  },
@@ -1464,15 +1464,34 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
                         </td>
                       )}
 
-                      {/* Sparkline + trend */}
+                      {/* Cost trend — month-over-month (uses data that loads on the fast open) */}
                       {vis.has('daily_costs') && (
                         <td className="px-3 py-3">
-                          <div className="flex flex-col gap-1">
-                            <SparkLine data={r.daily_costs} anomaly={r.is_anomaly} />
-                            <span className={clsx('text-xs', tr.cls)}>
-                              {tr.icon} {tr.label}
-                            </span>
-                          </div>
+                          {(() => {
+                            const curr = r.cost_current_month ?? 0
+                            const prev = r.cost_previous_month ?? 0
+                            if (curr <= 0 && prev <= 0)
+                              return <span className="text-xs text-gray-600">—</span>
+                            if (prev <= 0 && curr > 0)
+                              return <span className="text-xs text-blue-400" title={`No spend last month · ${fmt(curr)} this month`}>↑ New</span>
+                            if (curr <= 0 && prev > 0)
+                              return <span className="text-xs text-green-400" title={`${fmt(prev)} last month · none this month`}>↓ Stopped</span>
+                            const max  = Math.max(curr, prev) || 1
+                            const pct  = r.cost_delta_pct ?? 0
+                            const up   = pct > 0
+                            const flat = Math.abs(pct) < 0.5
+                            return (
+                              <div className="flex items-center gap-2" title={`Last month ${fmt(prev)} → this month ${fmt(curr)}${r.cost_delta_is_mtd ? ' (month-to-date)' : ''}`}>
+                                <div className="flex items-end gap-0.5 h-6">
+                                  <div className="w-1.5 rounded-sm bg-gray-600" style={{ height: `${Math.max(2, (prev / max) * 24)}px` }} />
+                                  <div className={clsx('w-1.5 rounded-sm', flat ? 'bg-gray-500' : up ? 'bg-red-500/70' : 'bg-green-500/70')} style={{ height: `${Math.max(2, (curr / max) * 24)}px` }} />
+                                </div>
+                                <span className={clsx('text-xs tabular-nums', flat ? 'text-gray-500' : up ? 'text-red-400' : 'text-green-400')}>
+                                  {flat ? '→' : up ? '▲' : '▼'} {fmtPct(pct)}
+                                </span>
+                              </div>
+                            )
+                          })()}
                         </td>
                       )}
 
