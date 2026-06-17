@@ -5,6 +5,7 @@ import {
 } from 'recharts'
 
 import { SCORE_HEX as SCORE_COLOR } from '../scoreColors'
+import { ChartCardSkeleton } from './shared/Skeleton'
 
 function CustomDot(props) {
   const { cx, cy, payload, onDotClick } = props
@@ -52,7 +53,7 @@ export default function WasteQuadrant({ resources = [], onResourceClick }) {
       score_label: r.score_label,
     }))
 
-  if (!data.length) return null
+  if (!data.length) return <ChartCardSkeleton height={300} />
 
   const maxCost = Math.max(...data.map(d => d.cost)) * 1.1
   const MID_UTIL = 30  // X split: low vs high utilisation

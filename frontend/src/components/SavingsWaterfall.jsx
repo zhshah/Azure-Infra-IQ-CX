@@ -3,6 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, LabelList,
 } from 'recharts'
+import { ChartCardSkeleton } from './shared/Skeleton'
 
 const CATEGORY_COLORS = {
   'Orphaned Resources': '#f97316',
@@ -54,7 +55,7 @@ export default function SavingsWaterfall({ recommendations = [], resources = [] 
   const data = buildWaterfallData(recommendations, resources)
   const total = data.reduce((s, d) => s + d.value, 0)
 
-  if (!data.length) return null
+  if (!data.length) return <ChartCardSkeleton height={220} />
 
   return (
     <div className="card">

@@ -4,6 +4,7 @@ import {
   ResponsiveContainer, Cell, Legend,
 } from 'recharts'
 import { PieChart as PieIcon } from 'lucide-react'
+import { ChartCardSkeleton } from './shared/Skeleton'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -115,7 +116,7 @@ export default function WasteByCategory({ resources = [], onBarClick }) {
 
   const chartData = useMemo(() => buildCategoryData(resources), [resources])
 
-  if (!chartData.length) return null
+  if (!chartData.length) return <ChartCardSkeleton height={240} />
 
   const totalWaste = chartData.reduce((s, d) => s + d.total, 0)
 

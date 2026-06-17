@@ -733,6 +733,30 @@ async def _build_dashboard(
         except Exception as _che:
             logger.warning("Dashboard: cost snapshot hydrate failed: %s", _che)
 
+    # ── Quick 7-day live paint (last resort: fresh/large tenant with no snapshot) ──
+    # If the total-daily series is STILL empty after the snapshot hydrate (e.g. a
+    # large or brand-new tenant whose background cost snapshot hasn't completed yet),
+    # run a CHEAP 7-day live total-daily query so the home SpendTrend is never empty
+    # on first open. Same look, just a shorter window; the full 30/60-day series fills
+    # in via the background refresh + snapshot. Feature-flagged + best-effort (on any
+    # error we keep today's behaviour: an empty series that the snapshot later fills).
+    if skip_metrics and _cost_series_empty(total_daily_cm, total_daily_pm) and os.getenv("QUICK_COST_PAINT", "1") != "0":
+        try:
+            _q_cm, _q_pm = await _guarded(
+                loop.run_in_executor(executor, partial(get_total_daily_costs, sub_ids, 7)),
+                ([], []), timeout=45)
+            # A 7-day window doesn't reach the previous month, so its prev series is
+            # all-zero — drop it so the trend shows a clean current-month line rather
+            # than a flat $0 comparison line.
+            if _q_pm and not any(float(v or 0) for v in _q_pm):
+                _q_pm = []
+            if _q_cm or _q_pm:
+                total_daily_cm, total_daily_pm = _q_cm, _q_pm
+                logger.info("Dashboard: quick 7-day live cost paint (%d cm / %d pm days)",
+                            len(_q_cm or []), len(_q_pm or []))
+        except Exception as _qe:
+            logger.debug("Quick 7-day cost paint skipped: %s", _qe)
+
 
     if resource_group_filter:
         resources = [r for r in resources if r["resource_group"].lower() == resource_group_filter.lower()]
@@ -818,9 +842,14 @@ async def _build_dashboard(
     _metrics_ttl_hours = float(settings_svc.get_value("metrics_cache_ttl_hours", 6.0))
     _metrics_display_ttl_hours = float(settings_svc.get_value("metrics_display_ttl_hours", 24.0))
     _cached_metrics_raw: dict[str, dict] = {}
-    if not refresh:
-        # Use the cache whenever this is NOT a forced refresh. On the fast path
-        # use the longer display TTL so the quadrant is never empty.
+    # Hydrate persisted utilisation metrics when this is NOT a forced refresh, OR
+    # whenever we're on the FAST path (skip_metrics). A fast open never pulls live
+    # Monitor data, so without the `or skip_metrics` a forced-refresh fast open — and
+    # BOTH the initial open and the Refresh button send refresh=true with fast=true —
+    # would blank the utilisation that IS available in the metrics snapshot. On the
+    # FULL path, refresh=true still bypasses the delta cache to force fresh Monitor calls.
+    if (not refresh) or skip_metrics:
+        # On the fast path use the longer display TTL so utilisation is never empty.
         _load_ttl = _metrics_display_ttl_hours if skip_metrics else _metrics_ttl_hours
         # L2 (Redis) cache-aside: short TTL so repeated dashboard opens skip the
         # SQL round-trip while staying fresh relative to the snapshot job.
@@ -1346,12 +1375,12 @@ async def _build_dashboard(
             "app_kind":             r.get("app_kind"),
             "runtime_stack":        r.get("runtime_stack"),
             "last_modified":        r.get("last_modified"),
-            "custom_domain_count":  r.get("custom_domain_count", 0),
-            "health_check_enabled": r.get("health_check_enabled", False),
+            "custom_domain_count":  (r.get("custom_domain_count") or 0),
+            "health_check_enabled": (r.get("health_check_enabled") or False),
             "health_check_path":    r.get("health_check_path"),
             "ssl_expiry_date":      r.get("ssl_expiry_date"),
-            "slot_count":           r.get("slot_count", 0),
-            "has_linked_storage":   r.get("has_linked_storage", False),
+            "slot_count":           (r.get("slot_count") or 0),
+            "has_linked_storage":   (r.get("has_linked_storage") or False),
             "app_state":            r.get("app_state"),
             "storage_last_access_tracking": storage_signal.last_access_tracking_enabled if storage_signal else False,
             "storage_has_lifecycle_policy":  storage_signal.has_lifecycle_policy          if storage_signal else False,
@@ -1536,14 +1565,26 @@ async def _build_dashboard(
     await report("assembling", "Assembling dashboard…", 92)
 
     # ── Build ResourceMetrics list ──────────────────────────────────────────
+    # Build per-resource so ONE malformed resource (e.g. an enrichment field that came
+    # back None from a transiently-failing Azure API in a large tenant) is skipped with
+    # a warning rather than raising a ValidationError that blanks the ENTIRE dashboard.
     _INTERNAL_KEYS = {"advisor_recommendations", "savings_basis"}
-    resource_metrics_list: List[ResourceMetrics] = [
-        ResourceMetrics(
-            **{k: v for k, v in rd.items() if k not in _INTERNAL_KEYS},
-            advisor_recommendations=[AdvisorRecommendation(**a) for a in rd["advisor_recommendations"]],
-        )
-        for rd in resource_dicts
-    ]
+    resource_metrics_list: List[ResourceMetrics] = []
+    _rm_skipped = 0
+    for rd in resource_dicts:
+        try:
+            resource_metrics_list.append(ResourceMetrics(
+                **{k: v for k, v in rd.items() if k not in _INTERNAL_KEYS},
+                advisor_recommendations=[AdvisorRecommendation(**a) for a in rd["advisor_recommendations"]],
+            ))
+        except Exception as _rme:
+            _rm_skipped += 1
+            logger.warning("Dashboard build: skipping resource %s (invalid field): %s",
+                           rd.get("resource_id") or rd.get("id") or rd.get("name"), _rme)
+    if _rm_skipped:
+        logger.warning("Dashboard build: skipped %d resource(s) with invalid fields, kept %d — "
+                       "rendering anyway instead of failing the whole build.",
+                       _rm_skipped, len(resource_metrics_list))
 
     # ── KPI ─────────────────────────────────────────────────────────────────
     total_curr  = sum(r.cost_current_month  for r in resource_metrics_list)
@@ -2416,7 +2457,7 @@ async def get_settings_endpoint():
         ai_cost_threshold_usd    = s.get("ai_cost_threshold_usd", 20.0),
         cache_ttl_seconds        = s.get("cache_ttl_seconds", 1800),
         demo_mode                = s.get("demo_mode", False),
-        auto_refresh_interval_hours = int(s.get("auto_refresh_interval_hours", 0)),
+        auto_refresh_interval_hours = _effective_auto_refresh_hours(),
         scan_scope_subscription_id = s.get("SCAN_SCOPE_SUBSCRIPTION_ID", ""),
         scan_scope_resource_group  = s.get("SCAN_SCOPE_RESOURCE_GROUP",  ""),
     )
@@ -2793,11 +2834,31 @@ async def _finops_cache_warmup_loop() -> None:
         await asyncio.sleep(_FINOPS_WARMUP_INTERVAL_SECONDS)
 
 
+def _effective_auto_refresh_hours() -> int:
+    """Resolve the effective auto-refresh interval (hours).
+
+    An EXPLICIT user setting always wins (including 0 = off). When the user has
+    never chosen one, default to env AUTO_REFRESH_INTERVAL_HOURS (default 1) so the
+    portal keeps itself fresh in the background out-of-the-box — independent of
+    whether any browser tab is open.
+    """
+    raw = settings_svc.get_value("auto_refresh_interval_hours", None)
+    if raw is not None:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    try:
+        return int(os.getenv("AUTO_REFRESH_INTERVAL_HOURS", "1"))
+    except (TypeError, ValueError):
+        return 1
+
+
 async def _background_refresh_loop() -> None:
     """Background task that periodically refreshes the full-scan cache."""
     global _is_refreshing, _refresh_started_ts, _next_refresh_ts
     while True:
-        interval_hours = int(settings_svc.get_value("auto_refresh_interval_hours", 0))
+        interval_hours = _effective_auto_refresh_hours()
         if interval_hours <= 0:
             # Scheduler disabled — sleep and re-check every minute
             _next_refresh_ts = None
@@ -2810,11 +2871,21 @@ async def _background_refresh_loop() -> None:
             await asyncio.sleep(wait_secs)
 
         # Double-check interval hasn't been disabled while we were sleeping
-        interval_hours = int(settings_svc.get_value("auto_refresh_interval_hours", 0))
+        interval_hours = _effective_auto_refresh_hours()
         if interval_hours <= 0:
             continue
 
         if _is_refreshing:
+            await asyncio.sleep(30)
+            continue
+
+        # Cross-replica lock so only ONE replica runs the scheduled scan. Without this,
+        # every replica scanned each interval and could overload the app (the prior
+        # "fell back to setup wizard" regression). "LOCAL" when Redis is absent → the
+        # in-process _is_refreshing flag still governs single-process behavior.
+        _lock_token = cache_svc.acquire_lock("lock:auto_refresh", ttl_seconds=1800)
+        if _lock_token is None:
+            logger.info("Auto-refresh: another replica is scanning — skipping this cycle")
             await asyncio.sleep(30)
             continue
 
@@ -2847,6 +2918,7 @@ async def _background_refresh_loop() -> None:
         finally:
             _is_refreshing = False
             _refresh_started_ts = None
+            cache_svc.release_lock("lock:auto_refresh", _lock_token)
         _schedule_next_refresh(interval_hours)
 
 
@@ -5847,7 +5919,7 @@ async def cache_status():
         except Exception:
             pass
 
-    interval_hours = int(settings_svc.get_value("auto_refresh_interval_hours", 0))
+    interval_hours = _effective_auto_refresh_hours()
 
     # Stale-guard: never report "refreshing" forever. If a scan has been running
     # longer than 4 minutes (slow/hung live build), surface it as not-refreshing

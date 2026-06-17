@@ -1667,16 +1667,27 @@ function AppInner() {
     setSelectedResourceGroup('')
   }, [])
 
-  // Poll /api/cache/status every 60s when dashboard is active
+  // Poll /api/cache/status when the dashboard is active. Poll faster while a refresh
+  // is in progress (so the badge + silent merge update promptly), back off when idle.
+  // This is what makes "Refreshing" reflect the SERVER's background job: it survives
+  // closing/reopening the tab or navigating away, because it resumes on mount and reads
+  // server truth rather than depending on the in-tab SSE stream staying open.
   React.useEffect(() => {
     if (!launched) return
     function pollCache() {
       api.getCacheStatus().then(s => setCacheStatus(s)).catch(() => {})
     }
     pollCache()
-    const id = setInterval(pollCache, 60_000)
+    const period = (refreshing || cacheStatus?.is_refreshing) ? 20_000 : 60_000
+    const id = setInterval(pollCache, period)
     return () => clearInterval(id)
-  }, [launched])
+  }, [launched, refreshing, cacheStatus?.is_refreshing])
+
+  // The "Refreshing" indicator is true when EITHER an in-tab scan (SSE) OR a server-side
+  // background refresh is running. Sourcing it from /api/cache/status (polled above)
+  // means it survives tab close / navigation — the passive job keeps running server-side
+  // and the badge reflects it on the next poll / reopen.
+  const isRefreshing = refreshing || !!cacheStatus?.is_refreshing
 
   // Listen for cross-component 'navigate' events (e.g. from DependencyGraphView)
   React.useEffect(() => {
@@ -2115,22 +2126,22 @@ function AppInner() {
           )}
           <button
             onClick={() => load(true)}
-            disabled={refreshing}
+            disabled={isRefreshing}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
               padding: '6px 14px', borderRadius: 8, border: 'none',
               fontSize: 12, fontWeight: 600,
               background: '#0078d4', color: '#ffffff',
-              cursor: refreshing ? 'not-allowed' : 'pointer',
-              opacity: refreshing ? 0.6 : 1,
+              cursor: isRefreshing ? 'not-allowed' : 'pointer',
+              opacity: isRefreshing ? 0.6 : 1,
               transition: 'all 0.15s',
               boxShadow: '0 1px 4px rgba(0, 120, 212, 0.25)',
             }}
-            onMouseEnter={e => { if (!refreshing) e.currentTarget.style.background = '#2b88d8' }}
-            onMouseLeave={e => { if (!refreshing) e.currentTarget.style.background = '#0078d4' }}
+            onMouseEnter={e => { if (!isRefreshing) e.currentTarget.style.background = '#2b88d8' }}
+            onMouseLeave={e => { if (!isRefreshing) e.currentTarget.style.background = '#0078d4' }}
           >
-            <RefreshCw size={13} className={clsx(refreshing && 'animate-spin')} />
-            {refreshing ? 'Refreshing…' : 'Refresh'}
+            <RefreshCw size={13} className={clsx(isRefreshing && 'animate-spin')} />
+            {isRefreshing ? 'Refreshing…' : 'Refresh'}
           </button>
           {/* Signed-in user — profile photo + name/email + Logout (renders nothing in open/local mode) */}
           <div style={{ width: 1, height: 22, background: 'rgba(30, 41, 59, 0.8)', margin: '0 2px' }} />

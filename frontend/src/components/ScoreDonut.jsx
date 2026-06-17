@@ -2,6 +2,7 @@ import React from 'react'
 import {
   PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer
 } from 'recharts'
+import { ChartCardSkeleton } from './shared/Skeleton'
 
 const RADIAN = Math.PI / 180
 const renderCustomLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }) => {
@@ -29,7 +30,7 @@ const CustomTooltip = ({ active, payload }) => {
 }
 
 export default function ScoreDonut({ data, onSegmentClick }) {
-  if (!data?.length) return null
+  if (!data?.length) return <ChartCardSkeleton height={240} />
 
   return (
     <div className="card h-full flex flex-col">

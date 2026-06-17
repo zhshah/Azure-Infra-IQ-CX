@@ -4,6 +4,8 @@ Lists all resources across one or more subscriptions and identifies orphaned res
 from __future__ import annotations
 
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Set, Tuple
 
 from azure.mgmt.resource import ResourceManagementClient
@@ -15,47 +17,70 @@ from .azure_auth import get_credential, get_subscription_ids
 logger = logging.getLogger(__name__)
 
 
+def _list_resources_one_sub(credential, sub_id: str) -> List[Dict]:
+    """List all resources for a SINGLE subscription (unchanged output shape)."""
+    out: List[Dict] = []
+    try:
+        client = ResourceManagementClient(credential, sub_id)
+        for resource in client.resources.list(expand="tags,createdTime"):
+            rtype = (resource.type or "").lower()
+            # Capture instance count for App Service Plans (sku.capacity = number of instances)
+            instance_count: int | None = None
+            if rtype == "microsoft.web/serverfarms":
+                if hasattr(resource, "sku") and resource.sku and hasattr(resource.sku, "capacity"):
+                    instance_count = resource.sku.capacity
+            # Resource creation date — used for age-based scoring
+            created_at: str = ""
+            try:
+                if hasattr(resource, "created_time") and resource.created_time:
+                    created_at = resource.created_time.isoformat()
+                elif hasattr(resource, "system_data") and resource.system_data:
+                    cd = getattr(resource.system_data, "created_at", None)
+                    if cd:
+                        created_at = cd.isoformat()
+            except Exception:
+                pass
+            out.append({
+                "id":             resource.id or "",
+                "name":           resource.name or "",
+                "type":           rtype,
+                "resource_group": _extract_rg(resource.id or ""),
+                "location":       resource.location or "",
+                "sku":            _extract_sku(resource),
+                "tags":           dict(resource.tags or {}),
+                "subscription_id": sub_id,
+                "instance_count": instance_count,
+                "created_at":     created_at,
+            })
+    except Exception as exc:
+        logger.error("Failed to list resources for subscription %s: %s", sub_id, exc)
+    return out
+
+
 def list_all_resources(subscription_ids: Optional[List[str]] = None) -> List[Dict]:
-    """Return all resources across all given subscription IDs (defaults to configured list)."""
+    """Return all resources across all given subscription IDs (defaults to configured list).
+
+    Subscriptions are listed CONCURRENTLY with a small bounded thread pool so a tenant
+    with many subscriptions doesn't take N× a single subscription's time. Per-subscription
+    failures stay isolated (logged + skipped) exactly as before, and the returned shape is
+    unchanged. Concurrency is tunable via RESOURCE_LIST_CONCURRENCY (default 8); a single
+    subscription keeps the original sequential path.
+    """
     credential = get_credential()
     sub_ids = subscription_ids or get_subscription_ids()
 
     resources: List[Dict] = []
-    for sub_id in sub_ids:
+    if len(sub_ids) <= 1:
+        for sub_id in sub_ids:
+            resources.extend(_list_resources_one_sub(credential, sub_id))
+    else:
         try:
-            client = ResourceManagementClient(credential, sub_id)
-            for resource in client.resources.list(expand="tags,createdTime"):
-                rtype = (resource.type or "").lower()
-                # Capture instance count for App Service Plans (sku.capacity = number of instances)
-                instance_count: int | None = None
-                if rtype == "microsoft.web/serverfarms":
-                    if hasattr(resource, "sku") and resource.sku and hasattr(resource.sku, "capacity"):
-                        instance_count = resource.sku.capacity
-                # Resource creation date — used for age-based scoring
-                created_at: str = ""
-                try:
-                    if hasattr(resource, "created_time") and resource.created_time:
-                        created_at = resource.created_time.isoformat()
-                    elif hasattr(resource, "system_data") and resource.system_data:
-                        cd = getattr(resource.system_data, "created_at", None)
-                        if cd:
-                            created_at = cd.isoformat()
-                except Exception:
-                    pass
-                resources.append({
-                    "id":             resource.id or "",
-                    "name":           resource.name or "",
-                    "type":           rtype,
-                    "resource_group": _extract_rg(resource.id or ""),
-                    "location":       resource.location or "",
-                    "sku":            _extract_sku(resource),
-                    "tags":           dict(resource.tags or {}),
-                    "subscription_id": sub_id,
-                    "instance_count": instance_count,
-                    "created_at":     created_at,
-                })
-        except Exception as exc:
-            logger.error("Failed to list resources for subscription %s: %s", sub_id, exc)
+            max_workers = max(1, min(int(os.getenv("RESOURCE_LIST_CONCURRENCY", "8")), len(sub_ids)))
+        except (TypeError, ValueError):
+            max_workers = min(8, len(sub_ids))
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="reslist") as pool:
+            for fut in as_completed([pool.submit(_list_resources_one_sub, credential, s) for s in sub_ids]):
+                resources.extend(fut.result())
 
     logger.info("Found %d total resources across %d subscription(s)", len(resources), len(sub_ids))
     return resources

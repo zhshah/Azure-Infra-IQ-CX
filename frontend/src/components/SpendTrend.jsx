@@ -6,6 +6,7 @@ import {
 } from 'recharts'
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import clsx from 'clsx'
+import { SpendTrendSkeleton } from './shared/Skeleton'
 
 // Trailing zeros in current-month data beyond this count are billing lag, not real $0
 const MAX_PENDING_DAYS = 3
@@ -255,7 +256,7 @@ export default function SpendTrend({ resources = [], totalDailyCm = [], totalDai
     return { mtdTotal, prevTotal, dailyAvg, projected, mtdPct, daysInMonth }
   }, [data, currLen, prevLen, currTotals, prevTotals])
 
-  if (!data.length || !stats) return null
+  if (!data.length || !stats) return <SpendTrendSkeleton />
 
   const avgLine = Math.round(stats.dailyAvg * 100) / 100
 

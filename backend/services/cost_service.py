@@ -5,8 +5,10 @@ broken down to individual resource IDs. Supports multiple subscriptions.
 from __future__ import annotations
 
 import logging
+import os
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, parse_qs
 from dateutil.relativedelta import relativedelta
@@ -209,26 +211,64 @@ def get_two_month_costs(
     previous: Dict[str, float] = {}
     first_error: Optional[str] = None
 
-    for i, sub_id in enumerate(sub_ids):
-        # Add a small delay between subscriptions to avoid tenant-level 429s
-        # (Cost Management API rate limits are shared across all subscriptions in a tenant)
-        if i > 0:
-            time.sleep(3.0)
+    def _one_sub(sub_id: str):
         scope = f"/subscriptions/{sub_id}"
         logger.info("[%s] Fetching current month costs (%s – %s)", sub_id, curr_start.date(), curr_end.date())
-        curr, err = _query_costs(client, scope, curr_start, curr_end)
-        if err and not first_error:
-            first_error = err
-        # Brief pause between current and previous month queries for the same sub
-        time.sleep(2.0)
+        curr, err_c = _query_costs(client, scope, curr_start, curr_end)
         logger.info("[%s] Fetching previous month costs (%s – %s)", sub_id, prev_start.date(), prev_end.date())
-        prev, err = _query_costs(client, scope, prev_start, prev_end)
+        prev, err_p = _query_costs(client, scope, prev_start, prev_end)
+        return curr, prev, (err_c or err_p)
+
+    def _merge(curr, prev, err):
+        nonlocal first_error
         if err and not first_error:
             first_error = err
         for rid, cost in curr.items():
             current[rid] = current.get(rid, 0.0) + cost
         for rid, cost in prev.items():
             previous[rid] = previous.get(rid, 0.0) + cost
+
+    try:
+        seq_max = int(os.getenv("COST_SEQUENTIAL_MAX", "12"))
+    except (TypeError, ValueError):
+        seq_max = 12
+
+    if len(sub_ids) <= seq_max:
+        # Small / medium tenants — keep the ORIGINAL gentle sequential path with brief
+        # spacing between Cost Management calls. Cost Management's rate limit is tenant-
+        # shared, so for the common case (a handful of subscriptions) staying sequential
+        # avoids 429s entirely — exactly the well-behaved behavior that works today.
+        for i, sub_id in enumerate(sub_ids):
+            if i > 0:
+                time.sleep(3.0)
+            scope = f"/subscriptions/{sub_id}"
+            logger.info("[%s] Fetching current month costs (%s – %s)", sub_id, curr_start.date(), curr_end.date())
+            curr, err = _query_costs(client, scope, curr_start, curr_end)
+            if err and not first_error:
+                first_error = err
+            time.sleep(2.0)
+            logger.info("[%s] Fetching previous month costs (%s – %s)", sub_id, prev_start.date(), prev_end.date())
+            prev, err = _query_costs(client, scope, prev_start, prev_end)
+            if err and not first_error:
+                first_error = err
+            for rid, cost in curr.items():
+                current[rid] = current.get(rid, 0.0) + cost
+            for rid, cost in prev.items():
+                previous[rid] = previous.get(rid, 0.0) + cost
+    else:
+        # LARGE tenants (many subscriptions) — the sequential 3 s + 2 s spacing above would
+        # take ~N×9 s (e.g. ~8.5 min at 100 subs), the "never finishes / shows empty" symptom
+        # at scale. Run a BOUNDED number of subscriptions concurrently instead; the existing
+        # _query_with_retry backs off on 429. Concurrency stays low to respect the tenant-
+        # shared limit. Tunable via COST_SEQUENTIAL_MAX (threshold) and COST_QUERY_CONCURRENCY.
+        try:
+            max_workers = max(2, min(int(os.getenv("COST_QUERY_CONCURRENCY", "4")), len(sub_ids)))
+        except (TypeError, ValueError):
+            max_workers = 4
+        logger.info("Cost: %d subscriptions — using bounded concurrency (%d workers)", len(sub_ids), max_workers)
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="cost2mo") as pool:
+            for fut in as_completed([pool.submit(_one_sub, s) for s in sub_ids]):
+                _merge(*fut.result())
 
     # ── Cache fallback on rate-limit / total failure ───────────────────────────
     if first_error and not current and not previous:
@@ -480,6 +520,7 @@ def get_monthly_cost_history(
 
 def get_total_daily_costs(
     subscription_ids: Optional[List[str]] = None,
+    days: Optional[int] = None,
 ) -> Tuple[List[float], List[float]]:
     """
     Returns (curr_month_daily_totals, prev_month_daily_totals) as flat arrays.
@@ -487,6 +528,11 @@ def get_total_daily_costs(
     Queries daily costs aggregated by date only — no ResourceId grouping — so the
     response is at most ~62 rows (prev month + current month to today).  This avoids
     the 1 000-row pagination problem that truncates per-resource daily data.
+
+    When ``days`` is given (e.g. 7) the query window is narrowed to just the last
+    ``days`` calendar days — a lighter, faster query used for the instant "quick
+    paint" of the home spend trend on a fast open. The return shape is unchanged
+    (arrays keyed by calendar day); days outside the window are simply 0.
     """
     credential = get_credential()
     sub_ids    = subscription_ids or get_subscription_ids()
@@ -495,8 +541,11 @@ def get_total_daily_costs(
     now   = datetime.now(tz=timezone.utc)
     today = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
 
-    # Span: start of previous calendar month → end of today
-    first_of_prev = datetime(now.year, now.month, 1, tzinfo=timezone.utc) - relativedelta(months=1)
+    # Span: last `days` days (quick paint) OR start of previous calendar month → end of today
+    if days and days > 0:
+        first_of_prev = today - timedelta(days=days - 1)
+    else:
+        first_of_prev = datetime(now.year, now.month, 1, tzinfo=timezone.utc) - relativedelta(months=1)
     end            = datetime(now.year, now.month, now.day, 23, 59, 59, tzinfo=timezone.utc)
 
     query = QueryDefinition(

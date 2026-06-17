@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Brain, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import clsx from 'clsx'
+import { AIInsightSkeleton } from './shared/Skeleton'
 
 const PROVIDER_LABEL = {
   claude:       'Claude AI',
@@ -10,7 +11,8 @@ const PROVIDER_LABEL = {
 export default function AIInsightPanel({ narrative, provider, aiEnabled }) {
   const [collapsed, setCollapsed] = useState(false)
 
-  if (!aiEnabled || !narrative) return null
+  if (!aiEnabled) return null
+  if (!narrative) return <AIInsightSkeleton />
 
   return (
     <div className={clsx(

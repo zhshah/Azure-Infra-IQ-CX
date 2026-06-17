@@ -3,6 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   Legend, ResponsiveContainer, Cell,
 } from 'recharts'
+import { ChartCardSkeleton } from './shared/Skeleton'
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null
@@ -27,7 +28,7 @@ export default function CostByTypeBar({ data, onBarClick }) {
   const [showPrev,     setShowPrev]     = useState(true)
   const [activeBar,    setActiveBar]    = useState(null)
 
-  if (!data?.length) return null
+  if (!data?.length) return <ChartCardSkeleton height={260} />
 
   const chartData = data.slice(0, 12).map((d) => ({
     name:          d.display_name,

@@ -4,6 +4,7 @@ import {
   Leaf, Zap, Target, AlertTriangle, Flame, Info, BookmarkCheck, ArrowUpRight,
 } from 'lucide-react'
 import clsx from 'clsx'
+import { KpiCardsSkeleton } from './shared/Skeleton'
 
 // ── Formatters ─────────────────────────────────────────────────────────────────
 
@@ -200,7 +201,7 @@ export default function KPICards({ kpi, aiEnabled, totalCarbon = 0, tagComplianc
   //    a hook placed after this early return caused React error #310
   //    ("Rendered more hooks than during the previous render") when `kpi`
   //    transitioned from null → loaded and the hook count changed. ──
-  if (!kpi) return null
+  if (!kpi) return <KpiCardsSkeleton />
 
   const curr     = kpi.total_cost_current_month  ?? 0
   const prev     = kpi.total_cost_previous_month ?? 0
