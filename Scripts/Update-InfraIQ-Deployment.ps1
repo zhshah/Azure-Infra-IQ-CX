@@ -192,6 +192,14 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference     = 'SilentlyContinue'
+# Force UTF-8 I/O so `az acr build` can STREAM build logs that contain Unicode (e.g. the
+# vite build's check-mark U+2713) without the Windows console (cp1252) raising a
+# UnicodeEncodeError. That crash otherwise makes the build command exit NON-ZERO even
+# though the image built + pushed fine, which then SKIPS the image swap — the #1 cause of
+# "build failed but the image is actually in ACR". (Belt-and-suspenders: the deploy step
+# below ALSO verifies the pushed tag, so the swap proceeds regardless.)
+$env:PYTHONIOENCODING = 'utf-8'
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 if (-not $TenantId) { $TenantId = '' }
 
 # ── Output folder + transcript ────────────────────────────────────────────────
@@ -205,7 +213,7 @@ try { Start-Transcript -Path $transcript -Force | Out-Null } catch { }
 $script:Results   = New-Object System.Collections.Generic.List[object]
 $script:NextSteps = New-Object System.Collections.Generic.List[string]
 $script:Diag      = [ordered]@{}
-$script:Diag['meta'] = [ordered]@{ generatedUtc = (Get-Date).ToUniversalTime().ToString('o'); subscriptionId = $SubscriptionId; resourceGroup = $ResourceGroup; tool = 'Update-InfraIQ-Deployment.ps1'; version = '2.3' }
+$script:Diag['meta'] = [ordered]@{ generatedUtc = (Get-Date).ToUniversalTime().ToString('o'); subscriptionId = $SubscriptionId; resourceGroup = $ResourceGroup; tool = 'Update-InfraIQ-Deployment.ps1'; version = '2.4' }
 $script:OpenAiResourceId = $null
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -865,14 +873,26 @@ if ($CollectOnly) {
         if ($PSCmdlet.ShouldProcess($AcrName, "az acr build $imageRef from $buildPath")) {
             Write-Host ("  building image {0} in ACR {1} (this can take several minutes)..." -f $imageRef, $AcrName) -ForegroundColor Cyan
             & az acr build --registry $AcrName --image $imageRef --file (Join-Path $buildPath 'Dockerfile') $buildPath --only-show-errors 2>&1 | Tee-Object -FilePath (Join-Path $OutputPath 'acr_build.log')
-            if ($LASTEXITCODE -eq 0) {
+            $buildExit = $LASTEXITCODE
+            # The `az acr build` CLIENT can exit non-zero on Windows if its LOG STREAM hits a
+            # console-encoding error, even though the ACR build TASK completed and PUSHED the
+            # image server-side. So don't trust the exit code alone — verify the image tag
+            # actually exists in the registry and proceed with the swap when it does.
+            $imgPushed = $false
+            $tagList = Invoke-AzText @('acr','repository','show-tags','-n',$AcrName,'--repository',$ImageName,'-o','tsv')
+            if ($tagList.ok) { $imgPushed = (($tagList.text -split "`r?`n") | ForEach-Object { $_.Trim() }) -contains $ImageTag }
+            if ($buildExit -eq 0) {
                 Add-Result 'Build image' 'FIXED' $fullImageRef
-                if ($app -and $PSCmdlet.ShouldProcess($ContainerAppName, "Update image to $fullImageRef (new revision, no delete)")) {
-                    & az containerapp update -n $ContainerAppName -g $ResourceGroup --image $fullImageRef --only-show-errors | Out-Null
-                    if ($LASTEXITCODE -eq 0) { Add-Result 'Deploy image' 'FIXED' "App now runs $fullImageRef (ingress/env/networking unchanged)." }
-                    else { Add-Result 'Deploy image' 'FAIL' "Update failed — likely AcrPull missing. Run with -AssignPermissions, or: az containerapp registry set -n $ContainerAppName -g $ResourceGroup --server $AcrName.azurecr.io --identity system" }
-                }
-            } else { Add-Result 'Build image' 'FAIL' 'az acr build failed (check ACR access / Dockerfile).' }
+            } elseif ($imgPushed) {
+                Add-Result 'Build image' 'FIXED' ("$fullImageRef - the 'az acr build' client exited non-zero (usually a Windows console log-encoding hiccup), but the image WAS built and pushed to ACR (verified by tag). Proceeding with the swap.")
+            } else {
+                Add-Result 'Build image' 'FAIL' 'az acr build failed AND the image tag is not present in ACR (check ACR access / Dockerfile / network reachability to a private ACR).'
+            }
+            if (($buildExit -eq 0 -or $imgPushed) -and $app -and $PSCmdlet.ShouldProcess($ContainerAppName, "Update image to $fullImageRef (new revision, no delete)")) {
+                & az containerapp update -n $ContainerAppName -g $ResourceGroup --image $fullImageRef --only-show-errors | Out-Null
+                if ($LASTEXITCODE -eq 0) { Add-Result 'Deploy image' 'FIXED' "App now runs $fullImageRef (ingress/env/networking unchanged)." }
+                else { Add-Result 'Deploy image' 'FAIL' "Update failed - likely AcrPull missing. A normal run assigns it; or: az containerapp registry set -n $ContainerAppName -g $ResourceGroup --server $AcrName.azurecr.io --identity system" }
+            }
         }
     }
 }
