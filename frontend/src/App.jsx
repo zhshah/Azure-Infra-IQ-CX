@@ -1437,6 +1437,7 @@ function AppInner() {
 
   const sseCleanup = useRef(null)
   const loadWatchdog = useRef(null)
+  const dataRef = useRef(null)   // mirrors `data` so a background refresh can avoid blanking the screen
 
   const load = useCallback(async (forceRefresh = false, rgFilter = selectedResourceGroup) => {
     // Clean up any existing SSE connection
@@ -1444,6 +1445,11 @@ function AppInner() {
       sseCleanup.current()
       sseCleanup.current = null
     }
+
+    // A background refresh = forceRefresh while a dashboard is ALREADY on screen.
+    // Keep that data fully intact and only swap it when the final payload is ready, so a
+    // live refresh never blanks the loaded dashboard with an empty/partial payload.
+    const hadData = !!dataRef.current
 
     setError(null)
     setProgressSteps([])
@@ -1490,23 +1496,36 @@ function AppInner() {
             setProgressSteps(prev => prev.includes(event.step) ? prev : [...prev, event.step])
           }
         } else if (event.type === 'partial' && event.data) {
-          // Complete-core dashboard arrived before the AI narrative + strategic
-          // panels finished. Render the full home view now; the remaining panels
-          // fill in when the final 'done' event lands.
           renderedSomething = true
-          setData(event.data)
-          setIsDemoMode(event.data.demo_mode ?? false)
-          setAiProvider(event.data.ai_provider ?? 'none')
-          setSelectedResourceGroup(event.data.active_resource_group ?? '')
-          if (event.data.active_subscription_id) setSelectedSubscription(event.data.active_subscription_id)
-          setLoading(false)     // hide the full-screen overlay — show data immediately
-          setRefreshing(true)   // keep a subtle "finishing analysis…" indicator
+          // COLD load (nothing on screen yet): paint the partial immediately for a fast
+          // first render. BACKGROUND refresh (data already on screen): do NOT swap in the
+          // incomplete partial — it carries cost=0 and no assessments yet — keep the
+          // existing dashboard fully intact and only swap when the final 'done' arrives.
+          if (!hadData) {
+            setData(event.data)
+            setIsDemoMode(event.data.demo_mode ?? false)
+            setAiProvider(event.data.ai_provider ?? 'none')
+            setSelectedResourceGroup(event.data.active_resource_group ?? '')
+            if (event.data.active_subscription_id) setSelectedSubscription(event.data.active_subscription_id)
+            setLoading(false)     // hide the full-screen overlay — show data immediately
+          }
+          setRefreshing(true)   // subtle "refreshing…" indicator (existing data stays visible)
           setProgressPct(event.pct ?? 95)
         }
       },
       // onDone — full dashboard payload
       (dashboardData) => {
         renderedSomething = true
+        // NEVER-BLANK: a background refresh that comes back empty (transient cost/API
+        // throttle, cold replica) must not wipe the dashboard already on screen.
+        const newHasResources = !!(dashboardData && dashboardData.resources && dashboardData.resources.length)
+        if (hadData && !newHasResources) {
+          setRefreshing(false)
+          setProgressPct(100)
+          sseCleanup.current = null
+          if (loadWatchdog.current) { clearTimeout(loadWatchdog.current); loadWatchdog.current = null }
+          return
+        }
         setData(dashboardData)
         setIsDemoMode(dashboardData.demo_mode ?? false)
         setAiProvider(dashboardData.ai_provider ?? 'none')
@@ -1555,6 +1574,10 @@ function AppInner() {
 
     sseCleanup.current = cleanup
   }, [])
+
+  // Mirror `data` into a ref so load() (a stable useCallback) can tell whether a
+  // dashboard is already on screen and avoid blanking it during a background refresh.
+  useEffect(() => { dataRef.current = data }, [data])
 
   // Load settings once on startup.
   // - If cached data exists  → load it instantly, skip wizard entirely, no scan
