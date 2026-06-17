@@ -935,7 +935,32 @@ if ($CollectOnly) {
             }
             if (($buildExit -eq 0 -or $imgPushed) -and $app -and $PSCmdlet.ShouldProcess($ContainerAppName, "Update image to $fullImageRef (new revision, no delete)")) {
                 & az containerapp update -n $ContainerAppName -g $ResourceGroup --image $fullImageRef --only-show-errors | Out-Null
-                if ($LASTEXITCODE -eq 0) { Add-Result 'Deploy image' 'FIXED' "App now runs $fullImageRef (ingress/env/networking unchanged)." }
+                if ($LASTEXITCODE -eq 0) {
+                    Add-Result 'Deploy image' 'FIXED' "App now runs $fullImageRef (ingress/env/networking unchanged)."
+                    # A GREEN build can still CRASH on startup (bad dependency, runtime SyntaxError,
+                    # missing SQL grant, etc.). Verify the NEW revision actually reaches Healthy/Running
+                    # and the app answers, so a broken deploy is reported on THIS run, not the next one.
+                    $newRev = $null; $st = $null
+                    for ($h = 0; $h -lt 16; $h++) {
+                        Start-Sleep -Seconds 15
+                        $rv = Invoke-AzText @('containerapp','show','-n',$ContainerAppName,'-g',$ResourceGroup,'--query','properties.latestRevisionName','-o','tsv')
+                        if ($rv.ok) { $newRev = $rv.text.Trim() }
+                        if (-not $newRev) { continue }
+                        $st = Invoke-AzJson @('containerapp','revision','show','-n',$ContainerAppName,'-g',$ResourceGroup,'--revision',$newRev,'--query','{run:properties.runningState,health:properties.healthState}','-o','json')
+                        if ($st -and $st.health -eq 'Healthy' -and $st.run -eq 'Running') { break }
+                        if ($st -and ($st.run -eq 'Failed' -or $st.health -eq 'Unhealthy')) { break }
+                    }
+                    if ($st -and $st.health -eq 'Healthy' -and $st.run -eq 'Running') {
+                        Add-Result 'New revision health' 'PASS' "$newRev is Healthy/Running on the new image."
+                    } else {
+                        Add-Result 'New revision health' 'FAIL' ("$newRev did not reach Healthy/Running within ~4 min (run=$($st.run) health=$($st.health)) - the new image may be CRASHING on startup. Inspect: az containerapp logs show -n $ContainerAppName -g $ResourceGroup --revision $newRev --type console --tail 120")
+                        $script:NextSteps.Add("New revision $newRev is not healthy on $fullImageRef - check container console logs for a startup crash, then redeploy.")
+                    }
+                    if ($appFqdn) {
+                        try { $pv = Invoke-WebRequest -Uri ("https://{0}/api/version" -f $appFqdn) -UseBasicParsing -TimeoutSec 25; Add-Result 'Post-deploy probe /api/version' 'PASS' ("HTTP {0}: {1}" -f $pv.StatusCode, (($pv.Content) -replace '\s+',' ')) }
+                        catch { Add-Result 'Post-deploy probe /api/version' 'WARN' ("App not answering yet on the new image: {0}" -f $_.Exception.Message) }
+                    }
+                }
                 else { Add-Result 'Deploy image' 'FAIL' "Update failed - likely AcrPull missing. A normal run assigns it; or: az containerapp registry set -n $ContainerAppName -g $ResourceGroup --server $AcrName.azurecr.io --identity system" }
             }
         }
