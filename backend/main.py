@@ -6042,6 +6042,30 @@ class ProjectCreate(BaseModel):
     icon: Optional[str] = None
 
 
+class ProjectUpdate(BaseModel):
+    # Defined HERE (before the PUT /api/projects/{id} endpoint that uses it) so the
+    # FastAPI/Pydantic forward reference resolves at decoration time. It used to be defined
+    # only ~2700 lines later, which left an unresolved 'ProjectUpdate' forward ref and
+    # crashed OpenAPI schema generation with:
+    #   pydantic.errors.PydanticUndefinedAnnotation: name 'ProjectUpdate' is not defined
+    # All fields optional - update_project() only applies the ones provided.
+    name: Optional[str] = None
+    resource_ids: Optional[List[str]] = None
+    description: Optional[str] = None
+    color: Optional[str] = None
+    icon: Optional[str] = None
+    business_unit: Optional[str] = None
+    owner: Optional[str] = None
+    focus_area: Optional[str] = None
+    criticality: Optional[str] = None
+    environment: Optional[str] = None
+    dr_tier: Optional[str] = None
+    rto_target: Optional[str] = None
+    rpo_target: Optional[str] = None
+    project_id: Optional[str] = None
+    project_name: Optional[str] = None
+
+
 class ResourcesAddRemove(BaseModel):
     resource_ids: List[str]
 
@@ -8881,28 +8905,12 @@ from services.apex_agent_service import get_apex_agent_service
 from services.mcp_service import get_mcp_service
 
 # Projects API (extended for APEX workflow)
-
-class ProjectCreate(BaseModel):
-    project_name: str
-    description: Optional[str] = None
-    business_unit: Optional[str] = None
-    criticality: Optional[str] = None
-    rto_target: Optional[str] = None
-    rpo_target: Optional[str] = None
-    environment: Optional[str] = None
-    dr_tier: Optional[str] = None
-    owner: Optional[str] = None
-
-class ProjectUpdate(BaseModel):
-    project_name: Optional[str] = None
-    description: Optional[str] = None
-    business_unit: Optional[str] = None
-    criticality: Optional[str] = None
-    rto_target: Optional[str] = None
-    rpo_target: Optional[str] = None
-    environment: Optional[str] = None
-    dr_tier: Optional[str] = None
-    owner: Optional[str] = None
+# NOTE: ProjectCreate and ProjectUpdate are defined earlier, right next to the
+# /api/projects endpoints that use them. The duplicate definitions that used to live here
+# carried only 'project_name'-style fields, were unused by any endpoint, and (because
+# ProjectUpdate sat AFTER the PUT endpoint) caused a Pydantic forward-ref crash during
+# OpenAPI generation: PydanticUndefinedAnnotation: name 'ProjectUpdate' is not defined.
+# They were removed so the early, complete definitions are the single source of truth.
 
 class AgentExecutionRequest(BaseModel):
     agent_name: str

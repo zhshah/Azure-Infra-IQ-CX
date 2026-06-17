@@ -603,6 +603,31 @@ if ($doSql) {
     if (-not $sqlFqdn -or -not $SqlDatabaseName) { Add-Result 'Grant MI SQL access' 'FAIL' 'Need a resolved SQL server + database name.' }
     elseif (-not $appPrincipalId) { Add-Result 'Grant MI SQL access' 'FAIL' 'App has no system-assigned identity.' }
     else {
+        # PREREQUISITE: Azure SQL rejects EVERY Entra/AAD token ("server is not currently configured
+        # to accept this token") until an Azure AD admin is set on the SERVER — being subscription
+        # Owner / Global Admin is NOT enough by itself. If none is set, make the signed-in runner the
+        # SQL AAD admin (a control-plane call that also works against a PRIVATE SQL server). This is
+        # what then lets the grant below authenticate (public SQL) or lets the saved T-SQL be run from
+        # a VNet host as that same admin (private SQL).
+        if (-not $aadAdmin) {
+            try {
+                if (-not $me -or -not $me.id) { $me = Invoke-AzJson @('ad','signed-in-user','show','-o','json') }
+                $meId = $null; $meName = $null
+                if ($me) { $meId = $me.id; $meName = $(if ($me.userPrincipalName) { $me.userPrincipalName } else { $me.displayName }) }
+                if ($meId -and $PSCmdlet.ShouldProcess($SqlServerName, "Set SQL AAD admin = $meName")) {
+                    $setAdmin = Invoke-AzText @('sql','server','ad-admin','create','-g',$ResourceGroup,'-s',$SqlServerName,'--display-name',$meName,'--object-id',$meId)
+                    if ($setAdmin.ok) {
+                        $aadAdmin = $meName
+                        Add-Result 'SQL AAD admin (set)' 'FIXED' "Set '$meName' as the Azure AD admin on $SqlServerName - the managed-identity grant can now authenticate (or run the saved T-SQL from inside the VNet as this same admin)."
+                        Start-Sleep -Seconds 8
+                    } else {
+                        Add-Result 'SQL AAD admin (set)' 'WARN' ("Could not set the AAD admin automatically (need Owner / SQL Security Manager on the server): {0}" -f ($setAdmin.text -replace '\s+',' ').Trim())
+                    }
+                } elseif (-not $meId) {
+                    Add-Result 'SQL AAD admin (set)' 'WARN' 'Could not resolve the signed-in user object id to set as the SQL AAD admin.'
+                }
+            } catch { Add-Result 'SQL AAD admin (set)' 'WARN' ("Could not set the AAD admin: {0}" -f $_.Exception.Message) }
+        }
         $miName = $ContainerAppName
         $tsql = @"
 IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'$miName')
@@ -872,15 +897,29 @@ if ($CollectOnly) {
         $fullImageRef = '{0}.azurecr.io/{1}' -f $AcrName, $imageRef
         if ($PSCmdlet.ShouldProcess($AcrName, "az acr build $imageRef from $buildPath")) {
             Write-Host ("  building image {0} in ACR {1} (this can take several minutes)..." -f $imageRef, $AcrName) -ForegroundColor Cyan
-            & az acr build --registry $AcrName --image $imageRef --file (Join-Path $buildPath 'Dockerfile') $buildPath --only-show-errors 2>&1 | Tee-Object -FilePath (Join-Path $OutputPath 'acr_build.log')
+            # CRITICAL (Windows): do NOT pipe `az acr build` (no `| Tee-Object`, no `> file`). Piping/
+            # redirecting makes az's stdout a cp1252 PIPE, so the vite build's check-mark (U+2713) hits
+            # `UnicodeEncodeError: 'charmap' codec can't encode '\u2713'` and KILLS the build client at
+            # ~step 7/20 — BEFORE the image is pushed (that's the "build failed AND tag not present"
+            # we saw). Writing straight to the console (code page forced to UTF-8 below) lets Python use
+            # its Unicode console writer so the ✓ streams fine. The whole run is already captured in
+            # console-transcript.txt for the evidence bundle.
+            $env:PYTHONIOENCODING = 'utf-8'
+            try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+            try { chcp 65001 2>&1 | Out-Null } catch { }
+            & az acr build --registry $AcrName --image $imageRef --file (Join-Path $buildPath 'Dockerfile') $buildPath --only-show-errors
             $buildExit = $LASTEXITCODE
-            # The `az acr build` CLIENT can exit non-zero on Windows if its LOG STREAM hits a
-            # console-encoding error, even though the ACR build TASK completed and PUSHED the
-            # image server-side. So don't trust the exit code alone — verify the image tag
-            # actually exists in the registry and proceed with the swap when it does.
+            # Even with the fix above, a console hiccup could still exit the CLIENT non-zero while the
+            # ACR build TASK keeps building + pushing server-side. So don't trust the exit code alone —
+            # POLL the registry for the pushed tag (give a server-side build time to finish) and proceed
+            # with the swap as soon as the tag appears.
             $imgPushed = $false
-            $tagList = Invoke-AzText @('acr','repository','show-tags','-n',$AcrName,'--repository',$ImageName,'-o','tsv')
-            if ($tagList.ok) { $imgPushed = (($tagList.text -split "`r?`n") | ForEach-Object { $_.Trim() }) -contains $ImageTag }
+            for ($t = 0; $t -lt 8 -and -not $imgPushed; $t++) {
+                if ($t -gt 0) { Start-Sleep -Seconds 20 }
+                $tagList = Invoke-AzText @('acr','repository','show-tags','-n',$AcrName,'--repository',$ImageName,'-o','tsv')
+                if ($tagList.ok) { $imgPushed = (($tagList.text -split "`r?`n") | ForEach-Object { $_.Trim() }) -contains $ImageTag }
+                if ($buildExit -eq 0) { break }   # success path: a single confirmation is enough
+            }
             if ($buildExit -eq 0) {
                 Add-Result 'Build image' 'FIXED' $fullImageRef
             } elseif ($imgPushed) {
