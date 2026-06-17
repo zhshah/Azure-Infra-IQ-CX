@@ -469,7 +469,7 @@ const ALL_COLS = [
   { key: 'final_score',               label: 'Score',             sortable: true,  alwaysVisible: false, defaultVisible: true  },
   { key: 'cost_current_month',        label: 'Cost / Mo',         sortable: true,  alwaysVisible: false, defaultVisible: true  },
   { key: 'primary_utilization_pct',   label: 'Utilisation (30d)', sortable: true,  alwaysVisible: false, defaultVisible: true  },
-  { key: 'daily_costs',               label: 'Cost Trend (MoM)',  sortable: false, alwaysVisible: false, defaultVisible: true  },
+  { key: 'daily_costs',               label: 'Cost Trend (30d)',  sortable: false, alwaysVisible: false, defaultVisible: true  },
   { key: 'estimated_monthly_savings', label: 'Est. Savings',      sortable: true,  alwaysVisible: false, defaultVisible: true  },
   { key: 'connections',               label: 'Map',               sortable: false, alwaysVisible: false, defaultVisible: true  },
   { key: 'ai_action',                 label: 'Advisor',           sortable: false, alwaysVisible: false, defaultVisible: true  },
@@ -1440,6 +1440,16 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
                               <p className="text-sm tabular-nums text-gray-200">
                                 {fmtUtil(r.primary_utilization_pct)}
                               </p>
+                              {/* Utilisation bar — visual magnitude of 30-day primary utilisation */}
+                              {(() => {
+                                const u = Math.min(100, Math.max(0, r.primary_utilization_pct ?? 0))
+                                const c = u < 10 ? '#f97316' : u < 75 ? '#60a5fa' : '#34d399'
+                                return (
+                                  <div className="mt-1 h-1.5 w-16 rounded-full bg-gray-700/50 overflow-hidden" title={`${fmtUtil(r.primary_utilization_pct)} utilised over 30 days`}>
+                                    <div className="h-full rounded-full" style={{ width: `${Math.max(3, u)}%`, backgroundColor: c }} />
+                                  </div>
+                                )
+                              })()}
                               {r.avg_cpu_pct != null && r.avg_cpu_pct !== r.primary_utilization_pct && (
                                 <p className="text-xs text-gray-600">CPU {r.avg_cpu_pct.toFixed(0)}%</p>
                               )}
@@ -1464,10 +1474,29 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
                         </td>
                       )}
 
-                      {/* Cost trend — month-over-month (uses data that loads on the fast open) */}
+                      {/* Cost trend — 30-day daily dip-graph (loads on full refresh); MoM bars fallback on fast open */}
                       {vis.has('daily_costs') && (
                         <td className="px-3 py-3">
                           {(() => {
+                            // Primary: 30-day daily-cost sparkline (the "dip graph")
+                            const series   = Array.isArray(r.daily_costs) ? r.daily_costs : []
+                            const liveDays = series.filter(v => typeof v === 'number' && v > 0).length
+                            if (liveDays >= 2) {
+                              const t7    = r.cost_7d_trend_pct
+                              const showT = t7 != null && Math.abs(t7) >= 0.5
+                              const up7   = (t7 ?? 0) > 0
+                              return (
+                                <div className="flex items-center gap-2" title={`30-day daily cost trend · last 5 days billing pending${r.is_anomaly ? ' · spend anomaly detected' : ''}`}>
+                                  <SparkLine data={series} anomaly={r.is_anomaly} />
+                                  {showT && (
+                                    <span className={clsx('text-xs tabular-nums', up7 ? 'text-red-400' : 'text-green-400')}>
+                                      {up7 ? '▲' : '▼'} {fmtPct(t7)}
+                                    </span>
+                                  )}
+                                </div>
+                              )
+                            }
+                            // Fallback: month-over-month bars (always available on fast open)
                             const curr = r.cost_current_month ?? 0
                             const prev = r.cost_previous_month ?? 0
                             if (curr <= 0 && prev <= 0)
