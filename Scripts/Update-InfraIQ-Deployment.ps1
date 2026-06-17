@@ -24,18 +24,25 @@
 #    -RepoBranch <name>         Branch to use (default: the repo's default branch).
 #    -CloneRoot <path>          Where to download the repo (default: .\infraiq-cx-src).
 #
-#  DEPLOY IS ON BY DEFAULT: with no action switches the script diagnoses, then AUTO-DOWNLOADS
-#  the repo (-RepoUrl), builds the latest image, and swaps it onto the existing app (new
-#  revision; the app is NEVER deleted). It records every diagnostic and proceeds with the
-#  update regardless of WARN/FAIL. Works for BOTH public-access and private-endpoint apps.
+#  DEPLOY + FIX ARE ON BY DEFAULT (run as Global Admin / Owner). With no switches the script:
+#    1. DIAGNOSES everything and writes a full evidence bundle (.zip) you can send for analysis;
+#    2. ASSIGNS every permission the app needs - ARM roles (Reader, Cost Management Reader,
+#       Monitoring Reader, AcrPull), the Azure OpenAI data-plane role, and Microsoft Graph app
+#       roles - and wires ACR pull-by-identity;
+#    3. AUTO-FIXES the Azure OpenAI endpoint/deployment env that causes the "AI 404" error;
+#    4. AUTO-DOWNLOADS the repo (-RepoUrl), builds the latest image and swaps it onto the app
+#       (new revision; the app is NEVER deleted);
+#    5. grants SQL access + links private DNS zones where applicable.
+#  Every step is RECORDED and the run CONTINUES even if a step fails. Works for BOTH public-access
+#  and private-endpoint apps.
 #
-#  ACTION SWITCHES
-#    -CollectOnly         READ-ONLY: diagnose + collect the evidence .zip, build/swap NOTHING.
-#    -DeployLatest        Back-compat (deploy already runs by default). Source repo = -RepoUrl.
-#    -AssignPermissions   Grant the app identity: Reader + Cost Management Reader +
-#                         Monitoring Reader (subscription) + AcrPull (registry).
-#    -FixDnsLinks         Link any MISSING privatelink.* DNS zones to the env VNet (private only).
-#    -GrantSqlAccess      Create/repair the app identity's SQL DB user + roles.
+#  SWITCHES
+#    -CollectOnly         READ-ONLY: diagnose + collect the evidence .zip; change NOTHING.
+#    -SkipGraph           Do everything EXCEPT the Microsoft Graph app-role grants.
+#    -GraphAppRoles       Override Graph app-roles to grant (default Directory.Read.All,User.Read.All).
+#    -CreateOpenAiDeployment  If the account has NO model, create a gpt-4o deployment.
+#    -DeployLatest / -AssignPermissions / -FixDnsLinks / -GrantSqlAccess
+#                         Back-compat - these already run by default now.
 #    -WhatIf              Preview every change and do NOTHING (dry run).
 #    -Confirm             Ask Y/N before each individual change.
 #
@@ -92,9 +99,13 @@
     EXISTING Container App whose backing resources (SQL, OpenAI, ACR) use PRIVATE ENDPOINTS.
 
 .DESCRIPTION
-    Run this on a machine signed in as the customer's Global Admin / Owner. By default it
-    only READS and produces an evidence bundle (a .zip) you can send back for deep analysis.
-    Mutations (build/deploy, role assignments, SQL grant, DNS links) are explicit opt-in switches.
+    Run this on a machine signed in as the customer's Global Admin / Owner. By DEFAULT it is an
+    end-to-end FIXER: it diagnoses, assigns every permission the app needs (ARM + Azure OpenAI +
+    Microsoft Graph), auto-corrects the OpenAI endpoint/deployment env (the "AI 404" fix), wires
+    ACR pull-by-identity, grants SQL + links private DNS where applicable, then downloads the
+    latest code, builds a new image and swaps it onto the app - recording every step and
+    CONTINUING past any failure. It always produces an evidence bundle (.zip) you can send back.
+    Use -CollectOnly for a read-only run that changes nothing.
 
     It is "self-discovering": give it the Subscription + Resource Group and it finds the
     Container App, its environment, the ACR, the SQL server/db, the OpenAI account, the VNet,
@@ -115,12 +126,14 @@
 
 .PARAMETER SubscriptionId    (required) Customer subscription id.
 .PARAMETER ResourceGroup     (required) RG that holds the app + (optional) private resources.
-.PARAMETER CollectOnly       Read-only: run diagnostics + collect the evidence bundle, but do NOT build/swap a new image.
-.PARAMETER DeployLatest      Back-compat switch. Deploy now runs by DEFAULT (clone latest -> build -> swap image); use -CollectOnly to skip.
-.PARAMETER AssignPermissions Assign the app identity the roles it needs (AcrPull, Reader,
-                             Cost Management Reader, Monitoring Reader). Global Admin/Owner only.
-.PARAMETER GrantSqlAccess    Create/repair the managed-identity DB user + roles in SQL.
-.PARAMETER FixDnsLinks       Link any MISSING critical private DNS zones to the env's VNet (private deployments).
+.PARAMETER CollectOnly       Read-only: run diagnostics + collect the evidence bundle, change NOTHING.
+.PARAMETER DeployLatest      Back-compat. Deploy now runs by DEFAULT (clone latest -> build -> swap image); use -CollectOnly to skip.
+.PARAMETER AssignPermissions Back-compat. Role assignment now runs by DEFAULT (ARM + Azure OpenAI + Graph). Global Admin/Owner.
+.PARAMETER GrantSqlAccess    Back-compat. SQL grant now runs by DEFAULT; use -CollectOnly to skip.
+.PARAMETER FixDnsLinks       Back-compat. Private-DNS linking now runs by DEFAULT where applicable.
+.PARAMETER SkipGraph         Do everything except the Microsoft Graph app-role grants.
+.PARAMETER GraphAppRoles     Which Graph application roles to grant the app identity (default: Directory.Read.All, User.Read.All).
+.PARAMETER CreateOpenAiDeployment  If the OpenAI account has no model deployment, create a gpt-4o deployment.
 
 .EXAMPLE
     # DEFAULT: diagnose, then download the latest code + build + swap the image on the existing app
@@ -169,7 +182,12 @@ param(
     [switch] $FixSqlFirewall,
 
     # Read-only: run diagnostics + evidence bundle only; do NOT build/swap a new image
-    [switch] $CollectOnly
+    [switch] $CollectOnly,
+
+    # Fix tuning (fixes run by DEFAULT unless -CollectOnly). Use these to narrow/extend.
+    [switch] $SkipGraph,                                                   # do NOT assign Microsoft Graph app roles
+    [string[]] $GraphAppRoles = @('Directory.Read.All','User.Read.All'),   # Graph app-roles to grant the app identity
+    [switch] $CreateOpenAiDeployment                                       # if the account has NO model deployment, create one (gpt-4o)
 )
 
 $ErrorActionPreference = 'Continue'
@@ -187,7 +205,8 @@ try { Start-Transcript -Path $transcript -Force | Out-Null } catch { }
 $script:Results   = New-Object System.Collections.Generic.List[object]
 $script:NextSteps = New-Object System.Collections.Generic.List[string]
 $script:Diag      = [ordered]@{}
-$script:Diag['meta'] = [ordered]@{ generatedUtc = (Get-Date).ToUniversalTime().ToString('o'); subscriptionId = $SubscriptionId; resourceGroup = $ResourceGroup; tool = 'Update-InfraIQ-Deployment.ps1'; version = '2.2' }
+$script:Diag['meta'] = [ordered]@{ generatedUtc = (Get-Date).ToUniversalTime().ToString('o'); subscriptionId = $SubscriptionId; resourceGroup = $ResourceGroup; tool = 'Update-InfraIQ-Deployment.ps1'; version = '2.3' }
+$script:OpenAiResourceId = $null
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 function Add-Result {
@@ -238,6 +257,41 @@ function Ensure-RoleAssignment {
     }
 }
 
+function Ensure-GraphAppRole {
+    # Grant the app's managed identity a Microsoft Graph APPLICATION role (admin-consent). Idempotent.
+    param([string]$MiPrincipalId, [string]$RoleValue)
+    if (-not $MiPrincipalId) { Add-Result ("Graph role: {0}" -f $RoleValue) 'WARN' 'No app identity principalId.'; return }
+    $graphAppId = '00000003-0000-0000-c000-000000000000'
+    $graphSp = Invoke-AzJson @('ad','sp','show','--id',$graphAppId,'-o','json')
+    if (-not $graphSp) { Add-Result ("Graph role: {0}" -f $RoleValue) 'WARN' 'Could not resolve the Microsoft Graph service principal.'; return }
+    $role = $graphSp.appRoles | Where-Object { $_.value -eq $RoleValue -and ($_.allowedMemberTypes -contains 'Application') } | Select-Object -First 1
+    if (-not $role) { Add-Result ("Graph role: {0}" -f $RoleValue) 'WARN' 'No matching Application app-role on Microsoft Graph.'; return }
+    $existing = Invoke-AzJson @('rest','--method','get','--url',("https://graph.microsoft.com/v1.0/servicePrincipals/{0}/appRoleAssignments" -f $MiPrincipalId),'-o','json')
+    if ($existing -and $existing.value -and ($existing.value | Where-Object { $_.appRoleId -eq $role.id })) {
+        Add-Result ("Graph role: {0}" -f $RoleValue) 'PASS' 'Already granted to the app identity.'; return
+    }
+    if ($PSCmdlet.ShouldProcess($RoleValue, 'Grant Microsoft Graph app-role to the app identity')) {
+        $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("graphrole-{0}.json" -f (Get-Random))
+        (@{ principalId = $MiPrincipalId; resourceId = $graphSp.id; appRoleId = $role.id } | ConvertTo-Json -Compress) | Set-Content -Path $tmp -Encoding UTF8
+        $res = Invoke-AzText @('rest','--method','post','--url',("https://graph.microsoft.com/v1.0/servicePrincipals/{0}/appRoleAssignments" -f $MiPrincipalId),'--headers','Content-Type=application/json','--body',("@{0}" -f $tmp))
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        if ($res.ok) { Add-Result ("Graph role: {0}" -f $RoleValue) 'FIXED' 'Granted (admin-consented) to the app identity.' }
+        else { Add-Result ("Graph role: {0}" -f $RoleValue) 'FAIL' (("Could not grant (need Global Admin / Privileged Role Admin). {0}" -f $res.text).Trim()); $script:NextSteps.Add("Grant Microsoft Graph app-role '$RoleValue' to the app identity (run as Global Admin).") }
+    }
+}
+
+function Get-PreferredDeployment {
+    # Pick the best chat-capable deployment name from the account's deployment objects.
+    param($Deployments)
+    $names = @($Deployments | ForEach-Object { $_.name })
+    foreach ($pat in @('gpt-5','gpt-4o','gpt-4.1','gpt-4','gpt-35','gpt-3.5','gpt','o1','o3')) {
+        $hit = $Deployments | Where-Object { ($_.name -match [regex]::Escape($pat)) -or ($_.properties.model.name -match [regex]::Escape($pat)) } | Select-Object -First 1
+        if ($hit) { return $hit.name }
+    }
+    if ($names.Count -gt 0) { return $names[0] }
+    return $null
+}
+
 function Get-RepoSource {
     # Clone (git) or download (zip) the repo to $Dest. Returns @{ ok; path; method; error }.
     param([string]$Url, [string]$Branch, [string]$Dest)
@@ -283,15 +337,22 @@ Write-Host ("  Subscription : {0}" -f $SubscriptionId)
 Write-Host ("  Resource grp : {0}" -f $ResourceGroup)
 Write-Host ("  Evidence dir : {0}" -f $OutputPath)
 $DoDeploy = -not $CollectOnly
+$DoFix    = -not $CollectOnly            # master switch: assign permissions + auto-fix config by default
+$doRoles  = $DoFix -or $AssignPermissions
+$doSql    = $DoFix -or $GrantSqlAccess
+$doDns    = $DoFix -or $FixDnsLinks
+$doAiFix  = $DoFix                       # auto-correct the app's Azure OpenAI env (the AI-404 fix)
+$doGraph  = $DoFix -and -not $SkipGraph
 $modeBits = @()
-if ($DoDeploy)          { $modeBits += 'DEPLOY-LATEST (clone repo -> build -> swap image)' }
-if ($AssignPermissions) { $modeBits += 'ASSIGN-ROLES' }
-if ($GrantSqlAccess)    { $modeBits += 'GRANT-SQL' }
-if ($FixDnsLinks)       { $modeBits += 'FIX-DNS' }
-if ($CollectOnly)       { $modeBits = @('COLLECT-ONLY (read-only diagnostics)') }
+if ($DoDeploy) { $modeBits += 'DEPLOY-LATEST (clone repo -> build -> swap image)' }
+if ($DoFix)    { $modeBits += 'FIX-ALL (roles: ARM+OpenAI+Graph, AI-env, SQL, DNS, ACR-pull identity)' }
+if ($CollectOnly) { $modeBits = @('COLLECT-ONLY (read-only diagnostics)') }
 Write-Host ("  Mode         : {0}" -f ($modeBits -join ', ')) -ForegroundColor Yellow
 if ($DoDeploy) {
     Write-Host '  Deploy       : ON by default - records all diagnostics, then downloads the latest code, builds a new image and swaps it onto the existing app (works for BOTH public and private). Use -CollectOnly for read-only.' -ForegroundColor Green
+}
+if ($DoFix) {
+    Write-Host '  Fix          : ON by default - run as Global Admin/Owner. Assigns ARM roles (Reader, Cost Mgmt Reader, Monitoring Reader, AcrPull), the Azure OpenAI data-plane role, Microsoft Graph app roles, repairs the AI endpoint/deployment env (AI-404), wires ACR pull-by-identity, grants SQL + links private DNS where applicable. Every step is recorded and the run CONTINUES even if a step fails.' -ForegroundColor Green
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -310,6 +371,19 @@ if (-not $acct) {
 }
 Add-Result 'Signed in to Azure' 'PASS' ("{0} (tenant {1})" -f $acct.user.name, $acct.tenantId)
 Save-Json 'signed_in_account' ($acct | Select-Object name, id, tenantId, @{n='user';e={$_.user.name}})
+# Capture WHO is running this + whether they hold a privileged directory role (helps explain any
+# permission-grant failures later). Best-effort; never blocks.
+try {
+    $me = Invoke-AzJson @('ad','signed-in-user','show','-o','json')
+    if ($me) { Save-Json 'signed_in_user' ($me | Select-Object displayName, userPrincipalName, id) }
+    $dirRoles = Invoke-AzJson @('rest','--method','get','--url','https://graph.microsoft.com/v1.0/me/memberOf/microsoft.graph.directoryRole?$select=displayName','-o','json')
+    if ($dirRoles -and $dirRoles.value) {
+        $roleNames = @($dirRoles.value | ForEach-Object { $_.displayName })
+        Save-Json 'signed_in_directory_roles' $roleNames
+        $isGa = [bool]($roleNames | Where-Object { $_ -match '(?i)Global Administrator' })
+        Add-Result 'Runner privilege' $(if ($isGa) {'PASS'} else {'INFO'}) ("Directory roles: {0}" -f $(if ($roleNames.Count) { $roleNames -join ', ' } else { '(none / not readable)' }))
+    }
+} catch { }
 
 & az account set --subscription $SubscriptionId 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) { Add-Result 'Select subscription' 'FAIL' "No access to $SubscriptionId (or wrong tenant)."; try { Stop-Transcript | Out-Null } catch { }; return }
@@ -481,7 +555,7 @@ if ($envVnetId) {
         elseif ($state -eq 'not-linked') {
             Add-Result ("DNS zone link: {0}" -f $zn) 'FAIL' 'Zone exists but is NOT linked to the env VNet -> the app cannot resolve this private FQDN. Likely root cause.'
             $script:NextSteps.Add("Link private DNS zone $zn to the env VNet (run with -FixDnsLinks, or: az network private-dns link vnet create -g $ResourceGroup -z $zn -n link-aca -v <vnetId> -e false)")
-            if ($FixDnsLinks) {
+            if ($doDns) {
                 if ($PSCmdlet.ShouldProcess($zn, "Link to env VNet $envVnetId")) {
                     & az network private-dns link vnet create -g $ResourceGroup -z $zn -n ('link-aca-{0}' -f $stamp) -v $envVnetId -e false --only-show-errors 2>$null | Out-Null
                     if ($LASTEXITCODE -eq 0) { Add-Result ("DNS zone link fix: {0}" -f $zn) 'FIXED' 'Linked to the env VNet.' }
@@ -517,7 +591,7 @@ if (-not $SqlServerName) {
     }
 }
 
-if ($GrantSqlAccess) {
+if ($doSql) {
     if (-not $sqlFqdn -or -not $SqlDatabaseName) { Add-Result 'Grant MI SQL access' 'FAIL' 'Need a resolved SQL server + database name.' }
     elseif (-not $appPrincipalId) { Add-Result 'Grant MI SQL access' 'FAIL' 'App has no system-assigned identity.' }
     else {
@@ -549,7 +623,7 @@ IF IS_ROLEMEMBER('db_ddladmin',  N'$miName') = 0 ALTER ROLE db_ddladmin  ADD MEM
             }
         }
     }
-} else { Add-Result 'Grant MI SQL access' 'INFO' 'Skipped (pass -GrantSqlAccess).' }
+} else { Add-Result 'Grant MI SQL access' 'INFO' 'Skipped: -CollectOnly (read-only).' }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 7. OpenAI — networking & deployments
@@ -560,11 +634,22 @@ else {
     $aoai = Invoke-AzJson @('cognitiveservices','account','show','-n',$OpenAiAccountName,'-g',$ResourceGroup,'-o','json')
     if (-not $aoai) { Add-Result 'OpenAI account' 'FAIL' "Account '$OpenAiAccountName' not found in $ResourceGroup." }
     else {
-        Save-Json 'openai_account' ($aoai | Select-Object name, @{n='endpoint';e={$_.properties.endpoint}}, @{n='publicNetworkAccess';e={$_.properties.publicNetworkAccess}}, @{n='state';e={$_.properties.provisioningState}})
+        $script:OpenAiResourceId = $aoai.id
+        Save-Json 'openai_account' ($aoai | Select-Object name, id, @{n='endpoint';e={$_.properties.endpoint}}, @{n='publicNetworkAccess';e={$_.properties.publicNetworkAccess}}, @{n='state';e={$_.properties.provisioningState}})
         Add-Result 'OpenAI account' 'PASS' ("{0} | publicNetworkAccess={1}" -f $aoai.properties.endpoint, $aoai.properties.publicNetworkAccess)
         $deps = Invoke-AzJson @('cognitiveservices','account','deployment','list','-n',$OpenAiAccountName,'-g',$ResourceGroup,'-o','json')
         if ($deps -and @($deps).Count -gt 0) { Save-Json 'openai_deployments' ($deps | Select-Object name, @{n='model';e={$_.properties.model.name}}, @{n='version';e={$_.properties.model.version}}); Add-Result 'OpenAI deployments' 'PASS' ((@($deps) | ForEach-Object { $_.name }) -join ', ') }
-        else { Add-Result 'OpenAI deployments' 'WARN' 'No model deployments — AI analysis will fail until a model is deployed.' }
+        else {
+            Add-Result 'OpenAI deployments' 'WARN' 'No model deployments — AI analysis will fail until a model is deployed.'
+            if ($CreateOpenAiDeployment -and $PSCmdlet.ShouldProcess($OpenAiAccountName, 'Create gpt-4o deployment')) {
+                Write-Host '  creating a gpt-4o deployment (Standard, capacity 10)...' -ForegroundColor Cyan
+                $cr = Invoke-AzText @('cognitiveservices','account','deployment','create','-n',$OpenAiAccountName,'-g',$ResourceGroup,'--deployment-name','gpt-4o','--model-name','gpt-4o','--model-version','2024-08-06','--model-format','OpenAI','--sku-name','Standard','--sku-capacity','10')
+                if ($cr.ok) { Add-Result 'Create OpenAI deployment' 'FIXED' 'Created deployment gpt-4o.'; $deps = Invoke-AzJson @('cognitiveservices','account','deployment','list','-n',$OpenAiAccountName,'-g',$ResourceGroup,'-o','json') }
+                else { Add-Result 'Create OpenAI deployment' 'FAIL' ('Could not create (quota/region/model availability): ' + $cr.text.Trim()); $script:NextSteps.Add("Create a model deployment on $OpenAiAccountName (portal: Model deployments).") }
+            } else {
+                $script:NextSteps.Add("Deploy a chat model on $OpenAiAccountName (e.g. gpt-4o), or re-run with -CreateOpenAiDeployment.")
+            }
+        }
 
         # ── AI-404 deep diagnostic ────────────────────────────────────────────
         # The #1 cause of "AI analysis returns 404 / AI insights stay empty" is an ENV MISMATCH:
@@ -606,6 +691,69 @@ else {
             Add-Result 'AI: credential' 'PASS' ("{0} present ({1})" -f $keyEnv.name, $(if ($keyEnv.secretRef) { 'secretref' } else { 'inline' }))
         }
         if ($cfgApiVer) { Add-Result 'AI: api-version' 'INFO' $cfgApiVer }
+
+        # ── AI-404 AUTO-FIX: correct the app's OpenAI endpoint/deployment env in place ──────────
+        $wantDeploy = $null
+        if ($doAiFix -and $app -and @($depNames).Count -gt 0) {
+            $envFixes = @()
+            if (-not $cfgDeploy -or ($depNames -notcontains $cfgDeploy)) {
+                $wantDeploy = Get-PreferredDeployment $deps
+                if ($wantDeploy) { $envFixes += ("AZURE_OPENAI_DEPLOYMENT={0}" -f $wantDeploy) }
+            }
+            $acctHost2 = ''; try { $acctHost2 = ([Uri]$aoai.properties.endpoint).Host } catch { }
+            $cfgHost2  = ''; try { if ($cfgEndpoint) { $cfgHost2 = ([Uri]$cfgEndpoint).Host } } catch { }
+            if (-not $cfgEndpoint -or ($acctHost2 -and $cfgHost2 -and ($acctHost2 -ne $cfgHost2))) {
+                $envFixes += ("AZURE_OPENAI_ENDPOINT={0}" -f $aoai.properties.endpoint)
+            }
+            if ($envFixes.Count -gt 0) {
+                if ($PSCmdlet.ShouldProcess($ContainerAppName, ("Set env: {0}" -f ($envFixes -join ', ')))) {
+                    & az containerapp update -n $ContainerAppName -g $ResourceGroup --set-env-vars @envFixes --only-show-errors 2>$null | Out-Null
+                    if ($LASTEXITCODE -eq 0) { Add-Result 'AI-404 env auto-fix' 'FIXED' ("Updated app env -> {0}. New revision; the next AI call uses the corrected endpoint/deployment." -f ($envFixes -join ', ')) }
+                    else { Add-Result 'AI-404 env auto-fix' 'FAIL' 'Could not update the Container App env vars (insufficient rights?).' }
+                }
+            } else {
+                Add-Result 'AI-404 env auto-fix' 'PASS' 'App OpenAI endpoint + deployment already match the account; no env change needed.'
+            }
+        }
+
+        # ── Reproduce the AI call so the bundle carries the EXACT model response/error ──────────
+        try {
+            $testEndpoint = if ($cfgEndpoint) { $cfgEndpoint } else { $aoai.properties.endpoint }
+            $testDeploy   = if ($cfgDeploy -and ($depNames -contains $cfgDeploy)) { $cfgDeploy } elseif ($wantDeploy) { $wantDeploy } else { (Get-PreferredDeployment $deps) }
+            $testApiVer   = if ($cfgApiVer) { $cfgApiVer } else { '2024-08-01-preview' }
+            $testResult   = [ordered]@{ endpoint = $testEndpoint; deployment = $testDeploy; apiVersion = $testApiVer; auth = $null; status = $null; body = $null }
+            if ($testEndpoint -and $testDeploy) {
+                $uri = ('{0}openai/deployments/{1}/chat/completions?api-version={2}' -f ($testEndpoint.TrimEnd('/') + '/'), $testDeploy, $testApiVer)
+                $headers = @{ 'Content-Type' = 'application/json' }
+                $keyVal = $null
+                if ($keyEnv -and $keyEnv.value) { $keyVal = $keyEnv.value }
+                elseif ($keyEnv -and $keyEnv.secretRef) { $ks = Invoke-AzText @('containerapp','secret','show','-n',$ContainerAppName,'-g',$ResourceGroup,'--secret-name',$keyEnv.secretRef,'--query','value','-o','tsv'); if ($ks.ok) { $keyVal = $ks.text.Trim() } }
+                if ($keyVal) { $headers['api-key'] = $keyVal; $testResult.auth = 'api-key' }
+                else {
+                    $tok = & az account get-access-token --resource 'https://cognitiveservices.azure.com' --query accessToken -o tsv 2>$null
+                    if ($tok) { $headers['Authorization'] = ("Bearer {0}" -f $tok); $testResult.auth = 'aad-token(runner)' }
+                }
+                $payload = '{"messages":[{"role":"user","content":"ping"}]}'
+                try {
+                    $resp = Invoke-WebRequest -Uri $uri -Method Post -Headers $headers -Body $payload -TimeoutSec 30 -UseBasicParsing -ErrorAction Stop
+                    $testResult.status = [int]$resp.StatusCode
+                    $testResult.body   = (($resp.Content | Out-String).Substring(0, [Math]::Min(600, ($resp.Content | Out-String).Length)))
+                    Add-Result 'AI: live model call' 'PASS' ("HTTP {0} from deployment '{1}' — the model endpoint works." -f $testResult.status, $testDeploy)
+                } catch {
+                    $code = ''; try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+                    $eBody = ''
+                    try { $st = $_.Exception.Response.GetResponseStream(); if ($st) { $rd = New-Object System.IO.StreamReader($st); $eBody = $rd.ReadToEnd() } } catch { }
+                    $testResult.status = $code; $testResult.body = ($eBody.Substring(0, [Math]::Min(600, $eBody.Length)))
+                    if ($code -eq 404)     { Add-Result 'AI: live model call' 'FAIL' ("HTTP 404 calling deployment '{0}' — DeploymentNotFound/endpoint wrong. {1}" -f $testDeploy, ($eBody.Substring(0,[Math]::Min(180,$eBody.Length)))) }
+                    elseif ($code -eq 401) { Add-Result 'AI: live model call' 'WARN' '401 Unauthorized — wrong key OR the identity lacks Cognitive Services OpenAI User (this run assigns it).' }
+                    elseif ($code -eq 403) { Add-Result 'AI: live model call' 'WARN' '403 Forbidden — network/private-endpoint or RBAC blocks the call.' }
+                    else                   { Add-Result 'AI: live model call' 'WARN' ("No 2xx (HTTP {0}): {1}" -f $code, $_.Exception.Message) }
+                }
+            } else {
+                Add-Result 'AI: live model call' 'INFO' 'Skipped (no resolvable endpoint/deployment to test).'
+            }
+            Save-Json 'openai_test_call' $testResult
+        } catch { Add-Result 'AI: live model call' 'INFO' ("Could not run the live AI test: {0}" -f $_.Exception.Message) }
     }
 }
 
@@ -618,16 +766,32 @@ if ($appPrincipalId) {
     if ($ra) { Save-Json 'identity_role_assignments' ($ra | Select-Object roleDefinitionName, scope); Add-Result 'Current role assignments' 'INFO' ((@($ra) | ForEach-Object { $_.roleDefinitionName } | Select-Object -Unique) -join ', ') }
     else { Add-Result 'Current role assignments' 'WARN' 'The app identity has NO role assignments — it cannot scan Azure (empty dashboards).' }
 
-    if ($AssignPermissions) {
+    if ($doRoles) {
         $subScope = "/subscriptions/$SubscriptionId"
-        Ensure-RoleAssignment -PrincipalId $appPrincipalId -RoleName 'Reader' -Scope $subScope -Why 'enumerate resources'
+        Ensure-RoleAssignment -PrincipalId $appPrincipalId -RoleName 'Reader' -Scope $subScope -Why 'enumerate resources (fixes empty dashboards)'
         Ensure-RoleAssignment -PrincipalId $appPrincipalId -RoleName 'Cost Management Reader' -Scope $subScope -Why 'cost dashboards'
         Ensure-RoleAssignment -PrincipalId $appPrincipalId -RoleName 'Monitoring Reader' -Scope $subScope -Why 'metrics/utilisation'
+        # Azure OpenAI data-plane role (lets the app call the model via managed identity -> fixes AI 401/404-after-auth)
+        if ($script:OpenAiResourceId) {
+            Ensure-RoleAssignment -PrincipalId $appPrincipalId -RoleName 'Cognitive Services OpenAI User' -Scope $script:OpenAiResourceId -Why 'call Azure OpenAI via managed identity'
+        }
         if ($AcrName) {
             $acrObj = Invoke-AzJson @('acr','show','-n',$AcrName,'-g',$ResourceGroup,'-o','json')
-            if ($acrObj) { Ensure-RoleAssignment -PrincipalId $appPrincipalId -RoleName 'AcrPull' -Scope $acrObj.id -Why 'pull the image' }
+            if ($acrObj) {
+                Ensure-RoleAssignment -PrincipalId $appPrincipalId -RoleName 'AcrPull' -Scope $acrObj.id -Why 'pull the image'
+                # make the app pull using its system identity (a common cause of "image update failed")
+                if ($PSCmdlet.ShouldProcess($ContainerAppName, "Set ACR pull-by-identity (system) for $AcrName")) {
+                    & az containerapp registry set -n $ContainerAppName -g $ResourceGroup --server ("{0}.azurecr.io" -f $AcrName) --identity system --only-show-errors 2>$null | Out-Null
+                    if ($LASTEXITCODE -eq 0) { Add-Result 'ACR pull-by-identity' 'FIXED' ("App set to pull from {0}.azurecr.io using its system identity." -f $AcrName) }
+                    else { Add-Result 'ACR pull-by-identity' 'INFO' 'Could not set registry pull-by-identity (may already use admin creds / not required).' }
+                }
+            }
         }
-    } else { Add-Result 'Assign roles' 'INFO' 'Skipped (pass -AssignPermissions to grant Reader + Cost Management Reader + Monitoring Reader + AcrPull).' }
+        # Microsoft Graph application roles (admin-consent) for identity/security features
+        if ($doGraph) {
+            foreach ($gr in $GraphAppRoles) { Ensure-GraphAppRole -MiPrincipalId $appPrincipalId -RoleValue $gr }
+        } else { Add-Result 'Graph app roles' 'INFO' 'Skipped (-SkipGraph).' }
+    } else { Add-Result 'Assign roles' 'INFO' 'Skipped: -CollectOnly (read-only). A normal run assigns Reader + Cost Management Reader + Monitoring Reader + AcrPull + Cognitive Services OpenAI User + Microsoft Graph app roles by default.' }
 } else {
     Add-Result 'Role assignments' 'WARN' 'No app identity to inspect/assign.'
 }
@@ -648,7 +812,9 @@ if ($appFqdn) {
         } catch {
             $code = ''
             try { $code = [int]$_.Exception.Response.StatusCode } catch { }
-            $probe[$path] = @{ status = $code; error = $_.Exception.Message }
+            $eBody = ''
+            try { $st = $_.Exception.Response.GetResponseStream(); if ($st) { $rd = New-Object System.IO.StreamReader($st); $eBody = $rd.ReadToEnd() } } catch { }
+            $probe[$path] = @{ status = $code; error = $_.Exception.Message; body = ($eBody.Substring(0, [Math]::Min(800, $eBody.Length))) }
             if ($code -eq 401) { Add-Result ("Probe {0}" -f $path) 'INFO' 'HTTP 401 (auth-gated) — endpoint exists.' }
             elseif ($code -eq 404) { Add-Result ("Probe {0}" -f $path) 'WARN' 'HTTP 404 — route missing on the running image (image older than expected). Rebuild/redeploy.' }
             else { Add-Result ("Probe {0}" -f $path) 'WARN' ("No/!2xx response: {0}" -f $_.Exception.Message) }
