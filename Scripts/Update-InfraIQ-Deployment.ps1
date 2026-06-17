@@ -629,9 +629,15 @@ if ($doSql) {
             } catch { Add-Result 'SQL AAD admin (set)' 'WARN' ("Could not set the AAD admin: {0}" -f $_.Exception.Message) }
         }
         $miName = $ContainerAppName
+        # Resolve the MI by its OBJECT ID (SID), NOT its display name. `CREATE USER [..] FROM
+        # EXTERNAL PROVIDER` resolves by display name and FAILS with "Principal '<name>' has a
+        # duplicate display name" when Entra has >1 principal with the same name (common after a
+        # Container App is recreated and orphan service principals linger). Building the SID from the
+        # app's principalId GUID is unambiguous. TYPE=E => external (Entra) user.
+        $miSid = '0x' + ((([guid]$appPrincipalId).ToByteArray() | ForEach-Object { $_.ToString('X2') }) -join '')
         $tsql = @"
 IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'$miName')
-    CREATE USER [$miName] FROM EXTERNAL PROVIDER;
+    CREATE USER [$miName] WITH SID = $miSid, TYPE = E;
 IF IS_ROLEMEMBER('db_datareader', N'$miName') = 0 ALTER ROLE db_datareader ADD MEMBER [$miName];
 IF IS_ROLEMEMBER('db_datawriter', N'$miName') = 0 ALTER ROLE db_datawriter ADD MEMBER [$miName];
 IF IS_ROLEMEMBER('db_ddladmin',  N'$miName') = 0 ALTER ROLE db_ddladmin  ADD MEMBER [$miName];
