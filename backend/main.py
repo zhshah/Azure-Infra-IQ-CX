@@ -623,11 +623,17 @@ async def _build_dashboard(
 
     # On the fast initial open (skip_metrics), only the headline 2-month cost
     # figures are needed. The cost-trend queries (60-day daily, 6-month history,
-    # tenant total-daily) feed charts/sparklines that are not required for first
-    # paint, so we defer them — this cuts concurrent Cost Management calls from
-    # four groups to one and largely eliminates tenant-shared 429 throttling on
-    # open. They populate on a manual refresh (skip_metrics=False).
-    fetch_cost_trends = not skip_metrics
+    # tenant total-daily) feed charts/sparklines (the 30-day cost dip-graph) that
+    # are not required for first paint, so we defer them — this cuts concurrent
+    # Cost Management calls from four groups to one and largely eliminates
+    # tenant-shared 429 throttling on open.
+    #
+    # They MUST populate on a manual refresh. The frontend's Refresh sends
+    # refresh=true but keeps fast/skip_metrics=true (to avoid the slow per-resource
+    # metrics pull — utilisation is hydrated from the persisted metrics snapshot),
+    # so gate the trend queries on `refresh` too. Without this, daily_costs is
+    # never fetched and the 30-day cost dip-graph has no data on any path.
+    fetch_cost_trends = (not skip_metrics) or refresh
 
     async def _resolved(value):
         return value

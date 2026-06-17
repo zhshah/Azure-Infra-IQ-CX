@@ -46,6 +46,58 @@ def _extract_skiptoken(next_link: str) -> Optional[str]:
         return next_link
 
 
+def _follow_cost_next_link(client: "CostManagementClient", next_link: str, parameters: "QueryDefinition"):
+    """
+    Fetch the next page of a Cost Management query result.
+
+    The azure-mgmt-costmanagement SDK's ``query.usage()`` does NOT accept a
+    ``skiptoken`` keyword — passing one leaks down to the HTTP transport and
+    raises ``Session.request() got an unexpected keyword argument 'skiptoken'``.
+    The supported way to paginate is to re-POST the same query body to the
+    response's ``next_link`` URL (which already carries the ``$skiptoken``) via
+    the client's authenticated pipeline.
+
+    Returns an object exposing ``.columns`` / ``.rows`` / ``.next_link`` (the same
+    surface the caller already consumes), or ``None`` on any failure so the caller
+    keeps the pages it already has instead of crashing.
+    """
+    try:
+        from types import SimpleNamespace
+        from azure.core.rest import HttpRequest
+        body = None
+        for meth in ("serialize", "as_dict"):
+            fn = getattr(parameters, meth, None)
+            if callable(fn):
+                try:
+                    body = fn()
+                    break
+                except Exception:
+                    continue
+        request = HttpRequest("POST", next_link, json=body)
+        # CostManagementClient has no top-level send_request; the authenticated
+        # pipeline lives on the low-level ._client. Try both for SDK-version safety.
+        send = getattr(client, "send_request", None) \
+            or getattr(getattr(client, "_client", None), "send_request", None)
+        if send is None:
+            logger.warning("Daily cost pagination: no send_request on client; using first page only")
+            return None
+        response = send(request)
+        if response.status_code >= 400:
+            logger.warning("Daily cost next_link page returned HTTP %s", response.status_code)
+            return None
+        payload = response.json()
+        props = payload.get("properties", payload) or {}
+        cols = [SimpleNamespace(name=c.get("name")) for c in props.get("columns", [])]
+        return SimpleNamespace(
+            columns=cols,
+            rows=props.get("rows", []) or [],
+            next_link=props.get("nextLink"),
+        )
+    except Exception as exc:
+        logger.warning("Daily cost pagination via next_link failed: %s", exc)
+        return None
+
+
 def _query_with_retry(
     client: "CostManagementClient",
     scope: str,
@@ -661,8 +713,11 @@ def get_daily_costs(
             )
 
             # Azure Cost Management caps responses at 1 000 rows and paginates via
-            # next_link. Without following the link, resources past the cutoff get
-            # zero daily data and appear flat on the trend graph.
+            # next_link. The SDK's query.usage() does NOT accept a skiptoken kwarg
+            # (passing one raises "Session.request() got an unexpected keyword
+            # argument 'skiptoken'"), so follow the next_link URL directly. Without
+            # this, resources past the first page get zero daily data and the
+            # 30-day cost dip-graph is empty.
             MAX_PAGES = 15  # cap at 15,000 rows to prevent multi-minute scans
             page = 0
             while page < MAX_PAGES:
@@ -679,13 +734,16 @@ def get_daily_costs(
                         daily_map.setdefault(rid, {})
                         daily_map[rid][date_str] = daily_map[rid].get(date_str, 0.0) + cost
 
-                token = _extract_skiptoken(getattr(response, "next_link", None))
-                if not token:
+                next_link = getattr(response, "next_link", None)
+                if not next_link:
                     break
                 if page >= MAX_PAGES:
                     logger.info("[%s] Daily cost page cap (%d) reached — stopping pagination", sub_id, MAX_PAGES)
                     break
-                response = _query_with_retry(client, scope, query, skiptoken=token)
+                nxt = _follow_cost_next_link(client, next_link, query)
+                if nxt is None:
+                    break
+                response = nxt
 
         except Exception as exc:
             logger.warning("[%s] Daily cost query failed: %s", sub_id, exc)
