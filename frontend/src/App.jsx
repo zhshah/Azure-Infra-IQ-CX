@@ -380,7 +380,7 @@ import AssessmentView      from './components/AssessmentView'
 import BenchmarkPanel    from './components/BenchmarkPanel'
 import DrillDownDrawer   from './components/DrillDownDrawer'
 import HealthScoreWidget from './components/HealthScoreWidget'
-import SetupWizard       from './components/SetupWizard'
+import About             from './components/About'
 import ResourceMap       from './components/ResourceMap'
 import AIResourcesPanel  from './components/AIResourcesPanel'
 import AppServicePanel   from './components/AppServicePanel'
@@ -407,6 +407,7 @@ import AssessmentModule       from './components/AssessmentModule'
 import BCDRDashboard          from './components/bcdr/BCDRDashboard'
 import BCDRAssessmentTable    from './components/bcdr/BCDRAssessmentTable'
 import BCDRPlanningPanel      from './components/BCDRPlanningPanel'
+import { asText }             from './utils/safeText'
 import NetworkingDashboard    from './components/networking/NetworkingDashboard'
 import NetworkingAIAnalysis   from './components/networking/NetworkingAIAnalysis'
 import { MaturityAIAnalysis, SecurityAIAnalysis, InnovationAIAnalysis, MigrationAIAnalysis, BackupAIAnalysis, ResilienceAIAnalysis, DeepBCDRAnalysis } from './components/AIModuleReports'
@@ -440,9 +441,6 @@ import FinOpsAlerts       from './finops/FinOpsAlerts'
 import FinOpsWarehouse    from './finops/FinOpsWarehouse'
 import FinOpsComplianceView from './finops/FinOpsComplianceView'
 
-// ── About / Features / FAQs ─────────────────────────────────────────────────
-import About                 from './components/About'
-
 function ErrorView({ message, onRetry }) {
   return (
     <div className="flex flex-col items-center justify-center min-h-screen gap-4">
@@ -470,7 +468,7 @@ function AIStatusBadge({ provider, onOpenSettings }) {
   return (
     <button
       onClick={onOpenSettings}
-      title={active ? `Global Settings — AI scoring active (${providerLabel(provider)})` : 'Global Settings — enable AI for better scoring'}
+      title={active ? `AI scoring active — ${providerLabel(provider)}` : 'Enable AI for better scoring'}
       className={clsx(
         'flex items-center gap-1.5 px-2 py-1 rounded-full border text-xs font-medium transition-colors',
         active
@@ -480,7 +478,7 @@ function AIStatusBadge({ provider, onOpenSettings }) {
     >
       <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', active ? 'bg-green-400 animate-pulse' : 'bg-gray-600')} />
       <Brain size={11} />
-      <span className="hidden lg:inline">Global Settings</span>
+      <span className="hidden lg:inline">{active ? providerLabel(provider) : 'AI Off'}</span>
     </button>
   )
 }
@@ -1422,6 +1420,7 @@ function AppInner() {
   const [drillDownType,  setDrillDownType]  = useState(null)
   const [tableFilter,    setTableFilter]    = useState(null)
   const [appSettings,    setAppSettings]    = useState(null)
+  const [bootReconnecting, setBootReconnecting] = useState(false)  // true while retrying a failed /api/settings (keeps spinner, never the wizard)
   const [launched,       setLaunched]       = useState(false)
   const [view,           setView]           = useState('overview')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -1562,20 +1561,17 @@ function AppInner() {
   // - If credentials exist but no cache → auto-start scan immediately, skip wizard
   // - If no credentials at all → show wizard (first-time setup only)
   useEffect(() => {
-    let _settingsCancelled = false
-    let _settingsAttempt = 0
-    const _loadSettings = () => {
-      api.getSettings()
-      .then(s => {
-        if (_settingsCancelled) return
+    let cancelled = false
+
+    // Apply a SUCCESSFULLY-fetched settings payload: decide cached dashboard vs
+    // auto-scan vs first-time wizard. Only reached when /api/settings actually returned.
+    const applySettings = (s) => {
         setAppSettings(s)
-        // `auth_ready` is true when the backend can reach Azure via a service principal
-        // OR a managed identity (Container Apps / App Service / AKS). Using it here makes
-        // managed-identity deployments auto-load the dashboard (or auto-scan) exactly like
-        // a local service-principal run, instead of showing the manual "Ready to scan" wizard.
-        const hasCredentials = s.auth_ready || (s.azure_tenant_id && (s.has_azure_secret || s.azure_client_id))
-        const isDemo = s.demo_mode
-        if (hasCredentials || isDemo) {
+        // Connection is managed by the deployment identity (prod) or local az login — the
+        // legacy connect wizard is obsolete. ALWAYS launch into the dashboard; it handles
+        // no-data / unreachable Azure gracefully (empty states + Retry), so a transient
+        // auth_ready=false or expired az token never drops the user onto the old wizard.
+        {
           setLoadingFromCache(true)
           api.getCachedDashboard()
             .then(cached => {
@@ -1611,21 +1607,37 @@ function AppInner() {
             })
             .finally(() => setLoadingFromCache(false))
         }
-        // else: no credentials → wizard stays visible for first-time setup
-      })
-      .catch(() => {
-        if (_settingsCancelled) return
-        // Backend not reachable yet (transient overload / restart / token refresh).
-        // Do NOT fall back to the manual service-principal setup wizard — that
-        // "manual fetch" screen must never appear in a managed-identity deployment.
-        // Keep the "Connecting…" state and retry with capped backoff; the wizard
-        // only appears when /api/settings SUCCEEDS and reports no credentials.
-        _settingsAttempt += 1
-        setTimeout(_loadSettings, Math.min(1500 * _settingsAttempt, 8000))
-      })
     }
-    _loadSettings()
-    return () => { _settingsCancelled = true }
+
+    // Load settings with bounded retries. CRITICAL FIX: a slow or failed /api/settings
+    // must NEVER drop the user onto the setup wizard — that was the intermittent
+    // "random wizard on refresh" bug (a busy backend made the fetch time out, the old
+    // code did `.catch(() => setAppSettings({}))`, and empty settings render the wizard).
+    // Instead we keep the "Connecting…" spinner and retry until the backend answers;
+    // the wizard appears ONLY once settings load SUCCESSFULLY and report no credentials.
+    ;(async () => {
+      let attempt = 0
+      while (!cancelled) {
+        attempt += 1
+        try {
+          const s = await Promise.race([
+            api.getSettings(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('settings-timeout')), 12000)),
+          ])
+          if (cancelled) return
+          setBootReconnecting(false)
+          applySettings(s)
+          return  // success — stop retrying
+        } catch {
+          if (cancelled) return
+          // Transient failure (backend busy/starting). Keep the spinner, back off, retry.
+          setBootReconnecting(true)
+          await new Promise(r => setTimeout(r, Math.min(1500 * attempt, 6000)))
+        }
+      }
+    })()
+
+    return () => { cancelled = true }
   }, [])
 
   // Start scan only after user explicitly clicks Launch (not when loaded from cache)
@@ -1725,10 +1737,12 @@ function AppInner() {
   }, [])
 
   // Client-side filtered resource list (applied on top of SSE/cached data)
-  // Load projects from backend on mount
+  // Load projects from backend on mount AND refresh on every view change, so the
+  // "Save as Project → Add to existing" dropdown always reflects projects created,
+  // renamed or deleted elsewhere (e.g. in the Projects module, which keeps its own state).
   useEffect(() => {
     api.getProjects().then(setProjects).catch(() => {})
-  }, [])
+  }, [view])
 
   // Active project resource ID set (for fast lookup)
   const activeProjectResourceSet = useMemo(() => {
@@ -1923,9 +1937,13 @@ function AppInner() {
     }
   }, [data])
 
-  // Show connect page until user hits Start Scan
+  // Connection is managed by the deployment identity (prod) or local az login. The legacy
+  // "Connect your Azure account" wizard (old "Azure Modernization Advisor" branding) is
+  // obsolete and must NEVER appear — a transient auth_ready=false / expired token / busy
+  // backend used to drop the user onto it. Until the boot sequence flips `launched`, keep
+  // the connecting spinner; the dashboard itself handles no-data / errors with Retry.
   if (!launched) {
-    if (appSettings === null || loadingFromCache) return (
+    return (
       <div className="fixed inset-0 bg-gray-950 flex flex-col items-center justify-center gap-4">
         <div style={{
           width: 52, height: 52, borderRadius: 14,
@@ -1935,17 +1953,8 @@ function AppInner() {
         }}>
           <Loader size={24} className="text-white animate-spin" />
         </div>
-        <p className="text-xs text-gray-500 font-medium">Connecting to backend…</p>
+        <p className="text-xs text-gray-500 font-medium">{bootReconnecting ? 'Reconnecting to backend…' : 'Connecting to backend…'}</p>
       </div>
-    )
-    return (
-      <SetupWizard
-        settings={appSettings}
-        onLaunch={(rg) => {
-          if (rg) setSelectedResourceGroup(rg)
-          setLaunched(true)
-        }}
-      />
     )
   }
 
@@ -1976,7 +1985,7 @@ function AppInner() {
         badges={sidebarBadges}
       />
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} subscriptions={data?.subscriptions || []} onDisconnect={() => { setSettingsOpen(false); setLaunched(false) }} />
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} subscriptions={data?.subscriptions || []} />
 
       <DrillDownDrawer
         type={drillDownType}
@@ -2192,7 +2201,7 @@ function AppInner() {
           </div>
         )}
 
-        {/* ── Projects & Workloads view (APEX-Enabled) ── */}
+        {/* ── Projects & Workloads view ── */}
         {view === 'projects' && (
           <ProjectsModule
             resources={data?.resources ?? []}
@@ -2231,7 +2240,7 @@ function AppInner() {
 
         {/* ── BCDR Assessment ── */}
         {view === 'bcdr' && (<>
-          <BCDRView />
+          <BCDRView resources={filteredResources} />
           <CrossModuleLinks onNavigate={setView} links={[
             { key: 'backup', label: 'Backup Coverage', color: '#22c55e', icon: '/icons/storage/00017-icon-service-Recovery-Services-Vaults.svg' },
             { key: 'security', label: 'Security Posture', color: '#ef4444', icon: '/icons/security/10241-icon-service-Microsoft-Defender-for-Cloud.svg' },
@@ -2371,7 +2380,6 @@ function AppInner() {
           <div className="space-y-4">
             <div className="flex gap-1 bg-gray-900/60 border border-gray-800 rounded-lg p-1 w-fit">
               {[
-                { key: 'bcdr-planning', label: 'BCDR Planning', Icon: ClipboardList },
                 { key: 'map',        label: 'Map', Icon: MapIcon },
                 { key: 'appservice', label: 'App Services', Icon: Settings },
                 { key: 'storage',    label: 'Storage', Icon: HardDrive },
@@ -2386,7 +2394,6 @@ function AppInner() {
                 </button>
               ))}
             </div>
-            {infraView === 'bcdr-planning' && <BCDRPlanningPanel resources={filteredResources} />}
             {infraView === 'map'        && <ResourceMap resources={filteredResources} onNavigate={setView} />}
             {infraView === 'appservice' && <AppServicePanel resources={filteredResources} onResourceClick={handleResourceDetailClick} />}
             {infraView === 'storage'    && <StoragePanel resources={filteredResources} onResourceClick={handleResourceDetailClick} />}
@@ -3086,8 +3093,8 @@ function AIBCDRPanel() {
                     {item.rto && <span className="text-xs text-gray-500">RTO: {item.rto}</span>}
                     {item.rpo && <span className="text-xs text-gray-500">RPO: {item.rpo}</span>}
                   </div>
-                  {item.bcdr_gap && <p className="text-xs text-orange-400/90 mt-1">{item.bcdr_gap}</p>}
-                  {item.recommendation && <p className="text-xs text-gray-400 mt-1 leading-relaxed">{item.recommendation}</p>}
+                  {item.bcdr_gap && <p className="text-xs text-orange-400/90 mt-1">{asText(item.bcdr_gap)}</p>}
+                  {item.recommendation && <p className="text-xs text-gray-400 mt-1 leading-relaxed">{asText(item.recommendation)}</p>}
                 </div>
               </div>
               {item.action_steps?.length > 0 && (
@@ -3158,7 +3165,28 @@ function MaturityView({ data, filteredResources, moduleListMode, setModuleListMo
           </div>
           <ModuleViewToggle label="Cloud Maturity" listMode={moduleListMode} onToggle={setModuleListMode} />
           {moduleListMode ? (
-            <ResourceTable resources={filteredResources} externalFilter={tableFilter} onClearExternalFilter={() => setTableFilter(null)} aiEnabled={data?.ai_enabled ?? false} projects={projects} onSaveSelectedAsProject={({ mode, ids, projectId }) => { setSelectedResourceIds(new Set(ids)); if (mode === 'new') setSaveProjectModalOpen(true); else api.addProjectResources(projectId, ids).then(() => api.getProjects().then(setProjects)) }} />
+            <DataTable
+              title="Resource Maturity Report"
+              exportFilename="maturity-resources"
+              columns={[
+                { key: 'name', label: 'Resource' },
+                { key: 'resource_type', label: 'Type' },
+                { key: 'resource_group', label: 'Resource Group' },
+                { key: 'location', label: 'Location' },
+                { key: 'subscription_id', label: 'Subscription', render: subNameRenderer(subMap) },
+                { key: 'final_score', label: 'Score', render: scoreBadgeRenderer },
+                { key: 'sku', label: 'SKU' },
+                { key: 'cost_current_month', label: 'Monthly Cost', render: costRenderer },
+                { key: 'has_backup', label: 'Backup', render: boolBadgeRenderer('Protected', 'Unprotected') },
+                { key: 'is_orphan', label: 'Orphan', render: boolBadgeRenderer('Yes', 'No') },
+              ]}
+              data={filteredResources.map(r => ({
+                ...r,
+                name: r.name || r.resource_name || r.resource_id?.split('/').pop(),
+                final_score: r.final_score ?? r.score ?? null,
+              }))}
+              emptyMsg="No resources assessed"
+            />
           ) : (
             <>
               <MaturityHero cm={cm} />
@@ -3357,7 +3385,21 @@ function InnovationView({ data, filteredResources, moduleListMode, setModuleList
           </div>
           <ModuleViewToggle label="Innovation" listMode={moduleListMode} onToggle={setModuleListMode} />
           {moduleListMode ? (
-            <ResourceTable resources={filteredResources} externalFilter={tableFilter} onClearExternalFilter={() => setTableFilter(null)} aiEnabled={data?.ai_enabled ?? false} projects={projects} onSaveSelectedAsProject={({ mode, ids, projectId }) => { setSelectedResourceIds(new Set(ids)); if (mode === 'new') setSaveProjectModalOpen(true); else api.addProjectResources(projectId, ids).then(() => api.getProjects().then(setProjects)) }} />
+            <DataTable
+              title="Innovation Gaps Report"
+              exportFilename="innovation-gaps"
+              columns={[
+                { key: 'opportunity', label: 'Opportunity' },
+                { key: 'category', label: 'Category' },
+                { key: 'recommendation_detail', label: 'Recommendation' },
+                { key: 'business_impact', label: 'Business Impact' },
+                { key: 'azure_services', label: 'Azure Services' },
+                { key: 'estimated_effort', label: 'Effort' },
+                { key: 'status', label: 'Status' },
+              ]}
+              data={gaps}
+              emptyMsg="No innovation gaps detected"
+            />
           ) : (
             <>
               <InnovationHero gaps={gaps} scores={scores} />
@@ -3408,7 +3450,21 @@ function MigrationView({ data, filteredResources, moduleListMode, setModuleListM
           </div>
           <ModuleViewToggle label="Migration" listMode={moduleListMode} onToggle={setModuleListMode} />
           {moduleListMode ? (
-            <ResourceTable resources={filteredResources} externalFilter={tableFilter} onClearExternalFilter={() => setTableFilter(null)} aiEnabled={data?.ai_enabled ?? false} projects={projects} onSaveSelectedAsProject={({ mode, ids, projectId }) => { setSelectedResourceIds(new Set(ids)); if (mode === 'new') setSaveProjectModalOpen(true); else api.addProjectResources(projectId, ids).then(() => api.getProjects().then(setProjects)) }} />
+            <DataTable
+              title="Modernization Opportunities Report"
+              exportFilename="migration-opportunities"
+              columns={[
+                { key: 'resource_name', label: 'Resource' },
+                { key: 'resource_type', label: 'Current Type' },
+                { key: 'target', label: 'Target Service' },
+                { key: 'category', label: 'Category' },
+                { key: 'effort', label: 'Effort' },
+                { key: 'priority', label: 'Priority' },
+                { key: 'recommendation', label: 'Recommendation' },
+              ]}
+              data={opps}
+              emptyMsg="No modernization opportunities found"
+            />
           ) : (
             <MigrationDashboard legacyOpps={opps} />
           )}
@@ -3456,7 +3512,19 @@ function BackupView({ data, filteredResources, moduleListMode, setModuleListMode
           </div>
           <ModuleViewToggle label="Backup & Resilience" listMode={moduleListMode} onToggle={setModuleListMode} />
           {moduleListMode ? (
-            <ResourceTable resources={filteredResources} externalFilter={tableFilter} onClearExternalFilter={() => setTableFilter(null)} aiEnabled={data?.ai_enabled ?? false} projects={projects} onSaveSelectedAsProject={({ mode, ids, projectId }) => { setSelectedResourceIds(new Set(ids)); if (mode === 'new') setSaveProjectModalOpen(true); else api.addProjectResources(projectId, ids).then(() => api.getProjects().then(setProjects)) }} />
+            <DataTable
+              title="Backup Coverage Report"
+              exportFilename="backup-coverage"
+              columns={[
+                { key: 'name', label: 'Resource' },
+                { key: 'resource_type', label: 'Type' },
+                { key: 'resource_group', label: 'Resource Group' },
+                { key: 'location', label: 'Location' },
+                { key: 'backup_status', label: 'Backup Status' },
+              ]}
+              data={filteredResources.map(r => ({ ...r, name: r.name || r.resource_name || r.resource_id?.split('/').pop(), backup_status: r.is_protected ? 'Protected' : 'Unprotected' }))}
+              emptyMsg="No backup data available"
+            />
           ) : (
             <BackupResiliencePanel backupCoverage={bc} />
           )}
@@ -3501,7 +3569,20 @@ function ResilienceView({ data, filteredResources, moduleListMode, setModuleList
           </div>
           <ModuleViewToggle label="Resilience & SLA" listMode={moduleListMode} onToggle={setModuleListMode} />
           {moduleListMode ? (
-            <ResourceTable resources={filteredResources} externalFilter={tableFilter} onClearExternalFilter={() => setTableFilter(null)} aiEnabled={data?.ai_enabled ?? false} projects={projects} onSaveSelectedAsProject={({ mode, ids, projectId }) => { setSelectedResourceIds(new Set(ids)); if (mode === 'new') setSaveProjectModalOpen(true); else api.addProjectResources(projectId, ids).then(() => api.getProjects().then(setProjects)) }} />
+            <DataTable
+              title="Resilience & SLA Report"
+              exportFilename="resilience-sla"
+              columns={[
+                { key: 'name', label: 'Resource' },
+                { key: 'resource_type', label: 'Type' },
+                { key: 'location', label: 'Location' },
+                { key: 'sla', label: 'SLA' },
+                { key: 'availability', label: 'Availability' },
+                { key: 'redundancy', label: 'Redundancy' },
+              ]}
+              data={filteredResources.map(r => ({ ...r, name: r.name || r.resource_name || r.resource_id?.split('/').pop(), redundancy: r.zone_redundant ? 'Zone Redundant' : r.ha_enabled ? 'HA' : 'Single Instance', sla: r.sla || 'N/A', availability: r.availability || 'N/A' }))}
+              emptyMsg="No resilience data available"
+            />
           ) : (
             <ResiliencePanel resources={filteredResources} />
           )}
@@ -3548,7 +3629,19 @@ function LicensingViewEnhanced({ data, filteredResources, moduleListMode, setMod
           </div>
           <ModuleViewToggle label="Licensing & Reservation" listMode={moduleListMode} onToggle={setModuleListMode} />
           {moduleListMode ? (
-            <ResourceTable resources={filteredResources} externalFilter={tableFilter} onClearExternalFilter={() => setTableFilter(null)} aiEnabled={data?.ai_enabled ?? false} projects={projects} onSaveSelectedAsProject={({ mode, ids, projectId }) => { setSelectedResourceIds(new Set(ids)); if (mode === 'new') setSaveProjectModalOpen(true); else api.addProjectResources(projectId, ids).then(() => api.getProjects().then(setProjects)) }} />
+            <DataTable
+              title="Licensing Opportunities Report"
+              exportFilename="licensing-opportunities"
+              columns={[
+                { key: 'resource_name', label: 'Resource' },
+                { key: 'resource_type', label: 'Type' },
+                { key: 'opportunity_type', label: 'Opportunity' },
+                { key: 'savings_potential', label: 'Savings' },
+                { key: 'recommendation', label: 'Recommendation' },
+              ]}
+              data={opps}
+              emptyMsg="No licensing opportunities found"
+            />
           ) : (
             <>
               <LicensingHero opps={opps} />
@@ -3610,13 +3703,14 @@ function NetworkingView() {
   )
 }
 
-function BCDRView() {
+function BCDRView({ resources = [] }) {
   const [tab, setTab] = React.useState('dashboard')
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-1 border-b border-gray-800 pb-3">
         {[
           { key: 'dashboard',  label: 'Dashboard', Icon: Shield },
+          { key: 'planning',   label: 'BCDR Planning', Icon: ClipboardList },
           { key: 'assessment', label: 'Full Assessment (19-Column SA Analysis)', Icon: ClipboardList },
           { key: 'ai',         label: 'AI BCDR Analysis', Icon: Brain },
           { key: 'avs',        label: 'AVS DR', Icon: Cloud },
@@ -3636,6 +3730,7 @@ function BCDRView() {
         ))}
       </div>
       {tab === 'dashboard'   && <BCDRDashboard onViewAssessment={() => setTab('assessment')} />}
+      {tab === 'planning'    && <BCDRPlanningPanel resources={resources} />}
       {tab === 'assessment'  && <BCDRAssessmentTable />}
       {tab === 'ai'          && <AIBCDRPanel />}
       {tab === 'avs'         && <AVSDRPanel />}

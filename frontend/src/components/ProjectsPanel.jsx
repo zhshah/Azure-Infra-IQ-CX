@@ -8,11 +8,12 @@
  *   - See which resources are in each project
  */
 import React, { useState } from 'react'
-import { FolderOpen, Trash2, ArrowRight, Globe, Edit2, Users, LayoutGrid, X } from 'lucide-react'
+import { FolderOpen, Trash2, ArrowRight, Globe, Edit2, Users, LayoutGrid, X, LayoutDashboard } from 'lucide-react'
 import clsx from 'clsx'
 import { api } from '../api/client'
+import ProjectWorkspace from './ProjectWorkspace'
 
-function ProjectCard({ project, isActive, onActivate, onDelete, allResources }) {
+function ProjectCard({ project, isActive, onActivate, onDelete, onOpenWorkspace, allResources }) {
   const [expanded, setExpanded] = useState(false)
 
   const projectResources = allResources.filter(r =>
@@ -51,6 +52,13 @@ function ProjectCard({ project, isActive, onActivate, onDelete, allResources }) 
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => onOpenWorkspace(project)}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+              title="Open the project workspace — tag resources and run AI assessments"
+            >
+              <LayoutDashboard size={11} /> Workspace
+            </button>
             {isActive ? (
               <button
                 onClick={() => onActivate(null)}
@@ -62,8 +70,9 @@ function ProjectCard({ project, isActive, onActivate, onDelete, allResources }) 
               <button
                 onClick={() => onActivate(project.id)}
                 className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-gray-800 border border-gray-700/60 text-gray-300 hover:bg-gray-700 transition-colors"
+                title="Filter all dashboards to this project's resources"
               >
-                Open <ArrowRight size={11} />
+                Filter <ArrowRight size={11} />
               </button>
             )}
             <button
@@ -140,6 +149,18 @@ function ProjectCard({ project, isActive, onActivate, onDelete, allResources }) 
 
 export default function ProjectsPanel({ projects, activeProjectId, onSelectProject, onDeleteProject, allResources }) {
   const [confirmDelete, setConfirmDelete] = useState(null) // { id, name }
+  const [workspaceId, setWorkspaceId] = useState(null)
+
+  const workspaceProject = workspaceId ? projects.find(p => p.id === workspaceId) : null
+  if (workspaceProject) {
+    return (
+      <ProjectWorkspace
+        project={workspaceProject}
+        allResources={allResources}
+        onBack={() => setWorkspaceId(null)}
+      />
+    )
+  }
 
   function handleDeleteRequest(id, name) {
     setConfirmDelete({ id, name })
@@ -200,6 +221,7 @@ export default function ProjectsPanel({ projects, activeProjectId, onSelectProje
               isActive={p.id === activeProjectId}
               onActivate={onSelectProject}
               onDelete={handleDeleteRequest}
+              onOpenWorkspace={(proj) => setWorkspaceId(proj.id)}
               allResources={allResources}
             />
           ))}

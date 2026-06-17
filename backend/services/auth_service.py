@@ -58,13 +58,25 @@ def _auth_required() -> bool:
 
 
 def _get_jwk_client(tenant_id: str):
-    """Construct (and cache per tenant) the JWKS client so repeated calls are cheap."""
+    """Construct (and cache per tenant) the JWKS client so repeated calls are cheap.
+
+    The signing keys are cached for 24h (lifespan) so steady-state validation does
+    ZERO network I/O, and the one-time discovery fetch is bounded by a short timeout
+    so a stalled egress to login.microsoftonline.com can never block the auth
+    middleware (and therefore the whole event loop) indefinitely — that hang is what
+    wedged every /api call on "Connecting to backend…".
+    """
     if not tenant_id:
         return None
     client = _jwk_clients.get(tenant_id)
     if client is None:
         from jwt import PyJWKClient
-        client = PyJWKClient(f"https://login.microsoftonline.com/{tenant_id}/discovery/v2.0/keys")
+        uri = f"https://login.microsoftonline.com/{tenant_id}/discovery/v2.0/keys"
+        try:
+            client = PyJWKClient(uri, cache_keys=True, lifespan=86400, timeout=5)
+        except TypeError:
+            # Older PyJWT without the lifespan/timeout kwargs — degrade gracefully.
+            client = PyJWKClient(uri)
         _jwk_clients[tenant_id] = client
     return client
 

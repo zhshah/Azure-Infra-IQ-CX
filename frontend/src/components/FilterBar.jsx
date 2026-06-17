@@ -51,9 +51,9 @@ function SubBadge({ sub }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 1 }}>
           {name && <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>{shortId}</span>}
           {name && <span style={{ color: '#334155' }}>·</span>}
-          <span style={{ fontSize: 10, color: '#22c55e', fontWeight: 500 }}>${sub.cost_current?.toFixed(2)}/mo</span>
-          <span style={{ color: '#334155' }}>·</span>
-          <span style={{ fontSize: 10, color: '#64748b' }}>{sub.resource_count} resources</span>
+          <span style={{ fontSize: 10, color: '#22c55e', fontWeight: 500 }}>${(sub.cost_current ?? 0).toFixed(2)}/mo</span>
+          {sub.resource_count != null && <span style={{ color: '#334155' }}>·</span>}
+          {sub.resource_count != null && <span style={{ fontSize: 10, color: '#64748b' }}>{sub.resource_count} resources</span>}
         </div>
       </div>
     </div>
@@ -84,15 +84,28 @@ export default function FilterBar({
   const [expanded, setExpanded] = useState(false)
   const [tagValues, setTagValues] = useState([])
   const [mgGroups, setMgGroups] = useState([])
+  const [fetchedSubs, setFetchedSubs] = useState([])  // all accessible subs (stable; independent of the scan)
+  const [mgAvailable, setMgAvailable] = useState(null) // null=unknown, true/false once /api/management-groups answers
 
-  // Fetch the management-group hierarchy so the scope picker can show MGs (selecting one scopes
-  // to every subscription under it). Degrades silently to a flat subscription list if MG data is
-  // unavailable (e.g. no Management Group Reader).
+  // Load the FULL scope picture once on mount, INDEPENDENT of the dashboard scan, so the
+  // subscription menu is STATIC: it always shows every accessible subscription plus the
+  // management-group hierarchy, whether or not resource/cost data has finished loading.
+  // /api/subscriptions returns every subscription the identity can access (enriched with live
+  // cost when a scan is present); /api/management-groups returns the MG tree (needs Management
+  // Group Reader — degrades to subscriptions-only when that role isn't granted).
   useEffect(() => {
     let cancelled = false
+    fetch('/api/subscriptions')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (!cancelled && Array.isArray(d)) setFetchedSubs(d) })
+      .catch(() => {})
     fetch('/api/management-groups')
       .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (!cancelled && d && Array.isArray(d.management_groups)) setMgGroups(d.management_groups) })
+      .then(d => {
+        if (cancelled || !d) return
+        if (Array.isArray(d.management_groups)) setMgGroups(d.management_groups)
+        setMgAvailable(!!d.available)
+      })
       .catch(() => {})
     return () => { cancelled = true }
   }, [])
@@ -149,6 +162,20 @@ export default function FilterBar({
     return { rgCounts: rg, locCounts: loc, typeCounts: tp }
   }, [resources])
 
+  // Static, scan-independent subscription list: prefer the full accessible list from
+  // /api/subscriptions; enrich each entry with live cost / resource_count from the current
+  // scan (the `subscriptions` prop) when available. Falls back to the scan list until the
+  // fetch returns. This is what keeps the scope menu from changing shape on data load.
+  const effectiveSubs = useMemo(() => {
+    const liveById = {}
+    for (const s of subscriptions) liveById[s.subscription_id] = s
+    const base = fetchedSubs.length ? fetchedSubs : subscriptions
+    return base.map(s => {
+      const live = liveById[s.subscription_id]
+      return live ? { ...s, ...live } : s
+    })
+  }, [fetchedSubs, subscriptions])
+
   const rgOptions = resourceGroups.map(rg => ({ value: rg, label: rg, count: rgCounts[rg] || 0 }))
   const locOptions = locations.map(l => ({ value: l, label: l, count: locCounts[l] || 0 }))
   const typeOptions = resourceTypes.map(t => {
@@ -160,7 +187,7 @@ export default function FilterBar({
   })
 
   const subOptions = [
-    { value: '', label: `All ${subscriptions.length} subscriptions`, description: 'Show every accessible subscription' },
+    { value: '', label: `All ${effectiveSubs.length} subscriptions`, description: 'Show every accessible subscription' },
     ...mgGroups.map(mg => {
       const ids = mg.subscription_ids || []
       return {
@@ -174,11 +201,22 @@ export default function FilterBar({
           : 'No accessible subscriptions',
       }
     }),
-    ...subscriptions.map(s => ({
+    ...(mgAvailable === false && mgGroups.length === 0
+      ? [{
+          value: '__mg_unavailable__',
+          label: 'Management groups unavailable',
+          group: 'Management Groups',
+          disabled: true,
+          description: "Grant the identity 'Management Group Reader' at the tenant root to see the hierarchy",
+        }]
+      : []),
+    ...effectiveSubs.map(s => ({
       value: s.subscription_id,
       label: s.subscription_name || s.subscription_id.slice(0, 8) + '\u2026',
       group: 'Subscriptions',
-      description: `$${s.cost_current?.toFixed(0)}/mo · ${s.resource_count} resources`,
+      description: s.resource_count != null
+        ? `$${(s.cost_current ?? 0).toFixed(0)}/mo · ${s.resource_count} resources`
+        : `$${(s.cost_current ?? 0).toFixed(0)}/mo`,
     })),
   ]
 
@@ -187,7 +225,7 @@ export default function FilterBar({
 
   const hasAnyFilter = selectedSubscription || selectedResourceGroup || selectedLocation || selectedResourceType || selectedTagKey
 
-  if (!subscriptions.length && !resourceGroups.length && !resources.length) return null
+  if (!effectiveSubs.length && !resourceGroups.length && !resources.length) return null
 
   return (
     <div style={{ borderBottom: '1px solid rgba(30, 41, 59, 0.5)', background: 'rgba(12, 18, 32, 0.6)' }}>
@@ -200,14 +238,14 @@ export default function FilterBar({
           </span>
 
           {/* Subscription */}
-          {subscriptions.length === 1 && <SubBadge sub={subscriptions[0]} />}
-          {subscriptions.length > 1 && (
+          {effectiveSubs.length === 1 && <SubBadge sub={effectiveSubs[0]} />}
+          {effectiveSubs.length > 1 && (
             <div style={{ width: 200 }}>
               <SearchableSelect
                 value={selectedSubscription || ''}
                 onChange={onSubscriptionChange}
                 options={subOptions}
-                placeholder={`All ${subscriptions.length} subscriptions`}
+                placeholder={`All ${effectiveSubs.length} subscriptions`}
                 searchPlaceholder="Search subscriptions…"
                 compact
               />

@@ -1504,7 +1504,7 @@ const AssessmentWizard = ({ resumeAssessmentId }) => {
           )}
           
           <div>
-            <h4 className="font-semibold text-lg mb-4 text-gray-100">APEX Artifacts</h4>
+            <h4 className="font-semibold text-lg mb-4 text-gray-100">Generated Artifacts</h4>
             <div className="space-y-2">
               {report.executions && report.executions.length > 0 ? (
                 report.executions.map((execution, idx) => {

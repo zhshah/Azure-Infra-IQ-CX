@@ -200,11 +200,7 @@ def _call_ai(system_prompt: str, user_prompt: str, max_tokens: int = MAX_TOKENS_
                 )
                 return text
             else:  # azure_openai
-                # Reasoning models (gpt-5.x, o1/o3/o4) reject 'temperature' and use
-                # 'max_completion_tokens'; older chat models want 'max_tokens'. Start with the
-                # modern params and, on an unsupported-parameter error, strip/swap the offending
-                # one and retry so ANY deployed model works (prevents the AI Analysis 500).
-                aoai_kwargs = dict(
+                response = client.chat.completions.create(
                     model=model,
                     messages=[
                         {"role": "system", "content": system_prompt},
@@ -214,26 +210,6 @@ def _call_ai(system_prompt: str, user_prompt: str, max_tokens: int = MAX_TOKENS_
                     temperature=0.3,
                     response_format={"type": "json_object"},
                 )
-                response = None
-                for _param_try in range(4):
-                    try:
-                        response = client.chat.completions.create(**aoai_kwargs)
-                        break
-                    except Exception as _pe:
-                        if _is_rate_limit(_pe):
-                            raise
-                        _m = str(_pe).lower()
-                        _changed = False
-                        if "temperature" in _m and "temperature" in aoai_kwargs:
-                            aoai_kwargs.pop("temperature", None); _changed = True
-                        elif "max_completion_tokens" in _m and "max_completion_tokens" in aoai_kwargs:
-                            aoai_kwargs["max_tokens"] = aoai_kwargs.pop("max_completion_tokens"); _changed = True
-                        elif "response_format" in _m and "response_format" in aoai_kwargs:
-                            aoai_kwargs.pop("response_format", None); _changed = True
-                        elif "unsupported" in _m and "temperature" in aoai_kwargs:
-                            aoai_kwargs.pop("temperature", None); _changed = True
-                        if not _changed:
-                            raise
                 text = response.choices[0].message.content.strip()
                 elapsed = _time.time() - t0
                 usage = getattr(response, "usage", None)
@@ -334,11 +310,10 @@ def _build_tag_summary(compressed: List[dict]) -> str:
     if environment_counts:
         lines.append(f"- Environment distribution: {json.dumps(environment_counts)}")
     lines.append("")
-    lines.append("IMPORTANT: Use custom_tags to prioritize recommendations:")
-    lines.append("- Mission Critical / Business Critical → highest priority for BCDR, security, and availability")
-    lines.append("- Standard → normal priority")
-    lines.append("- Non-Critical / Dev-Test → lower priority, cost optimization focus")
-    lines.append("- Resources with RPO/RTO tags → validate current state against user-defined targets")
+    lines.append("HOW TO USE THESE TAGS (stay within the CURRENT assessment domain):")
+    lines.append("- Use custom_tags only to PRIORITISE within this analysis — rank higher-Criticality resources first.")
+    lines.append("- Mission Critical / Business Critical → highest priority; Standard → normal; Non-Critical / Dev-Test → lowest.")
+    lines.append("- RPO / RTO / DR_Tier are recovery targets — use them ONLY when the current category is BCDR, backup, or resilience. Do NOT raise backup / DR / RPO / RTO points in a security, network, cost, identity, or other non-recovery analysis.")
     return "\n".join(lines)
 
 
@@ -392,7 +367,42 @@ def _compress_resource(r: dict) -> dict:
             {"impact": a.get("impact"), "description": a.get("short_description")}
             for a in r.get("advisor_recommendations", [])[:3]
         ],
+        # Universal signals — included only when they carry meaning (falsy → dropped below)
+        "is_infrastructure": r.get("is_infrastructure") or None,
+        "telemetry_source":  r.get("telemetry_source"),   # how much real telemetry backs this resource
+        "idle_confirmed":    r.get("idle_confirmed") or None,
+        "last_active_date":  r.get("last_active_date"),
+        "missing_tags":      (r.get("missing_tags") or None),
+        "rbac_assignments":  (r.get("rbac_assignment_count") or None),
     }
+
+    # Attach ONLY the type-specific configuration cluster relevant to THIS resource's type, so the
+    # model grounds on real config for the type and never sees irrelevant flags that could be
+    # mistaken for gaps (e.g. health_check / backup on a control-plane resource like an action group).
+    rtype = (r.get("resource_type") or "").lower()
+    if r.get("app_kind") or "/sites" in rtype or "serverfarms" in rtype:
+        ctx.update({
+            "app_kind":             r.get("app_kind"),
+            "runtime_stack":        r.get("runtime_stack"),
+            "health_check_enabled": r.get("health_check_enabled"),
+            "ssl_expiry":           r.get("ssl_expiry_date"),
+            "slot_count":           r.get("slot_count") or None,
+            "custom_domains":       r.get("custom_domain_count") or None,
+        })
+    if "storageaccounts" in rtype or r.get("resource_category") == "storage":
+        ctx.update({
+            "storage_lifecycle_policy":     r.get("storage_has_lifecycle_policy"),
+            "storage_last_access_tracking": r.get("storage_last_access_tracking"),
+        })
+    if "databases" in rtype or "sql" in rtype or "cosmos" in rtype or r.get("resource_category") == "data":
+        ctx["is_sql_replica"] = r.get("is_sql_replica")
+    if "cognitiveservices" in rtype or "openai" in rtype or r.get("resource_category") == "ai":
+        ctx.update({
+            "billing_type":  r.get("billing_type"),
+            "total_tokens":  r.get("total_tokens"),
+            "blocked_calls": r.get("blocked_calls") or None,
+        })
+
     # Remove None values to keep context compact (keep _full_id for tag matching)
     return {k: v for k, v in ctx.items() if v is not None}
 

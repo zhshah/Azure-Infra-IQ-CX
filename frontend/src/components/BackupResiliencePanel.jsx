@@ -25,6 +25,23 @@ const SEV_COLOR = { critical: "#ef4444", high: "#f97316", medium: "#eab308", low
 const SEV_BG    = { critical: "#ef444415", high: "#f9731615", medium: "#eab30815", low: "#64748b12" };
 const SEV_LABEL = { critical: "Critical", high: "High", medium: "Medium", low: "Low" };
 
+// Render-safe text: the backend/AI may return a plain string OR a structured object
+// (e.g. {id, action, notes}). Rendering an object as a React child throws (React #31),
+// which crashed the Backup & DR view. This coerces any shape into a readable string.
+function asText(v) {
+  if (v == null) return "";
+  if (typeof v === "string" || typeof v === "number") return v;
+  if (Array.isArray(v)) return v.map(asText).filter(Boolean).join("; ");
+  if (typeof v === "object") {
+    const main = v.action || v.text || v.recommendation || v.description || v.detail || v.title || v.message || "";
+    const extra = v.notes && v.notes !== main ? ` (${v.notes})` : "";
+    if (main) return `${main}${extra}`;
+    const strs = Object.values(v).filter(x => typeof x === "string");
+    return strs.length ? strs.join(" \u2014 ") : JSON.stringify(v);
+  }
+  return String(v);
+}
+
 const CHART_COLORS = [
   "#60a5fa", "#a78bfa", "#f472b6", "#fb923c", "#facc15",
   "#34d399", "#22d3ee", "#818cf8", "#f87171", "#94a3b8",
@@ -274,7 +291,7 @@ function FindingCard({ item, expanded, onToggle, onSelect }) {
             {item.resource_type && <span> · {item.resource_type.split("/").pop()}</span>}
             {item.location && <span> · {item.location}</span>}
           </div>
-          <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.6 }}>{item.description}</div>
+          <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.6 }}>{asText(item.description)}</div>
           {item.last_backup_status && (
             <div style={{ color: "#475569", fontSize: 10, marginTop: 4 }}>Last backup: {item.last_backup_status}</div>
           )}
@@ -289,7 +306,7 @@ function FindingCard({ item, expanded, onToggle, onSelect }) {
           {expanded && (
             <div style={{ marginTop: 10, background: "#1e293b", borderRadius: 8, padding: "12px 14px", border: "1px solid #334155" }}>
               <div style={{ color: "#22c55e", fontSize: 11, fontWeight: 600, marginBottom: 6, display: "flex", alignItems: "center", gap: 4 }}>{React.createElement(CheckCircle, { size: 11 })} Recommendation</div>
-              <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.6 }}>{item.recommendation}</div>
+              <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.6 }}>{asText(item.recommendation)}</div>
             </div>
           )}
         </div>
@@ -479,7 +496,7 @@ function RoCFindingCard({ item }) {
         <span style={{ margin: "0 6px", color: "#334155" }}>→</span>
         Vault: <span style={{ color: "#94a3b8" }}>{item.vault_name}</span> ({item.vault_region})
       </div>
-      <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.6 }}>{item.description}</div>
+      <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.6 }}>{asText(item.description)}</div>
     </div>
   );
 }
@@ -913,11 +930,11 @@ export default function BackupResiliencePanel({ backupCoverage }) {
                   <span style={{ color: "#f1f5f9", fontSize: 14, fontWeight: 700 }}>{item.resource_name || item.vault_name || item.title}</span>
                   <button onClick={() => setExpandedId(null)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 14 }}>✕</button>
                 </div>
-                <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.6, marginBottom: 10 }}>{item.description}</div>
+                <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.6, marginBottom: 10 }}>{asText(item.description)}</div>
                 {item.recommendation && (
                   <div style={{ background: "#1e293b", borderRadius: 8, padding: 12, border: "1px solid #334155" }}>
                     <div style={{ color: "#22c55e", fontSize: 11, fontWeight: 600, marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>{React.createElement(CheckCircle, { size: 11 })} Recommendation</div>
-                    <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.6 }}>{item.recommendation}</div>
+                    <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.6 }}>{asText(item.recommendation)}</div>
                   </div>
                 )}
               </div>
@@ -1523,7 +1540,7 @@ export default function BackupResiliencePanel({ backupCoverage }) {
                       <span style={{ fontSize: 12, color: item.required ? "#ef4444" : "#64748b", flexShrink: 0 }}>{item.required ? "◉" : "○"}</span>
                       <div>
                         <div style={{ fontSize: 11, color: "#e2e8f0", fontWeight: 600 }}>{item.item}</div>
-                        {item.description && <div style={{ fontSize: 10, color: "#64748b" }}>{item.description}</div>}
+                        {item.description && <div style={{ fontSize: 10, color: "#64748b" }}>{asText(item.description)}</div>}
                       </div>
                     </div>
                   ))}

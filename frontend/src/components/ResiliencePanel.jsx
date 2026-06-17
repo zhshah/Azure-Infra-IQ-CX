@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from "react";
 import ResourceDetailDrawer from "./ResourceDetailDrawer";
+import { asText } from "../utils/safeText";
 
 const RISK_COLOR = { Critical: "#ef4444", High: "#f97316", Medium: "#eab308", Low: "#22c55e" };
 
@@ -271,7 +272,7 @@ function ResilienceCard({ finding, onSelect }) {
                 ✅ Recommendation
               </div>
               <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.6, marginBottom: 10 }}>
-                {finding.recommendation}
+                {asText(finding.recommendation)}
               </div>
               <a
                 href={finding.az_link}

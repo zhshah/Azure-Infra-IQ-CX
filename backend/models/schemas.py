@@ -310,7 +310,7 @@ class AppSettings(BaseModel):
     ai_cost_threshold_usd: float = 20.0
     cache_ttl_seconds:     int   = 1800
     demo_mode:             bool  = False
-    auto_refresh_interval_hours: int = 0
+    auto_refresh_interval_hours: int = 6
     # Scan scope — limits what gets scanned (for testing/validation)
     scan_scope_subscription_id: str = ""
     scan_scope_resource_group:  str = ""

@@ -11,6 +11,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import TagAIBanner from './TagAIBanner';
 import ResourceDetailDrawer from './ResourceDetailDrawer';
+import { asText } from '../utils/safeText';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -149,13 +150,13 @@ function FindingsList({ findings, onResourceClick }) {
       {f.recommendation && (
         <div style={{ marginTop: 8, padding: '8px 10px', background: '#0c4a6e20', border: '1px solid #0c4a6e50', borderRadius: 6 }}>
           <span style={{ color: '#38bdf8', fontSize: 11, fontWeight: 600 }}>Recommendation: </span>
-          <span style={{ color: '#7dd3fc', fontSize: 12 }}>{f.recommendation}</span>
+          <span style={{ color: '#7dd3fc', fontSize: 12 }}>{asText(f.recommendation)}</span>
         </div>
       )}
       {f.remediation && (
         <div style={{ marginTop: 8, padding: '8px 10px', background: '#0c4a6e20', border: '1px solid #0c4a6e50', borderRadius: 6 }}>
           <span style={{ color: '#38bdf8', fontSize: 11, fontWeight: 600 }}>Remediation: </span>
-          <span style={{ color: '#7dd3fc', fontSize: 12 }}>{f.remediation}</span>
+          <span style={{ color: '#7dd3fc', fontSize: 12 }}>{asText(f.remediation)}</span>
         </div>
       )}
       {f.effort && (
@@ -374,6 +375,32 @@ export default function AIAnalysisPanel({ endpoint, title, renderReport }) {
     runAnalysis(true, v);
   }, [runAnalysis]);
 
+  // Export the current AI report (works for ANY category) to PDF or rich multi-sheet Excel.
+  const [exporting, setExporting] = useState(null);
+  const category = useMemo(() => (endpoint || '').split('?')[0].split('/').filter(Boolean).pop() || 'ai', [endpoint]);
+  const downloadBlob = (blob, name) => { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); };
+  const exportPdf = useCallback(async () => {
+    if (!data) return;
+    setExporting('pdf');
+    try {
+      const { generateAIReportPDF } = await import('../utils/aiReportExport');
+      const blob = await generateAIReportPDF(title, category, data);
+      downloadBlob(blob, `${category}-ai-analysis-${new Date().toISOString().slice(0, 10)}.pdf`);
+    } catch (e) { console.error('PDF export failed', e); } finally { setExporting(null); }
+  }, [data, title, category]);
+  const exportXlsx = useCallback(async () => {
+    if (!data) return;
+    setExporting('xlsx');
+    try {
+      const res = await fetch(`${API}/api/ai/report-export.xlsx`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, category, report: data }) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const cd = res.headers.get('Content-Disposition') || '';
+      const fname = (cd.match(/filename="?([^"]+)"?/) || [])[1] || `${category}-ai-analysis.xlsx`;
+      downloadBlob(blob, fname);
+    } catch (e) { console.error('Excel export failed', e); } finally { setExporting(null); }
+  }, [data, title, category]);
+
   // Auto-load on mount (uses cache)
   useEffect(() => { runAnalysis(false); }, []);
 
@@ -420,6 +447,16 @@ export default function AIAnalysisPanel({ endpoint, title, renderReport }) {
     <ReportBoundary resetKey={data?._meta?.generated_at} onRetry={() => runAnalysis(true)}>
     <div style={{ position: 'relative' }}>
       <TagAIBanner />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 10 }}>
+        <button onClick={exportPdf} disabled={!!exporting} title="Download a PDF of this AI analysis"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', background: '#1e293b', border: '1px solid #334155', color: '#e2e8f0', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: exporting ? 'default' : 'pointer', opacity: exporting ? 0.6 : 1 }}>
+          {exporting === 'pdf' ? 'Exporting…' : '⤓ Export PDF'}
+        </button>
+        <button onClick={exportXlsx} disabled={!!exporting} title="Download a rich multi-sheet Excel of this AI analysis"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', background: '#166534', border: '1px solid #15803d', color: '#fff', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: exporting ? 'default' : 'pointer', opacity: exporting ? 0.6 : 1 }}>
+          {exporting === 'xlsx' ? 'Exporting…' : '⤓ Export Excel'}
+        </button>
+      </div>
       {/* Focus selector — directs the AI at a sub-topic of THIS category's data.
           Only shown for scope-aware generic categories (presets configured). */}
       {meta.presets.length > 0 && (

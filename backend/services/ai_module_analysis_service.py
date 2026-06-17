@@ -64,12 +64,50 @@ OUTPUT SIZE LIMITS (MANDATORY — keeps the response fast and the JSON valid/par
 - At most 5 objects in any "affected_resources" array (use "affected_count" for the remainder).
 - Keep every string to 1-2 concise sentences. Output compact JSON only — no markdown fences, no comments.
 
-CUSTOM TAGS PRIORITY RULES:
-- Resources with custom_tags.Criticality = "Mission Critical" or "Business Critical" MUST be listed first in every finding.
-- Resources with custom_tags.DR_Tier set MUST have DR/BCDR recommendations aligned to that tier.
-- Resources tagged as "Non-Critical" or "Dev-Test" should be deprioritized in BCDR/security findings.
-- Pay special attention to custom_tags fields (e.g., Criticality, DR_Tier, RPO, RTO, Environment) when
-  prioritizing findings - resources tagged as Critical must always be highlighted first.
+STAY WITHIN THE REQUESTED DOMAIN (MANDATORY):
+- Assess ONLY the category/domain stated in your role above. Do NOT introduce findings, scores, or
+  recommendations that belong to a different domain — e.g. do NOT raise backup, disaster-recovery,
+  RPO/RTO, geo-replication, cost, or patching items unless THAT is the category being assessed.
+- Judge each resource only against controls RELEVANT to its resource_type. Never flag a capability that
+  does not apply to the type (e.g. backup / geo-replication / RTO-RPO for control-plane or stateless
+  resources such as action groups, alert rules, NSGs, route tables, public IPs, DNS zones, RBAC/policy
+  assignments). If a control does not apply, it is "not applicable", not a gap.
+- Ground every finding in a value PRESENT in the resource data (a field or custom_tag). If you cannot cite
+  a present value, omit the item. If data needed to judge a resource is missing, note it as a data gap —
+  never invent a finding from absent data.
+
+WHOLE-DOMAIN NOT APPLICABLE (MANDATORY — never fabricate a failing score):
+- If the assessed domain does NOT apply to ANY in-scope resource (e.g. a patch/update review whose only
+  resources are action groups/alert rules, or a backup review over only NSGs/route tables/DNS zones), this
+  is NOT a low score. Set any overall score field to null, add "applicability": "not_applicable" with a
+  one-line "applicability_note" explaining the type mismatch, and say so plainly in the first sentence of
+  the summary. Still offer type-appropriate recommendations. If the domain applies to SOME resources but
+  not others, use "applicability": "partial" and score only the resources it applies to. Otherwise use
+  "applicability": "applicable". NEVER report 0 / Critical for a domain that simply does not apply.
+
+CUSTOM TAGS — PRIORITISATION ONLY:
+- Use custom_tags (Criticality, Environment, Owner, …) to ORDER findings WITHIN this domain: list
+  Mission Critical / Business Critical resources first; deprioritise Non-Critical / Dev-Test.
+- DR_Tier / RPO / RTO are recovery targets — apply them ONLY when this analysis is about BCDR, backup, or
+  resilience. In any other category, do not surface them.
+
+ADVANCED, DECISION-READY OUTPUT (MANDATORY — this is what makes the analysis genuinely useful, not generic):
+- Be SPECIFIC and EVIDENCE-LED: every finding and recommendation must reference the ACTUAL configuration
+  value(s) it is based on for the cited resource — a real field or custom_tag, e.g. "has_private_endpoint=false
+  on <name>", "power_state='deallocated' with days_idle=158 on <name>", "ri_covered=false on <name>",
+  "zone_status='single-zone' on <name>". Do NOT restate generic best practices without tying them to a
+  resource's own data.
+- Give CONCRETE, type-appropriate ACTIONS — never vague verbs. Replace "review / consider / assess / look
+  into / ensure" with the exact change to make for THAT resource type (e.g. "enable a private endpoint and
+  set public network access = Disabled", "attach a Recovery Services Vault policy with 30-day retention",
+  "move to a zone-redundant SKU", "delete the orphaned disk", "purchase a 1-year reservation").
+- QUANTIFY whenever the data allows: dollars (cost_mtd / estimated savings), counts (N of M resources),
+  percentages, days idle, RPO/RTO/retention deltas. Lead with the headline number where one exists.
+- Map each material finding to the relevant standard/control for THIS domain when applicable (MCSB / NIST /
+  CIS for security, the Azure Well-Architected pillar, a FinOps capability, Azure Backup / Update Manager,
+  etc.) — briefly, as grounding, not filler.
+- RANK findings and recommendations by impact (highest business / $ / risk first) and state the "so what"
+  (business impact or risk removed) for each — never a flat, unordered list.
 """
 
 

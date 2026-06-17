@@ -145,6 +145,36 @@ export const api = {
   addProjectResources:    (id, ids)  => request(`/projects/${id}/resources`, { method: 'POST', body: JSON.stringify({ resource_ids: ids }) }),
   removeProjectResources: (id, ids)  => request(`/projects/${id}/resources`, { method: 'DELETE', body: JSON.stringify({ resource_ids: ids }) }),
 
+  // Project Workspace — tag-grounded AI assessments per project + category
+  getProjectAssessmentCategories: ()        => request('/project-assessment/categories').then(r => r?.categories || []),
+  runProjectAssessment:    (id, category)   => request(`/projects/${id}/assess`, { method: 'POST', body: JSON.stringify({ category }) }),
+  listProjectAssessments:  (id)             => request(`/projects/${id}/assessments`).then(r => r?.assessments || []),
+  getProjectAssessment:    (id, aid)        => request(`/projects/${id}/assessments/${aid}`),
+  deleteProjectAssessment: async (id, aid)  => {
+    const res = await fetch(`${BASE}/projects/${id}/assessments/${aid}`, { method: 'DELETE' })
+    if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`)
+  },
+  // Rich multi-sheet Excel export of an assessment result (server-side openpyxl). Streams a file download.
+  exportProjectAssessmentXlsx: async (id, result) => {
+    const res = await fetch(`${BASE}/projects/${id}/assessments/export.xlsx`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result }),
+    })
+    if (!res.ok) {
+      const t = await res.text().catch(() => '')
+      let detail; try { detail = JSON.parse(t).detail } catch {}
+      throw new Error(detail || `Excel export failed (HTTP ${res.status})`)
+    }
+    const blob = await res.blob()
+    const cd = res.headers.get('Content-Disposition') || ''
+    const fname = cd.match(/filename="?([^"]+)"?/)?.[1] || `assessment-${id}.xlsx`
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = fname
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+  },
+  getProjectResourceTags:  (ids)            => request(`/tags/all${ids && ids.length ? `?resource_ids=${encodeURIComponent(ids.join(','))}` : ''}`),
+
   // Dependencies
   getDependencySummary:  ()          => request('/dependencies/summary'),
   getDependencyClusters: ()          => request('/dependencies/clusters'),

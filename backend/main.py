@@ -33,7 +33,7 @@ from models.schemas import (
     RightSizeOpportunity, SavingsRecommendation, ScoreDistribution,
     ScoreLabel, SubscriptionSummary, TrendDirection,
 )
-from services.cost_service     import get_two_month_costs, get_daily_costs, get_monthly_cost_history, get_total_daily_costs, get_reservation_covered_resource_ids
+from services.cost_service     import get_two_month_costs, get_daily_costs, get_monthly_cost_history, get_total_daily_costs, get_reservation_covered_resource_ids, get_subscription_month_totals
 from services.metrics_service  import get_resource_metrics
 from services.resource_service import list_all_resources, find_orphans, get_app_service_plan_links, get_vm_power_states, get_resource_locks, get_app_insights_links, get_vm_attachments, get_rbac_signals, get_reservation_coverage, get_reservation_recommendations, get_private_endpoint_targets, get_sql_replica_ids, get_app_service_details, get_backup_protected_ids, get_openai_deployments
 from services.storage_access_service  import get_storage_access_signals
@@ -184,7 +184,7 @@ async def _entra_auth_gate(request: Request, call_next):
             return await call_next(request)
         authz = request.headers.get("authorization")
         tok = authz[7:].strip() if authz and authz[:7].lower() == "bearer " else None
-        if auth_svc.validate_bearer(tok):
+        if await asyncio.get_event_loop().run_in_executor(None, auth_svc.validate_bearer, tok):
             return await call_next(request)
         return JSONResponse({"detail": "Authentication required. Please sign in."}, status_code=401)
     # Only API routes are gated. Static assets and the SPA shell stay public so the
@@ -197,7 +197,12 @@ async def _entra_auth_gate(request: Request, call_next):
         token = authz[7:].strip()
     if not token:
         token = request.query_params.get("access_token")
-    if not auth_svc.validate_bearer(token):
+    # Validate OFF the event loop: token validation may do a one-time JWKS fetch, and
+    # a blocking network call here would freeze the whole server — every /api request
+    # hangs and the SPA is stuck on "Connecting to backend…". The fetch is also
+    # timeout-bounded in auth_service so a stalled login.microsoftonline.com can't wedge it.
+    _valid = await asyncio.get_event_loop().run_in_executor(None, auth_svc.validate_bearer, token)
+    if not _valid:
         return JSONResponse({"detail": "Authentication required. Please sign in."}, status_code=401)
     return await call_next(request)
 
@@ -533,6 +538,10 @@ def _resources_first_payload(resources: List[Dict], sub_ids: List[str],
         )
         for sid in _all_sids
     ]
+    # AI scoring has not run yet in this fast "resources-first" payload, but the
+    # provider may already be CONFIGURED (env/secret). Report it so the portal does
+    # not flash the misleading "Enable AI" banner on every refresh.
+    _rf_active_ai = get_active_provider()
     return DashboardData(
         kpi=kpi,
         score_distribution=[],
@@ -545,8 +554,8 @@ def _resources_first_payload(resources: List[Dict], sub_ids: List[str],
         resource_groups=sorted(rgs),
         tag_compliance_pct=tag_pct,
         total_untagged=untagged,
-        ai_enabled=False,
-        ai_provider="none",
+        ai_enabled=_rf_active_ai != "none",
+        ai_provider=_rf_active_ai,
     )
 
 
@@ -642,7 +651,7 @@ async def _build_dashboard(
         except Exception:
             return default
 
-    # ── Resources-first paint ───────────────────────────────────────
+    # ── Resources-first paint ─────────────────────────────────────────────────
     # The resource INVENTORY is fast (sub-seconds); cost / advisor / trend queries can
     # take 30-120s under Cost Management 429 throttling. Await the inventory + the
     # subscription names on their own and emit them immediately so the portal paints
@@ -675,6 +684,30 @@ async def _build_dashboard(
 
     # Credentials successfully used — reset the inactivity timer (SEC1)
     settings_svc.touch_credential_use()
+
+    # ── Headline cost resilience (429 fallback) ────────────────────────────────
+    # The per-resource cost query (grouped by ResourceId) is the first Cost Management
+    # call to 429-throttle on a busy tenant; when it degrades to $0 the home 'Monthly
+    # Spend' card and the scope badge wrongly read $0 even though real spend exists.
+    # If the per-resource breakdown came back empty, fetch the CHEAP ungrouped
+    # subscription totals (which keep succeeding under throttling) and use them as the
+    # headline figures. Only runs on the throttled path, so no extra load normally.
+    _fallback_sub_totals: Dict[str, Dict[str, float]] = {}
+    _fallback_curr_total = 0.0
+    _fallback_prev_total = 0.0
+    if not curr_costs or sum(curr_costs.values()) == 0:
+        try:
+            _fallback_sub_totals, _ = await loop.run_in_executor(
+                executor, partial(get_subscription_month_totals, sub_ids))
+            _fallback_curr_total = round(sum(v.get("current", 0.0) for v in _fallback_sub_totals.values()), 2)
+            _fallback_prev_total = round(sum(v.get("previous", 0.0) for v in _fallback_sub_totals.values()), 2)
+            if _fallback_curr_total or _fallback_prev_total:
+                logger.info(
+                    "Headline cost fallback (per-resource cost throttled to $0): curr=%.2f prev=%.2f",
+                    _fallback_curr_total, _fallback_prev_total,
+                )
+        except Exception as _fe:
+            logger.debug("Headline cost fallback query failed: %s", _fe)
 
     # ── Hydrate cost trend from the latest persisted snapshot ─────────────────
     # On the fast-open path (skip_metrics) the total-daily series is deferred, and
@@ -1515,6 +1548,12 @@ async def _build_dashboard(
     # ── KPI ─────────────────────────────────────────────────────────────────
     total_curr  = sum(r.cost_current_month  for r in resource_metrics_list)
     total_prev  = sum(r.cost_previous_month for r in resource_metrics_list)
+    # 429 fallback: if the per-resource breakdown was throttled to $0, use the cheap
+    # subscription totals so the headline 'Monthly Spend' reflects real spend.
+    if total_curr == 0 and _fallback_curr_total:
+        total_curr = _fallback_curr_total
+    if total_prev == 0 and _fallback_prev_total:
+        total_prev = _fallback_prev_total
     orphan_list = [r for r in resource_metrics_list if r.is_orphan]
     orphan_cost = sum(r.cost_current_month for r in orphan_list)
     scores      = [r.final_score for r in resource_metrics_list]
@@ -1681,8 +1720,10 @@ async def _build_dashboard(
             subscription_id=sid,
             subscription_name=sub_names.get(sid, ""),
             resource_count=d["resource_count"],
-            cost_current=round(d["cost_current"], 2),
-            cost_previous=round(d["cost_previous"], 2),
+            # 429 fallback: show the cheap subscription total when the per-resource
+            # sum was throttled to $0, so the scope badge isn't a misleading $0.00/mo.
+            cost_current=round(d["cost_current"] or _fallback_sub_totals.get(sid, {}).get("current", 0.0), 2),
+            cost_previous=round(d["cost_previous"] or _fallback_sub_totals.get(sid, {}).get("previous", 0.0), 2),
             orphan_count=d["orphan_count"],
             advisor_rec_count=d["advisor_rec_count"],
         )
@@ -3143,14 +3184,27 @@ async def _finops_warehouse_scheduler() -> None:
     # until real data lands instead of leaving the Cost Warehouse dashboards empty.
     try:
         if _FINOPS_WAREHOUSE_AVAILABLE and not finops_warehouse_svc.has_warehouse_data():
+            # Pass 1 — FAST light load (small window) so the Cost Warehouse dashboards
+            # populate within ~a minute on a fresh deploy instead of blocking on a full
+            # 12-month pull. Retried with backoff because the first post-deploy run can
+            # come back empty (Cost Management 429, or the Cost Management Reader role
+            # still propagating on the managed identity).
             for _attempt in range(1, 7):
-                logger.info("FinOps Warehouse: no data — initial collection attempt %d", _attempt)
-                await _run_warehouse_etl_async("startup_initial")
+                logger.info("FinOps Warehouse: no data — initial LIGHT collection attempt %d", _attempt)
+                await _run_warehouse_etl_async("startup_initial", initial=True)
                 if finops_warehouse_svc.has_warehouse_data():
-                    logger.info("FinOps Warehouse: initial collection populated data")
+                    logger.info("FinOps Warehouse: initial light collection populated data")
                     break
                 logger.warning("FinOps Warehouse: still empty after attempt %d — retrying", _attempt)
                 await asyncio.sleep(min(120 * _attempt, 600))
+            # Pass 2 — full-history backfill in the background (best-effort). The UI is
+            # already usable from the light load; this just deepens the 12-month history.
+            if finops_warehouse_svc.has_warehouse_data():
+                logger.info("FinOps Warehouse: starting full-history backfill")
+                try:
+                    await _run_warehouse_etl_async("startup_backfill", initial=False)
+                except Exception as _bfx:
+                    logger.warning("FinOps Warehouse: backfill pass failed: %s", _bfx)
     except Exception as exc:
         logger.warning("FinOps Warehouse: startup initial collection failed: %s", exc)
 
@@ -3612,8 +3666,8 @@ async def list_subscriptions():
 async def list_management_groups():
     """Management-group hierarchy for the scope selector.
 
-    Returns every management group the identity can read — each with the subscription IDs
-    nested under it (recursively) — plus the flat subscription list, so the scope dropdown can
+    Returns every management group the identity can read \u2014 each with the subscription IDs
+    nested under it (recursively) \u2014 plus the flat subscription list, so the scope dropdown can
     render an "All / Management Groups / Subscriptions" tree and a group selection expands to all
     of its child subscriptions. Uses the Management Groups REST API (needs Management Group
     Reader, granted at the tenant root); the az CLI is avoided because it tries to register a
@@ -5057,13 +5111,13 @@ def _require_warehouse():
         raise HTTPException(status_code=503, detail="FinOps Warehouse module unavailable — check logs")
 
 
-async def _run_warehouse_etl_async(triggered_by: str = "manual"):
+async def _run_warehouse_etl_async(triggered_by: str = "manual", initial: bool = False):
     """Run the ETL job in a thread pool and clear the task reference when done."""
     global _warehouse_etl_task
     loop = asyncio.get_event_loop()
     try:
         sub_ids = finops_data_svc.get_subscription_ids() if _FINOPS_AVAILABLE else []
-        await loop.run_in_executor(_pool, lambda: finops_warehouse_svc.run_full_etl(sub_ids, triggered_by))
+        await loop.run_in_executor(_pool, lambda: finops_warehouse_svc.run_full_etl(sub_ids, triggered_by, initial=initial))
         # Fresh data landed — invalidate the warehouse read caches so the next UI
         # request reflects it immediately instead of a stale cached aggregate.
         _fw_bump_version()
@@ -5530,6 +5584,18 @@ async def start_auto_refresh_scheduler() -> None:
     except Exception as _opse:
         logger.warning("Startup: on-prem scheduler start skipped: %s", _opse)
 
+    # ── Start scheduled dashboard auto-refresh loop ───────────────────────────
+    # Honors the user's "Auto-refresh interval" setting (General tab; default 6h).
+    # Runs a LIGHT background scan (skip_metrics=True) every N hours and persists the
+    # snapshot to the DB so the portal always opens instantly on fresh data. The loop
+    # re-reads the interval each cycle and no-ops while it is 0 (Disabled), so toggling
+    # the setting takes effect without a restart.
+    try:
+        asyncio.create_task(_background_refresh_loop())
+        logger.info("Startup: dashboard auto-refresh loop scheduled")
+    except Exception as _arse:
+        logger.warning("Startup: could not start auto-refresh loop: %s", _arse)
+
     # ── Start utilisation-metrics snapshot background job ─────────────────────
     # Keeps the resource_metrics store fresh so the dashboard fast-open path can
     # hydrate utilisation (Waste Quadrant / scoring) without a live Monitor pull.
@@ -5894,9 +5960,9 @@ class ProjectCreate(BaseModel):
     environment: Optional[str] = None
     dr_tier: Optional[str] = None
     owner: Optional[str] = None
-
-
-class ProjectUpdate(BaseModel):
+    # Generic categorization — what this project is primarily for (any category, optional).
+    # Projects are NOT tied to BCDR; this is just an optional label for organization.
+    focus_area: Optional[str] = None
     name: Optional[str] = None
     resource_ids: Optional[List[str]] = None
     description: Optional[str] = None
@@ -5953,70 +6019,59 @@ async def get_projects():
             conn.close()
     except Exception as e:
         logger.warning(f"Error loading projects: {e}")
+
+    # Also surface legacy "Save as Project" portal projects (id + resource_ids) so they
+    # are visible/revisitable alongside APEX projects. Aliased to project_id/project_name
+    # so the same UI renders both shapes. Non-destructive — APEX rows are already added.
+    try:
+        _apex_ids = {p.get("project_id") for p in projects}
+        for lp in project_svc.list_projects():
+            lid = lp.get("id")
+            if not lid or lid in _apex_ids:
+                continue
+            projects.append({
+                **lp,
+                "project_id": lid,
+                "project_name": lp.get("name"),
+                "is_portal_project": True,
+            })
+    except Exception as e:
+        logger.warning("portal project merge failed: %s", e)
+
     return {"projects": projects}
 
 
 @app.post("/api/projects", status_code=201)
 async def create_project(body: ProjectCreate):
-    """Create a new project from a selection of resource IDs (old UI) or APEX BCDR project (new UI)."""
-    # Support both old UI (name + resource_ids) and new APEX UI (project_id + project_name)
+    """Create a project (generic — for ANY category, not just BCDR).
+
+    Used by both flows: the 'Save as Project' resource-selection flow and the
+    'New Project' modal. All details — name, resources, and generic metadata
+    (focus area, criticality, environment, owner, business unit, and optional DR
+    targets) — persist in the projects table (Azure SQL in production)."""
     project_name = body.project_name or body.name or ""
-    project_id = body.project_id or None
-    
     if not project_name.strip():
         raise HTTPException(status_code=400, detail="Project name is required")
-    
-    # If this is an APEX project, store in APEX database
-    if project_id:
-        from services.database import get_raw_connection
-        conn = get_raw_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO projects (
-                    project_id, project_name, description, business_unit, 
-                    criticality, rto_target, rpo_target, environment, dr_tier, owner
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                project_id, project_name, body.description, body.business_unit,
-                body.criticality, body.rto_target, body.rpo_target, 
-                body.environment, body.dr_tier, body.owner
-            ))
-            conn.commit()
-            
-            # Also store resource associations if provided
-            if body.resource_ids:
-                for resource_id in body.resource_ids:
-                    cursor.execute("""
-                        INSERT INTO project_resources (project_id, resource_id, role)
-                        VALUES (?, ?, ?)
-                    """, (project_id, resource_id, "primary"))
-                conn.commit()
-        finally:
-            conn.close()
-        
-        return {
-            "project_id": project_id,
-            "project_name": project_name,
-            "description": body.description,
-            "business_unit": body.business_unit,
-            "criticality": body.criticality,
-            "rto_target": body.rto_target,
-            "rpo_target": body.rpo_target,
-            "environment": body.environment,
-            "dr_tier": body.dr_tier,
-            "owner": body.owner,
-            "created_at": datetime.utcnow().isoformat()
-        }
-    else:
-        # Old UI - use legacy project service
-        return project_svc.create_project(
-            name=project_name,
-            resource_ids=body.resource_ids or [],
-            description=body.description,
-            color=body.color,
-            icon=body.icon,
-        )
+
+    created = project_svc.create_project(
+        name=project_name,
+        resource_ids=body.resource_ids or [],
+        description=body.description or "",
+        color=body.color,
+        icon=body.icon,
+        business_unit=body.business_unit,
+        owner=body.owner,
+        focus_area=body.focus_area,
+        criticality=body.criticality,
+        environment=body.environment,
+        dr_tier=body.dr_tier,
+        rto_target=body.rto_target,
+        rpo_target=body.rpo_target,
+    )
+    # Provide project_id/project_name aliases so the SPA renders the response uniformly.
+    created["project_id"] = created.get("id")
+    created["project_name"] = created.get("name")
+    return created
 
 
 @app.get("/api/projects/{project_id}")
@@ -6036,9 +6091,19 @@ async def update_project(project_id: str, body: ProjectUpdate):
         description=body.description,
         color=body.color,
         icon=body.icon,
+        business_unit=body.business_unit,
+        owner=body.owner,
+        focus_area=body.focus_area,
+        criticality=body.criticality,
+        environment=body.environment,
+        dr_tier=body.dr_tier,
+        rto_target=body.rto_target,
+        rpo_target=body.rpo_target,
     )
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
+    p["project_id"] = p.get("id")
+    p["project_name"] = p.get("name")
     return p
 
 
@@ -6087,6 +6152,533 @@ async def remove_resources(project_id: str, body: ResourcesAddRemove):
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
     return p
+
+
+# ── Project Assessments (tag-grounded AI per category) ────────────────────────
+
+class ProjectAssessBody(BaseModel):
+    category: str
+
+
+@app.get("/api/project-assessment/categories")
+async def project_assessment_categories():
+    """List the assessment categories the Project Workspace can run."""
+    from services.project_assessment_service import list_categories
+    return {"categories": list_categories()}
+
+
+@app.post("/api/projects/{project_id}/assess")
+async def run_project_assessment(project_id: str, body: ProjectAssessBody):
+    """Run a tag-grounded AI assessment for a saved project in the chosen category.
+
+    Scopes ONLY to the project's resources and grounds the model on each resource's
+    user-defined custom tags (Criticality / DR_Tier / RPO / RTO / …). Persists the run.
+    """
+    import asyncio
+    from services.project_assessment_service import assess_project, CATEGORY_FOCUS
+
+    project = project_svc.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    category = (body.category or "").lower().strip()
+    if category not in CATEGORY_FOCUS:
+        raise HTTPException(status_code=400, detail=f"Unknown assessment category '{body.category}'")
+
+    project_ids = {r.lower() for r in (project.get("resource_ids") or [])}
+    if not project_ids:
+        raise HTTPException(status_code=400, detail="Project has no resources to assess")
+
+    all_resources = _get_resources_list()
+    if not all_resources:
+        raise HTTPException(status_code=404, detail="No resource data — run a scan first")
+
+    subset = [r for r in all_resources if (r.get("resource_id") or "").lower() in project_ids]
+    if not subset:
+        raise HTTPException(
+            status_code=404,
+            detail="None of this project's resources are in the current scan. Run a scan first.",
+        )
+
+    try:
+        result = await asyncio.to_thread(assess_project, project, subset, category)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Project assessment failed (project=%s category=%s): %s", project_id, category, exc)
+        _low = str(exc).lower()
+        if any(k in _low for k in ("connection error", "timeout", "getaddrinfo", "temporarily unavailable", "service unavailable", "apiconnection")):
+            raise HTTPException(
+                status_code=503,
+                detail="AI service is unreachable. Verify the Azure OpenAI endpoint/key and network connectivity, then retry.",
+            )
+        raise HTTPException(status_code=500, detail=f"Assessment failed: {exc}")
+
+    record = project_svc.save_project_assessment(project_id, result)
+    return {"assessment": record, "result": result}
+
+
+@app.get("/api/projects/{project_id}/assessments")
+async def list_project_assessments_ep(project_id: str):
+    """List past assessment runs for a project (newest first, metadata only)."""
+    if not project_svc.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"assessments": project_svc.list_project_assessments(project_id)}
+
+
+@app.get("/api/projects/{project_id}/assessments/{assessment_id}")
+async def get_project_assessment_ep(project_id: str, assessment_id: str):
+    """Fetch a single past assessment run with its full result payload."""
+    rec = project_svc.get_project_assessment(assessment_id)
+    if not rec or rec.get("project_id") != project_id:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    return rec
+
+
+@app.delete("/api/projects/{project_id}/assessments/{assessment_id}", status_code=204)
+async def delete_project_assessment_ep(project_id: str, assessment_id: str):
+    """Delete a past assessment run."""
+    rec = project_svc.get_project_assessment(assessment_id)
+    if not rec or rec.get("project_id") != project_id:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    project_svc.delete_project_assessment(assessment_id)
+
+
+class ProjectAssessExportBody(BaseModel):
+    result: Dict[str, Any]
+
+
+@app.post("/api/projects/{project_id}/assessments/export.xlsx")
+async def export_project_assessment_xlsx(project_id: str, body: ProjectAssessExportBody):
+    """Export a project assessment as a rich, styled, multi-sheet Excel workbook.
+
+    Sheets: Summary, Pillar Scores, Findings, Recommendations, Tag Insights, Key Risks,
+    Resources Analyzed — everything a team needs to plan, execute, and share with partners.
+    """
+    project = project_svc.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    result = body.result or {}
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        raise HTTPException(status_code=500, detail="openpyxl is not installed on the server")
+    from io import BytesIO
+
+    HFILL = PatternFill("solid", fgColor="1E3A5F")
+    HFONT = Font(bold=True, color="FFFFFF", size=11)
+    TITLE = Font(bold=True, color="2D8CFF", size=15)
+    SUBTLE = Font(color="64748B", italic=True, size=9)
+    BOLD = Font(bold=True)
+    WRAP = Alignment(wrap_text=True, vertical="top")
+    SEV_FILL = {
+        "critical": PatternFill("solid", fgColor="7F1D1D"),
+        "high":     PatternFill("solid", fgColor="9A3412"),
+        "medium":   PatternFill("solid", fgColor="854D0E"),
+        "low":      PatternFill("solid", fgColor="334155"),
+    }
+    SEV_FONT = Font(bold=True, color="FFFFFF")
+
+    def _header(ws, headers):
+        for col, h in enumerate(headers, 1):
+            c = ws.cell(row=1, column=col, value=h)
+            c.fill = HFILL; c.font = HFONT
+            c.alignment = Alignment(horizontal="left", vertical="center")
+
+    def _widths(ws, widths):
+        for col, w in widths.items():
+            ws.column_dimensions[col].width = w
+
+    def _affected(item):
+        ars = item.get("affected_resources") or []
+        names = []
+        for a in ars:
+            if isinstance(a, dict):
+                names.append(a.get("resource_name") or a.get("name") or a.get("resource_id") or "")
+            else:
+                names.append(str(a))
+        names = [n for n in names if n]
+        s = ", ".join(names)
+        extra = item.get("affected_count")
+        if isinstance(extra, int) and extra > len(names):
+            s += f" (+{extra - len(names)} more)"
+        return s
+
+    cat_label = result.get("category_label") or result.get("category") or "Assessment"
+    pname = project.get("name") or "Project"
+    wb = openpyxl.Workbook()
+
+    # Sheet 1 — Summary
+    ws = wb.active; ws.title = "Summary"
+    ws["A1"] = f"{pname} — {cat_label} Assessment"; ws["A1"].font = TITLE
+    ws["A2"] = f"Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}  ·  Azure Infra IQ"
+    ws["A2"].font = SUBTLE
+    meta_rows = [
+        ("Project", pname),
+        ("Category", cat_label),
+        ("Overall Score", f"{result.get('overall_score', '—')} / 100"),
+        ("Rating", result.get("score_label", "—")),
+        ("Resources Analyzed", result.get("resource_count", 0)),
+        ("Tag Coverage", f"{result.get('tag_coverage_pct', 0)}%"),
+        ("AI Model", result.get("model", "—")),
+        ("Focus Area", project.get("focus_area") or "—"),
+        ("Environment", project.get("environment") or "—"),
+        ("Business Unit", project.get("business_unit") or "—"),
+        ("Owner", project.get("owner") or "—"),
+    ]
+    r = 4
+    for k, v in meta_rows:
+        ws.cell(row=r, column=1, value=k).font = BOLD
+        ws.cell(row=r, column=2, value=v)
+        r += 1
+    r += 1
+    hc = ws.cell(row=r, column=1, value="Executive Summary"); hc.font = HFONT; hc.fill = HFILL
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2)
+    r += 1
+    sc = ws.cell(row=r, column=1, value=result.get("executive_summary", "")); sc.alignment = WRAP
+    ws.merge_cells(start_row=r, start_column=1, end_row=r + 6, end_column=2)
+    ws.row_dimensions[r].height = 90
+    _widths(ws, {"A": 26, "B": 78})
+
+    # Sheet 2 — Pillar Scores
+    ws = wb.create_sheet("Pillar Scores")
+    _header(ws, ["Pillar", "Score (0-100)", "Rationale"])
+    for i, p in enumerate(result.get("pillar_scores") or [], 2):
+        ws.cell(row=i, column=1, value=p.get("name"))
+        ws.cell(row=i, column=2, value=p.get("score"))
+        ws.cell(row=i, column=3, value=p.get("rationale")).alignment = WRAP
+    _widths(ws, {"A": 34, "B": 14, "C": 80})
+
+    # Sheet 3 — Findings
+    ws = wb.create_sheet("Findings")
+    _header(ws, ["#", "Severity", "Finding", "Detail", "Affected Resources"])
+    for i, f in enumerate(result.get("findings") or [], 2):
+        ws.cell(row=i, column=1, value=i - 1)
+        sev = str(f.get("severity", "")).lower()
+        sevc = ws.cell(row=i, column=2, value=sev.upper() or "—")
+        if sev in SEV_FILL:
+            sevc.fill = SEV_FILL[sev]; sevc.font = SEV_FONT
+        ws.cell(row=i, column=3, value=f.get("title")).font = BOLD
+        ws.cell(row=i, column=4, value=f.get("detail")).alignment = WRAP
+        ws.cell(row=i, column=5, value=_affected(f)).alignment = WRAP
+    _widths(ws, {"A": 5, "B": 11, "C": 42, "D": 80, "E": 42})
+
+    # Sheet 4 — Recommendations
+    ws = wb.create_sheet("Recommendations")
+    _header(ws, ["#", "Priority", "Recommended Action", "Rationale", "Effort", "Business Impact", "Affected Resources"])
+    for i, rec in enumerate(result.get("recommendations") or [], 2):
+        ws.cell(row=i, column=1, value=i - 1)
+        ws.cell(row=i, column=2, value=rec.get("priority")).font = BOLD
+        ws.cell(row=i, column=3, value=rec.get("action")).alignment = WRAP
+        ws.cell(row=i, column=4, value=rec.get("rationale")).alignment = WRAP
+        ws.cell(row=i, column=5, value=rec.get("effort"))
+        ws.cell(row=i, column=6, value=rec.get("business_impact")).alignment = WRAP
+        ws.cell(row=i, column=7, value=_affected(rec)).alignment = WRAP
+    _widths(ws, {"A": 5, "B": 9, "C": 46, "D": 52, "E": 10, "F": 40, "G": 38})
+
+    # Sheet 5 — Tag-Driven Insights
+    ws = wb.create_sheet("Tag Insights")
+    _header(ws, ["#", "Insight (grounded in your Criticality / RTO / RPO / DR_Tier tags)"])
+    for i, ins in enumerate(result.get("tag_driven_insights") or [], 2):
+        ws.cell(row=i, column=1, value=i - 1)
+        ws.cell(row=i, column=2, value=ins).alignment = WRAP
+    _widths(ws, {"A": 5, "B": 100})
+
+    # Sheet 6 — Key Risks & Data Gaps
+    ws = wb.create_sheet("Key Risks")
+    _header(ws, ["#", "Residual Risk / Data Gap"])
+    for i, k in enumerate(result.get("key_risks") or [], 2):
+        ws.cell(row=i, column=1, value=i - 1)
+        ws.cell(row=i, column=2, value=k).alignment = WRAP
+    _widths(ws, {"A": 5, "B": 100})
+
+    # Sheet 7 — Resources Analyzed (full inventory: config, cost & protection properties)
+    ws = wb.create_sheet("Resources Analyzed")
+    res_headers = [
+        "Resource", "Type", "Resource Group", "Location", "Subscription", "SKU",
+        "Cost MTD", "Cost Prev", "Est. Saving/mo", "Power State", "Score", "Rating",
+        "Backup", "Lock", "Private Endpoint", "Avg CPU %", "Utilization %", "Days Idle",
+        "Orphan", "Business Tags", "Azure Tags",
+    ]
+    _header(ws, res_headers)
+
+    def _yn(v):
+        return "Yes" if v is True else ("No" if v is False else "—")
+
+    def _lbl(v):
+        # score_label may be a ScoreLabel (str, Enum) OR an already-stringified
+        # 'ScoreLabel.RARELY_USED'. Normalise both to a clean 'Rarely Used'.
+        val = getattr(v, "value", v)
+        if isinstance(val, str) and val.startswith("ScoreLabel."):
+            val = val.split(".", 1)[1].replace("_", " ").title()
+        return val
+
+    try:
+        pid_set = {x.lower() for x in (project.get("resource_ids") or [])}
+        subset = [x for x in _get_resources_list() if (x.get("resource_id") or "").lower() in pid_set]
+        try:
+            import services.tagging_service as _tagsvc
+            tags_lower = {k.lower(): v for k, v in (_tagsvc.get_all_custom_tags() or {}).items()}
+        except Exception:
+            tags_lower = {}
+        for i, rr in enumerate(subset, 2):
+            rid = rr.get("resource_id") or ""
+            ct = tags_lower.get(rid.lower()) or {}
+            az_tags = rr.get("tags") if isinstance(rr.get("tags"), dict) else {}
+            ws.cell(row=i, column=1, value=rr.get("resource_name") or rid.split("/")[-1])
+            ws.cell(row=i, column=2, value=(rr.get("resource_type") or "").split("/")[-1])
+            ws.cell(row=i, column=3, value=rr.get("resource_group"))
+            ws.cell(row=i, column=4, value=rr.get("location"))
+            ws.cell(row=i, column=5, value=((rr.get("subscription_id") or "")[-12:] or None))
+            ws.cell(row=i, column=6, value=rr.get("sku"))
+            c = ws.cell(row=i, column=7, value=rr.get("cost_current_month")); c.number_format = "#,##0.00"
+            c = ws.cell(row=i, column=8, value=rr.get("cost_previous_month")); c.number_format = "#,##0.00"
+            c = ws.cell(row=i, column=9, value=rr.get("estimated_monthly_savings")); c.number_format = "#,##0.00"
+            ws.cell(row=i, column=10, value=rr.get("power_state"))
+            sc = rr.get("final_score")
+            ws.cell(row=i, column=11, value=(round(sc, 1) if isinstance(sc, (int, float)) else None))
+            ws.cell(row=i, column=12, value=_lbl(rr.get("score_label")))
+            ws.cell(row=i, column=13, value=_yn(rr.get("has_backup")))
+            ws.cell(row=i, column=14, value=_yn(rr.get("has_lock")))
+            ws.cell(row=i, column=15, value=_yn(rr.get("has_private_endpoint")))
+            cpu = rr.get("avg_cpu_pct")
+            ws.cell(row=i, column=16, value=(round(cpu, 1) if isinstance(cpu, (int, float)) else None))
+            util = rr.get("primary_utilization_pct")
+            ws.cell(row=i, column=17, value=(round(util, 1) if isinstance(util, (int, float)) else None))
+            ws.cell(row=i, column=18, value=rr.get("days_idle"))
+            ws.cell(row=i, column=19, value=_yn(rr.get("is_orphan")))
+            ws.cell(row=i, column=20, value=", ".join(f"{k}: {v}" for k, v in ct.items())).alignment = WRAP
+            ws.cell(row=i, column=21, value=", ".join(f"{k}: {v}" for k, v in az_tags.items())).alignment = WRAP
+    except Exception as _exc:
+        logger.warning("export: resources sheet failed: %s", _exc)
+    _widths(ws, {
+        "A": 30, "B": 20, "C": 26, "D": 14, "E": 16, "F": 18, "G": 12, "H": 12, "I": 14,
+        "J": 13, "K": 8, "L": 12, "M": 9, "N": 8, "O": 15, "P": 11, "Q": 13, "R": 10,
+        "S": 9, "T": 40, "U": 40,
+    })
+
+    for sheet in wb.worksheets:
+        if sheet.title != "Summary":
+            sheet.freeze_panes = "A2"
+
+    buf = BytesIO(); wb.save(buf); buf.seek(0)
+    safe = "".join(c if (c.isalnum() or c in "-_") else "_" for c in f"{pname}-{result.get('category', 'assessment')}")
+    fname = f"{safe}-assessment-{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+class AIReportExportBody(BaseModel):
+    title: str = "AI Analysis"
+    category: str = ""
+    report: Dict[str, Any] = {}
+
+
+@app.post("/api/ai/report-export.xlsx")
+async def export_ai_report_xlsx(body: AIReportExportBody):
+    """Generic rich Excel export for ANY category's AI analysis report.
+
+    Builds: a Summary sheet (all scalar fields), an All Findings + Recommendations sheet
+    (collected even when nested inside categories), one sheet per other array section, and a
+    Resources Referenced sheet with the FULL live properties of every resource the AI flagged.
+    Works for every category because it walks the report shape generically.
+    """
+    report = body.report or {}
+    title = body.title or "AI Analysis"
+    category = body.category or ""
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        raise HTTPException(status_code=500, detail="openpyxl is not installed on the server")
+    from io import BytesIO
+
+    HFILL = PatternFill("solid", fgColor="1E3A5F")
+    HFONT = Font(bold=True, color="FFFFFF", size=11)
+    TITLE = Font(bold=True, color="2D8CFF", size=15)
+    SUBTLE = Font(color="64748B", italic=True, size=9)
+    BOLD = Font(bold=True)
+    WRAP = Alignment(wrap_text=True, vertical="top")
+
+    def _short_json(d):
+        try:
+            return json.dumps(d, default=str)[:300]
+        except Exception:
+            return str(d)[:300]
+
+    def _scalar(v):
+        if v is None:
+            return ""
+        if isinstance(v, bool):
+            return "Yes" if v else "No"
+        if isinstance(v, (str, int, float)):
+            return v
+        if isinstance(v, list):
+            parts = []
+            for x in v:
+                if isinstance(x, dict):
+                    parts.append(x.get("resource_name") or x.get("name") or x.get("title") or x.get("action") or x.get("text") or _short_json(x))
+                else:
+                    parts.append(str(x))
+            return "; ".join(str(p) for p in parts if p not in (None, ""))
+        if isinstance(v, dict):
+            return v.get("action") or v.get("text") or v.get("recommendation") or v.get("name") or v.get("title") or _short_json(v)
+        return str(v)
+
+    def _header(ws, headers):
+        for col, h in enumerate(headers, 1):
+            c = ws.cell(row=1, column=col, value=str(h))
+            c.fill = HFILL; c.font = HFONT
+            c.alignment = Alignment(horizontal="left", vertical="center")
+
+    def _autosize(ws, max_w=70):
+        for col in ws.columns:
+            letter = get_column_letter(col[0].column)
+            w = max((len(str(c.value or "").split("\n")[0]) for c in col[:200]), default=10)
+            ws.column_dimensions[letter].width = min(max(w + 2, 12), max_w)
+
+    def _collect_nested(rep, key):
+        out = []
+        top = rep.get(key)
+        if isinstance(top, list):
+            out.extend([x for x in top if isinstance(x, dict)])
+        for _k, v in rep.items():
+            if isinstance(v, list):
+                for it in v:
+                    if isinstance(it, dict) and isinstance(it.get(key), list):
+                        cat = it.get("name") or it.get("category") or it.get("title") or ""
+                        for sub in it.get(key):
+                            if isinstance(sub, dict):
+                                s = dict(sub)
+                                if cat and "category" not in s:
+                                    s["category"] = cat
+                                out.append(s)
+        return out
+
+    referenced = {}
+
+    def _note_refs(item):
+        for fld in ("affected_resources", "resources", "resources_affected"):
+            val = item.get(fld) if isinstance(item, dict) else None
+            if isinstance(val, list):
+                for rr in val:
+                    if isinstance(rr, dict):
+                        key = (rr.get("resource_id") or rr.get("id") or rr.get("resource_name") or rr.get("name") or "").lower()
+                    else:
+                        key = str(rr).lower()
+                    if key:
+                        referenced[key] = True
+
+    wb = openpyxl.Workbook()
+
+    # Summary
+    ws = wb.active; ws.title = "Summary"
+    ws["A1"] = title; ws["A1"].font = TITLE
+    ws["A2"] = f"Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}  ·  Azure Infra IQ"
+    ws["A2"].font = SUBTLE
+    r = 4
+    meta = report.get("_meta") or {}
+    for label, key in (("AI Model", "model"), ("Generated At", "generated_at"), ("Resources Analyzed", "resource_count")):
+        if meta.get(key) is not None:
+            ws.cell(row=r, column=1, value=label).font = BOLD
+            ws.cell(row=r, column=2, value=_scalar(meta.get(key))); r += 1
+    array_fields = []
+    for k, v in report.items():
+        if k.startswith("_"):
+            continue
+        if isinstance(v, list) and v and isinstance(v[0], dict):
+            array_fields.append(k); continue
+        label = k.replace("_", " ").title()
+        ws.cell(row=r, column=1, value=label).font = BOLD
+        cell = ws.cell(row=r, column=2, value=_scalar(v))
+        if isinstance(v, str) and len(v) > 60:
+            cell.alignment = WRAP
+        r += 1
+    ws.column_dimensions["A"].width = 30
+    ws.column_dimensions["B"].width = 95
+
+    used = {"Summary"}
+    def _sheet_name(name):
+        n = (name.replace("_", " ").title())[:28] or "Sheet"
+        base = n; i = 2
+        while n in used:
+            n = f"{base[:25]}{i}"; i += 1
+        used.add(n); return n
+
+    def _write_array_sheet(name, items):
+        items = [it for it in (items or []) if isinstance(it, dict)]
+        if not items:
+            return
+        cols = []
+        for it in items[:300]:
+            for kk in it.keys():
+                if kk not in cols:
+                    cols.append(kk)
+            _note_refs(it)
+        ws2 = wb.create_sheet(_sheet_name(name))
+        _header(ws2, [c.replace("_", " ").title() for c in cols])
+        for ri, it in enumerate(items[:1000], 2):
+            for ci, kk in enumerate(cols, 1):
+                val = it.get(kk)
+                cell = ws2.cell(row=ri, column=ci, value=_scalar(val))
+                if isinstance(val, str) and len(val) > 60:
+                    cell.alignment = WRAP
+        _autosize(ws2)
+
+    # Findings + Recommendations first (collected even when nested in categories)
+    _write_array_sheet("Findings", _collect_nested(report, "findings") + _collect_nested(report, "critical_findings"))
+    _write_array_sheet("Recommendations", _collect_nested(report, "recommendations"))
+    _write_array_sheet("Top Risks", _collect_nested(report, "top_risks"))
+    # Every other top-level array (categories, opportunities, gaps, …)
+    for k in array_fields:
+        if k in ("findings", "critical_findings", "recommendations", "top_risks"):
+            continue
+        _write_array_sheet(k, report.get(k))
+
+    # Resources Referenced — full live properties of everything the AI flagged
+    try:
+        inv = _get_resources_list()
+        if inv and referenced:
+            matched = []
+            for rsc in inv:
+                rid = (rsc.get("resource_id") or "").lower()
+                rname = (rsc.get("resource_name") or "").lower()
+                if rid in referenced or (rname and any(k == rname or k.endswith("/" + rname) for k in referenced)):
+                    matched.append(rsc)
+            if matched:
+                pcols = ["resource_name", "resource_type", "resource_group", "location", "subscription_id", "sku",
+                         "cost_current_month", "final_score", "score_label", "has_backup", "has_lock",
+                         "has_private_endpoint", "power_state", "avg_cpu_pct", "primary_utilization_pct",
+                         "is_orphan", "zone_status", "data_confidence"]
+                ws3 = wb.create_sheet("Resources Referenced")
+                _header(ws3, [c.replace("_", " ").title() for c in pcols])
+                for ri, rsc in enumerate(matched[:1000], 2):
+                    for ci, kk in enumerate(pcols, 1):
+                        ws3.cell(row=ri, column=ci, value=_scalar(rsc.get(kk)))
+                _autosize(ws3)
+    except Exception as _exc:
+        logger.warning("AI export resources sheet failed: %s", _exc)
+
+    for sheet in wb.worksheets:
+        if sheet.title != "Summary":
+            sheet.freeze_panes = "A2"
+
+    buf = BytesIO(); wb.save(buf); buf.seek(0)
+    safe = "".join(c if (c.isalnum() or c in "-_") else "_" for c in (category or title))
+    fname = f"{safe}-ai-analysis-{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 # ── Dependency Graph API ────────────────────────────────────────────────────────

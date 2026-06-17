@@ -6,10 +6,13 @@ import {
   Shield, Server, Settings, Eye, Link2, Activity
 } from 'lucide-react';
 import clsx from 'clsx';
+import ProjectWorkspace from './ProjectWorkspace';
 
 /**
- * ProjectsModule – BCDR Projects with Assessment Integration
- * Dark theme, proper UX matching the rest of the app.
+ * ProjectsModule – Projects with AI Assessment Integration
+ * Generic resource grouping: create a project for ANY purpose/category, then run
+ * tag-grounded AI assessments (BCDR, Security, Cost, Backup, Migration, …) on it.
+ * Dark theme, matching the rest of the app.
  */
 
 const CRITICALITY_STYLES = {
@@ -39,16 +42,21 @@ export default function ProjectsModule({ resources = [] }) {
     loadAssessments();
   }, []);
 
-  const loadProjects = async () => {
+  const loadProjects = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const data = await api._request('/projects');
-      setProjects(data.projects || []);
+      const list = data.projects || [];
+      setProjects(list);
+      // Keep the currently-open project's data in sync (e.g. after add/remove resources)
+      // so its count + workspace reflect the change WITHOUT toggling the loading spinner,
+      // which would unmount the open workspace/modal and make the change look lost.
+      setSelectedProject(prev => prev ? (list.find(p => (p.id || p.project_id) === (prev.id || prev.project_id)) || prev) : prev);
     } catch (err) {
       console.error('Failed to load projects:', err);
-      setProjects([]);
+      if (!silent) setProjects([]);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -121,6 +129,25 @@ export default function ProjectsModule({ resources = [] }) {
     );
   }
 
+  // ─── Workspace View (tag resources + run tag-grounded AI assessments) ──
+  if (view === 'workspace' && selectedProject) {
+    return (
+      <ProjectWorkspace
+        project={{
+          id: selectedProject.id || selectedProject.project_id,
+          name: selectedProject.name || selectedProject.project_name,
+          description: selectedProject.description,
+          resource_ids: selectedProject.resource_ids || [],
+          color: selectedProject.color,
+          icon: selectedProject.icon,
+        }}
+        allResources={resources}
+        onBack={() => { setView('list'); setSelectedProject(null); }}
+        onResourcesChanged={() => loadProjects(true)}
+      />
+    );
+  }
+
   // ─── Detail View ────────────────────────────────────────────────
   if (view === 'detail' && selectedProject) {
     const linked = getLinkedAssessments(selectedProject);
@@ -148,15 +175,16 @@ export default function ProjectsModule({ resources = [] }) {
           </button>
         </div>
 
-        {/* BCDR Metadata Grid */}
+        {/* Project Details */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           {[
+            { label: 'Focus Area', value: selectedProject.focus_area, icon: FolderOpen },
             { label: 'Business Unit', value: selectedProject.business_unit, icon: Server },
             { label: 'Criticality', value: selectedProject.criticality, icon: AlertTriangle },
-            { label: 'DR Tier', value: selectedProject.dr_tier, icon: Shield },
-            { label: 'RTO Target', value: selectedProject.rto_target, icon: Clock },
-            { label: 'RPO Target', value: selectedProject.rpo_target, icon: Activity },
             { label: 'Environment', value: selectedProject.environment, icon: Settings },
+            ...(selectedProject.dr_tier ? [{ label: 'DR Tier', value: selectedProject.dr_tier, icon: Shield }] : []),
+            ...(selectedProject.rto_target ? [{ label: 'RTO Target', value: selectedProject.rto_target, icon: Clock }] : []),
+            ...(selectedProject.rpo_target ? [{ label: 'RPO Target', value: selectedProject.rpo_target, icon: Activity }] : []),
           ].map(({ label, value, icon: Icon }) => (
             <div key={label} className="bg-gray-800 border border-gray-700 rounded-lg p-4">
               <div className="flex items-center gap-2 text-xs text-gray-500 mb-1">
@@ -246,8 +274,8 @@ export default function ProjectsModule({ resources = [] }) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-100">BCDR Projects</h2>
-          <p className="text-gray-400 mt-1">Manage workloads and execute APEX implementation workflow</p>
+          <h2 className="text-2xl font-bold text-gray-100">Projects</h2>
+          <p className="text-gray-400 mt-1">Group resources and run AI assessments across any category — BCDR, security, cost, backup, migration and more</p>
         </div>
         <button
           onClick={() => setShowCreateModal(true)}
@@ -263,7 +291,7 @@ export default function ProjectsModule({ resources = [] }) {
           <FolderOpen className="w-16 h-16 mx-auto text-gray-600 mb-4" />
           <h3 className="text-lg font-medium text-gray-300 mb-2">No projects yet</h3>
           <p className="text-gray-500 mb-6 max-w-md mx-auto">
-            Create your first BCDR project to group workloads, define DR requirements, and execute APEX implementation workflows.
+            Create a project to group a set of resources, capture context, and run AI-powered assessments — for any category you need.
           </p>
           <button
             onClick={() => setShowCreateModal(true)}
@@ -286,7 +314,8 @@ export default function ProjectsModule({ resources = [] }) {
                 className="bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-600 transition-all cursor-pointer group"
                 onClick={() => {
                   setSelectedProject(project);
-                  setView('detail');
+                  const isPortal = project.is_portal_project || (project.resource_ids && project.resource_ids.length);
+                  setView(isPortal ? 'workspace' : 'detail');
                 }}
               >
                 {/* Card Header */}
@@ -334,6 +363,11 @@ export default function ProjectsModule({ resources = [] }) {
                 {/* Card Footer */}
                 <div className="px-5 py-3 border-t border-gray-700/50 flex items-center justify-between">
                   <div className="flex items-center gap-3 text-xs text-gray-500">
+                    {(project.is_portal_project || project.resource_ids?.length != null) && project.resource_count != null && (
+                      <span className="flex items-center gap-1">
+                        <Server className="w-3 h-3" /> {project.resource_count} resource{project.resource_count !== 1 ? 's' : ''}
+                      </span>
+                    )}
                     {linkedCount > 0 && (
                       <span className="flex items-center gap-1">
                         <FileText className="w-3 h-3" /> {linkedCount} assessment{linkedCount > 1 ? 's' : ''}
@@ -345,13 +379,19 @@ export default function ProjectsModule({ resources = [] }) {
                         apexStatus === 'apex-running' && 'text-blue-400',
                         apexStatus === 'analyzed' && 'text-purple-400',
                       )}>
-                        {apexStatus === 'completed' && <><CheckCircle className="w-3 h-3" /> APEX Done</>}
-                        {apexStatus === 'apex-running' && <><Clock className="w-3 h-3 animate-pulse" /> APEX Running</>}
+                        {apexStatus === 'completed' && <><CheckCircle className="w-3 h-3" /> Implementation Ready</>}
+                        {apexStatus === 'apex-running' && <><Clock className="w-3 h-3 animate-pulse" /> Implementing…</>}
                         {apexStatus === 'analyzed' && <><Eye className="w-3 h-3" /> Analyzed</>}
                       </span>
                     )}
                   </div>
-                  <ChevronRight className="w-4 h-4 text-gray-600 group-hover:text-gray-400 transition-colors" />
+                  {(project.is_portal_project || (project.resource_ids?.length)) ? (
+                    <span className="flex items-center gap-1 text-xs font-semibold text-blue-400 group-hover:text-blue-300">
+                      Open Workspace <ChevronRight className="w-3.5 h-3.5" />
+                    </span>
+                  ) : (
+                    <ChevronRight className="w-4 h-4 text-gray-600 group-hover:text-gray-400 transition-colors" />
+                  )}
                 </div>
               </div>
             );
@@ -377,14 +417,17 @@ function CreateProjectModal({ onClose, onCreate }) {
     project_name: '',
     description: '',
     business_unit: '',
-    criticality: 'Medium',
-    rto_target: '< 4 hours',
-    rpo_target: '< 1 hour',
-    environment: 'Production',
-    dr_tier: 'Tier 1',
     owner: '',
+    focus_area: 'General',
+    criticality: 'Medium',
+    environment: 'Production',
+    // Disaster Recovery details — optional, only for BCDR-style projects
+    dr_tier: '',
+    rto_target: '',
+    rpo_target: '',
   });
   const [submitting, setSubmitting] = useState(false);
+  const [showDr, setShowDr] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -413,7 +456,7 @@ function CreateProjectModal({ onClose, onCreate }) {
         <div className="px-6 py-4 border-b border-gray-700 flex items-center justify-between">
           <div>
             <h3 className="text-lg font-bold text-gray-100">Create New Project</h3>
-            <p className="text-xs text-gray-500 mt-0.5">Define a BCDR workload with DR requirements</p>
+            <p className="text-xs text-gray-500 mt-0.5">Group resources for assessment and AI analysis — any category</p>
           </div>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-xl leading-none">&times;</button>
         </div>
@@ -427,7 +470,7 @@ function CreateProjectModal({ onClose, onCreate }) {
               required
               value={formData.project_name}
               onChange={(e) => setFormData({ ...formData, project_name: e.target.value })}
-              placeholder="e.g. Qatar Production BCDR"
+              placeholder="e.g. Production Web Tier"
               className={inputClass}
             />
           </div>
@@ -438,7 +481,7 @@ function CreateProjectModal({ onClose, onCreate }) {
             <textarea
               value={formData.description}
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              placeholder="Brief description of the workload and DR objectives..."
+              placeholder="What is this project for? (e.g. production web tier, payment workloads, migration wave 1...)"
               className={clsx(inputClass, 'min-h-[80px]')}
             />
           </div>
@@ -467,8 +510,28 @@ function CreateProjectModal({ onClose, onCreate }) {
             </div>
           </div>
 
-          {/* Grid: Criticality + DR Tier */}
+          {/* Grid: Focus Area + Criticality */}
           <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className={labelClass}>Focus Area</label>
+              <select
+                value={formData.focus_area}
+                onChange={(e) => setFormData({ ...formData, focus_area: e.target.value })}
+                className={inputClass}
+              >
+                <option value="General">General</option>
+                <option value="Business Continuity & DR">Business Continuity & DR</option>
+                <option value="Security & Compliance">Security & Compliance</option>
+                <option value="Cost Optimization">Cost Optimization</option>
+                <option value="Backup & Recovery">Backup & Recovery</option>
+                <option value="Migration">Migration</option>
+                <option value="Update Management">Update Management</option>
+                <option value="Monitoring & Observability">Monitoring & Observability</option>
+                <option value="Identity & Access">Identity & Access</option>
+                <option value="Networking">Networking</option>
+                <option value="Performance & Reliability">Performance & Reliability</option>
+              </select>
+            </div>
             <div>
               <label className={labelClass}>Criticality</label>
               <select
@@ -480,53 +543,6 @@ function CreateProjectModal({ onClose, onCreate }) {
                 <option value="High">High</option>
                 <option value="Medium">Medium</option>
                 <option value="Low">Low</option>
-              </select>
-            </div>
-            <div>
-              <label className={labelClass}>DR Tier</label>
-              <select
-                value={formData.dr_tier}
-                onChange={(e) => setFormData({ ...formData, dr_tier: e.target.value })}
-                className={inputClass}
-              >
-                <option value="Tier 0">Tier 0 – Mission Critical</option>
-                <option value="Tier 1">Tier 1 – Business Critical</option>
-                <option value="Tier 2">Tier 2 – Business Operational</option>
-                <option value="Tier 3">Tier 3 – Non-Critical</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Grid: RTO + RPO */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className={labelClass}>RTO Target</label>
-              <select
-                value={formData.rto_target}
-                onChange={(e) => setFormData({ ...formData, rto_target: e.target.value })}
-                className={inputClass}
-              >
-                <option value="< 15 minutes">&lt; 15 minutes</option>
-                <option value="< 1 hour">&lt; 1 hour</option>
-                <option value="< 4 hours">&lt; 4 hours</option>
-                <option value="< 8 hours">&lt; 8 hours</option>
-                <option value="< 24 hours">&lt; 24 hours</option>
-                <option value="< 72 hours">&lt; 72 hours</option>
-              </select>
-            </div>
-            <div>
-              <label className={labelClass}>RPO Target</label>
-              <select
-                value={formData.rpo_target}
-                onChange={(e) => setFormData({ ...formData, rpo_target: e.target.value })}
-                className={inputClass}
-              >
-                <option value="Zero data loss">Zero data loss</option>
-                <option value="< 5 minutes">&lt; 5 minutes</option>
-                <option value="< 15 minutes">&lt; 15 minutes</option>
-                <option value="< 1 hour">&lt; 1 hour</option>
-                <option value="< 4 hours">&lt; 4 hours</option>
-                <option value="< 24 hours">&lt; 24 hours</option>
               </select>
             </div>
           </div>
@@ -542,8 +558,77 @@ function CreateProjectModal({ onClose, onCreate }) {
               <option value="Production">Production</option>
               <option value="Staging">Staging</option>
               <option value="Development">Development</option>
+              <option value="Test">Test</option>
               <option value="DR">DR</option>
             </select>
+          </div>
+
+          {/* Optional: Disaster Recovery details (collapsible) */}
+          <div className="border border-gray-700 rounded-lg">
+            <button
+              type="button"
+              onClick={() => setShowDr((v) => !v)}
+              className="w-full flex items-center justify-between px-4 py-3 text-sm text-gray-300 hover:bg-gray-700/30"
+            >
+              <span className="flex items-center gap-2">
+                <Shield className="w-4 h-4 text-gray-500" />
+                Disaster Recovery details <span className="text-gray-600">(optional)</span>
+              </span>
+              <ChevronRight className={clsx('w-4 h-4 text-gray-500 transition-transform', showDr && 'rotate-90')} />
+            </button>
+            {showDr && (
+              <div className="p-4 pt-0 space-y-4">
+                <p className="text-xs text-gray-500">Only needed for BCDR / resiliency projects. Leave blank otherwise.</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className={labelClass}>DR Tier</label>
+                    <select
+                      value={formData.dr_tier}
+                      onChange={(e) => setFormData({ ...formData, dr_tier: e.target.value })}
+                      className={inputClass}
+                    >
+                      <option value="">— Not set —</option>
+                      <option value="Tier 0">Tier 0 – Mission Critical</option>
+                      <option value="Tier 1">Tier 1 – Business Critical</option>
+                      <option value="Tier 2">Tier 2 – Business Operational</option>
+                      <option value="Tier 3">Tier 3 – Non-Critical</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelClass}>RTO Target</label>
+                    <select
+                      value={formData.rto_target}
+                      onChange={(e) => setFormData({ ...formData, rto_target: e.target.value })}
+                      className={inputClass}
+                    >
+                      <option value="">— Not set —</option>
+                      <option value="< 15 minutes">&lt; 15 minutes</option>
+                      <option value="< 1 hour">&lt; 1 hour</option>
+                      <option value="< 4 hours">&lt; 4 hours</option>
+                      <option value="< 8 hours">&lt; 8 hours</option>
+                      <option value="< 24 hours">&lt; 24 hours</option>
+                      <option value="< 72 hours">&lt; 72 hours</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className={labelClass}>RPO Target</label>
+                  <select
+                    value={formData.rpo_target}
+                    onChange={(e) => setFormData({ ...formData, rpo_target: e.target.value })}
+                    className={inputClass}
+                  >
+                    <option value="">— Not set —</option>
+                    <option value="Zero data loss">Zero data loss</option>
+                    <option value="< 5 minutes">&lt; 5 minutes</option>
+                    <option value="< 15 minutes">&lt; 15 minutes</option>
+                    <option value="< 1 hour">&lt; 1 hour</option>
+                    <option value="< 4 hours">&lt; 4 hours</option>
+                    <option value="< 24 hours">&lt; 24 hours</option>
+                  </select>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Buttons */}

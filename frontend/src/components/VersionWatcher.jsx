@@ -71,17 +71,31 @@ export default function VersionWatcher() {
     return () => clearInterval(id)
   }, [bootBuild])
 
-  // Once a new build is live, auto-reload as soon as the user goes idle.
+  // Once a new build is live, upgrade this tab automatically so a stale (possibly
+  // buggy / old-branding) bundle can never linger in front of a customer:
+  //   • the instant the user returns to the tab (window focus / tab becomes visible), or
+  //   • after the tab has been idle for IDLE_MS.
+  // Returning to the tab is a natural, non-disruptive reload point, so a stale tab
+  // refreshes itself the moment the user looks at it — no manual hard-refresh needed.
   useEffect(() => {
     if (!newBuild) return undefined
+    const reloadNow = () => {
+      if (reloadingRef.current) return
+      reloadingRef.current = true
+      hardReload()
+    }
+    const onVisible = () => { if (document.visibilityState === 'visible') reloadNow() }
+    window.addEventListener('focus', reloadNow)
+    document.addEventListener('visibilitychange', onVisible)
     const tick = setInterval(() => {
       if (reloadingRef.current) return
-      if (Date.now() - lastActivityRef.current >= IDLE_MS) {
-        reloadingRef.current = true
-        hardReload()
-      }
+      if (Date.now() - lastActivityRef.current >= IDLE_MS) reloadNow()
     }, 5_000)
-    return () => clearInterval(tick)
+    return () => {
+      window.removeEventListener('focus', reloadNow)
+      document.removeEventListener('visibilitychange', onVisible)
+      clearInterval(tick)
+    }
   }, [newBuild])
 
   if (!newBuild || dismissed) return null

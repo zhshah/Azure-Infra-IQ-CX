@@ -1,5 +1,5 @@
 /**
- * APEX Artifact Export Utilities
+ * Artifact Export Utilities
  * 
  * Provides multi-format export for assessment artifacts:
  * - PDF: Professional formatted document using @react-pdf/renderer
@@ -1546,12 +1546,12 @@ function ArtifactPDFDocument({ agentName, assessmentName, content, generatedAt }
           <Text style={s.coverSub}>Assessment: {assessmentName}</Text>
           <Text style={s.coverSub}>Generated: {generatedAt}</Text>
           <View style={s.coverBadge}>
-            <Text style={s.coverBadgeText}>APEX WORKLOAD ASSESSMENT</Text>
+            <Text style={s.coverBadgeText}>WORKLOAD ASSESSMENT</Text>
           </View>
         </View>
         {renderElements(elements)}
         <View style={s.footer} fixed>
-          <Text style={s.footerText}>APEX Assessment \u2022 {label}</Text>
+          <Text style={s.footerText}>Workload Assessment \u2022 {label}</Text>
           <Text style={s.footerText} render={({ pageNumber, totalPages }) => `Page ${pageNumber} / ${totalPages}`} />
         </View>
       </Page>
@@ -1615,7 +1615,7 @@ function FullReportPDFDocument({ report }) {
           </View>
         </View>
         <Text style={{ fontSize: 8, color: C.textDim }}>
-          APEX Workload Assessment Platform — Confidential
+          Azure Infra IQ — Confidential
         </Text>
       </Page>
 
@@ -1625,7 +1625,7 @@ function FullReportPDFDocument({ report }) {
           <Text style={s.h2}>Executive Summary</Text>
           {renderElements(parseMdToElements(summary))}
           <View style={s.footer} fixed>
-            <Text style={s.footerText}>APEX Assessment Report — {assessment.assessment_name}</Text>
+            <Text style={s.footerText}>Workload Assessment Report — {assessment.assessment_name}</Text>
             <Text style={s.footerText} render={({ pageNumber, totalPages }) => `Page ${pageNumber} / ${totalPages}`} />
           </View>
         </Page>
@@ -1648,7 +1648,7 @@ function FullReportPDFDocument({ report }) {
             </View>
             {renderElements(elements)}
             <View style={s.footer} fixed>
-              <Text style={s.footerText}>APEX Assessment — {label}</Text>
+              <Text style={s.footerText}>Workload Assessment — {label}</Text>
               <Text style={s.footerText} render={({ pageNumber, totalPages }) => `Page ${pageNumber} / ${totalPages}`} />
             </View>
           </Page>

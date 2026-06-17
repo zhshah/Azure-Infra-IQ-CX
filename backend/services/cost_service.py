@@ -273,6 +273,71 @@ def get_two_month_costs(
     return current, previous, first_error
 
 
+def _query_total(
+    client: CostManagementClient, scope: str, start: datetime, end: datetime,
+) -> Tuple[float, Optional[str]]:
+    """
+    Ungrouped (granularity None) total ActualCost for the period — the CHEAPEST Cost
+    Management query. It keeps succeeding when the heavy per-resource (ResourceId-
+    grouped) query is being 429-throttled, so it is used as the headline-figure
+    fallback. Returns (total_cost, error_str).
+    """
+    query = QueryDefinition(
+        type="ActualCost",
+        timeframe=TimeframeType.CUSTOM,
+        time_period=QueryTimePeriod(from_property=start, to=end),
+        dataset=QueryDataset(
+            granularity="None",
+            aggregation={"totalCost": QueryAggregation(name="Cost", function="Sum")},
+        ),
+    )
+    try:
+        resp = _query_with_retry(client, scope, query)
+        if resp and resp.rows:
+            return float(resp.rows[0][0] or 0.0), None
+        return 0.0, None
+    except Exception as exc:
+        logger.warning("Total cost query failed for %s: %s", scope, exc)
+        err = "Cost Management rate-limited (429)" if "429" in str(exc) else str(exc)[:160]
+        return 0.0, err
+
+
+def get_subscription_month_totals(
+    subscription_ids: Optional[List[str]] = None,
+) -> Tuple[Dict[str, Dict[str, float]], Optional[str]]:
+    """
+    Cheap per-subscription headline totals: current + previous month TOTAL cost
+    (ungrouped). Used as a fallback for the home 'Monthly Spend' card and the scope
+    badge when the heavy per-resource cost query is 429-throttled to $0 — so real
+    spend is never shown as $0. Returns ({sub_id: {"current","previous"}}, error_str).
+    """
+    credential = get_credential()
+    sub_ids    = subscription_ids or get_subscription_ids()
+    client     = CostManagementClient(credential)
+
+    now = datetime.now(tz=timezone.utc)
+    curr_start, curr_end = _month_range(now.year, now.month)
+    prev_dt = now - relativedelta(months=1)
+    prev_start, prev_end = _month_range(prev_dt.year, prev_dt.month)
+
+    out: Dict[str, Dict[str, float]] = {}
+    first_error: Optional[str] = None
+    for i, sub_id in enumerate(sub_ids):
+        if i > 0:
+            time.sleep(1.5)   # space out to avoid tenant-shared 429s
+        scope = f"/subscriptions/{sub_id}"
+        c, err = _query_total(client, scope, curr_start, curr_end)
+        if err and not first_error:
+            first_error = err
+        time.sleep(1.0)
+        p, err = _query_total(client, scope, prev_start, prev_end)
+        if err and not first_error:
+            first_error = err
+        out[sub_id] = {"current": round(c, 2), "previous": round(p, 2)}
+
+    return out, first_error
+
+
 def get_reservation_covered_resource_ids(
     subscription_ids: Optional[List[str]] = None,
 ) -> set:

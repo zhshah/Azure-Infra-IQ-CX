@@ -5,6 +5,7 @@
  * top savings opportunities, and budget alerts.
  */
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { asText } from '../utils/safeText'
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
@@ -514,7 +515,7 @@ export default function FinOpsOverview() {
                     <td style={{ padding: '6px 8px', color: '#64748b' }}>{(item.resource_type || '').split('/').pop()}</td>
                     <td style={{ padding: '6px 8px' }}><ImpactBadge impact={item.impact} /></td>
                     <td style={{ padding: '6px 8px', color: '#94a3b8', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                      title={item.recommendation}>{item.recommendation}</td>
+                      title={asText(item.recommendation)}>{asText(item.recommendation)}</td>
                     <td style={{ padding: '6px 8px', color: '#4ade80', fontWeight: 600 }}>
                       {item.potential_savings_monthly > 0 ? fmtUsd(item.potential_savings_monthly) : '—'}
                     </td>

@@ -138,7 +138,14 @@ export function installFetchInterceptor() {
       const url = typeof input === 'string' ? input : (input && input.url) || ''
       const isApi = url.startsWith('/api') || url.startsWith(`${window.location.origin}/api`)
       if (isApi && _msal && _account) {
-        const token = await getToken()
+        // Defense-in-depth: never let token plumbing wedge a request. If silent
+        // token acquisition stalls (e.g. a slow renewal iframe), proceed without it
+        // after a short timeout — the call 401s and the app re-authenticates, instead
+        // of hanging forever on "Connecting to backend…".
+        const token = await Promise.race([
+          getToken(),
+          new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
+        ])
         if (token) {
           const headers = new Headers(
             (init && init.headers) || (typeof input !== 'string' && input && input.headers) || {}

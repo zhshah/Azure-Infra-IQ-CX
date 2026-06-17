@@ -66,6 +66,15 @@ DAILY_RESOURCE_DAYS = 30   # how many days of resource-level daily grain to keep
 MONTHLY_SERVICE_MONTHS = 12  # how many months of monthly service grain to keep
 MONTHLY_TAG_MONTHS = 3       # how many months of monthly tag grain to keep
 
+# ── Initial (first-run) windows ──────────────────────────────────────────────────────────────────────────
+# On a brand-new deployment the very first collection uses these SMALL windows so the
+# Cost Warehouse dashboards light up within ~a minute instead of blocking on a full
+# 12-month pull (slow and 429-prone on large tenants). The full history is then
+# backfilled in the background via a second pass using the full windows above.
+DAILY_RESOURCE_DAYS_INITIAL = 7
+MONTHLY_SERVICE_MONTHS_INITIAL = 2
+MONTHLY_TAG_MONTHS_INITIAL = 1
+
 # Tag keys we track (matching what Cost Management actually has)
 TRACKED_TAG_KEYS = [
     "Environment", "environment", "env",
@@ -145,12 +154,17 @@ def _finish_etl_run(run_id: str, counters: dict, error: Optional[str] = None) ->
 def run_full_etl(
     subscription_ids: Optional[List[str]] = None,
     triggered_by: str = "scheduler",
+    initial: bool = False,
 ) -> Dict[str, Any]:
     """
     Run the full nightly ETL job.
 
     Downloads cost data for all subscriptions and persists to Azure SQL.
     Runs sequentially per subscription to avoid Azure Cost Management 429s.
+
+    When ``initial=True`` a SMALL first-run window is used (see the *_INITIAL
+    constants) so a fresh deploy populates fast; the full-history backfill then runs
+    as a later pass with ``initial=False``.
 
     Returns a summary dict with run_id, status, and row counts.
     """
@@ -178,24 +192,33 @@ def run_full_etl(
     try:
         today = datetime.now(timezone.utc).date()
 
+        # First-run uses small windows; the background backfill pass uses the full ones.
+        daily_days = DAILY_RESOURCE_DAYS_INITIAL if initial else DAILY_RESOURCE_DAYS
+        svc_months = MONTHLY_SERVICE_MONTHS_INITIAL if initial else MONTHLY_SERVICE_MONTHS
+        tag_months = MONTHLY_TAG_MONTHS_INITIAL if initial else MONTHLY_TAG_MONTHS
+        logger.info(
+            "ETL run %s window: %s (daily=%dd, service=%dmo, tag=%dmo)",
+            run_id, "INITIAL light" if initial else "full", daily_days, svc_months, tag_months,
+        )
+
         for idx, sub_id in enumerate(subscription_ids, 1):
             logger.info("ETL: processing subscription %d/%d: %s", idx, len(subscription_ids), sub_id[:8] + "…")
             try:
-                # a) Daily resource costs (last 30 days)
-                n = _collect_daily_resource_costs(sub_id, today, run_id)
+                # a) Daily resource costs
+                n = _collect_daily_resource_costs(sub_id, today, run_id, days=daily_days)
                 counters["resource_costs"] += n
                 logger.info("ETL: %s → %d resource cost rows", sub_id[:8], n)
 
                 # b) Daily subscription rollup
-                n = _collect_daily_subscription_costs(sub_id, today, run_id)
+                n = _collect_daily_subscription_costs(sub_id, today, run_id, days=daily_days)
                 counters["sub_costs"] += n
 
-                # c) Monthly service breakdown (last 12 months)
-                n = _collect_monthly_service_costs(sub_id, today, run_id)
+                # c) Monthly service breakdown
+                n = _collect_monthly_service_costs(sub_id, today, run_id, months=svc_months)
                 counters["service_costs"] += n
 
-                # d) Monthly tag breakdown (last 3 months)
-                n = _collect_monthly_tag_costs(sub_id, today, run_id)
+                # d) Monthly tag breakdown
+                n = _collect_monthly_tag_costs(sub_id, today, run_id, months=tag_months)
                 counters["tag_costs"] += n
 
                 # Brief pause between subscriptions to be a good API citizen
@@ -225,12 +248,13 @@ def run_full_etl(
 
 # ── ETL step: daily resource costs ───────────────────────────────────────────
 
-def _collect_daily_resource_costs(sub_id: str, today: date, run_id: str) -> int:
+def _collect_daily_resource_costs(sub_id: str, today: date, run_id: str,
+                                  days: int = DAILY_RESOURCE_DAYS) -> int:
     """
-    Query daily cost per resource for the last DAILY_RESOURCE_DAYS days
+    Query daily cost per resource for the last ``days`` days
     and bulk-upsert into finops_daily_resource_costs.
     """
-    from_date = today - timedelta(days=DAILY_RESOURCE_DAYS - 1)
+    from_date = today - timedelta(days=days - 1)
     scope = f"/subscriptions/{sub_id}"
 
     rows = query_cost(
@@ -308,8 +332,9 @@ def _upsert_resource_cost_batch(batch: List[tuple]) -> int:
 
 # ── ETL step: daily subscription rollup ──────────────────────────────────────
 
-def _collect_daily_subscription_costs(sub_id: str, today: date, run_id: str) -> int:
-    from_date = today - timedelta(days=DAILY_RESOURCE_DAYS - 1)
+def _collect_daily_subscription_costs(sub_id: str, today: date, run_id: str,
+                                      days: int = DAILY_RESOURCE_DAYS) -> int:
+    from_date = today - timedelta(days=days - 1)
     scope = f"/subscriptions/{sub_id}"
 
     rows = query_cost(
@@ -352,10 +377,11 @@ def _collect_daily_subscription_costs(sub_id: str, today: date, run_id: str) -> 
 
 # ── ETL step: monthly service breakdown ──────────────────────────────────────
 
-def _collect_monthly_service_costs(sub_id: str, today: date, run_id: str) -> int:
-    # 12 months back from start of current month
+def _collect_monthly_service_costs(sub_id: str, today: date, run_id: str,
+                                   months: int = MONTHLY_SERVICE_MONTHS) -> int:
+    # `months` back from start of current month
     from_date = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
-    for _ in range(MONTHLY_SERVICE_MONTHS - 1):
+    for _ in range(months - 1):
         from_date = (from_date - timedelta(days=1)).replace(day=1)
 
     scope = f"/subscriptions/{sub_id}"
@@ -405,9 +431,10 @@ def _collect_monthly_service_costs(sub_id: str, today: date, run_id: str) -> int
 
 # ── ETL step: monthly tag breakdown ──────────────────────────────────────────
 
-def _collect_monthly_tag_costs(sub_id: str, today: date, run_id: str) -> int:
+def _collect_monthly_tag_costs(sub_id: str, today: date, run_id: str,
+                               months: int = MONTHLY_TAG_MONTHS) -> int:
     from_date = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
-    for _ in range(MONTHLY_TAG_MONTHS - 1):
+    for _ in range(months - 1):
         from_date = (from_date - timedelta(days=1)).replace(day=1)
 
     scope = f"/subscriptions/{sub_id}"
@@ -664,20 +691,13 @@ def is_etl_running() -> bool:
 
 
 def has_warehouse_data() -> bool:
-    """Return True if the warehouse actually has cost ROWS.
-
-    Checks for real cost data — NOT merely a 'completed' ETL run. The very first
-    ETL after a fresh deploy can complete with zero rows (Cost Management 429, or
-    the managed identity's Cost Management Reader role not yet propagated at boot).
-    Keying off the completed-run count would then wrongly report 'has data' and the
-    startup re-collection would never fire, leaving the warehouse permanently empty.
-    """
+    """Return True if the warehouse has any data at all."""
     if not _DB_AVAILABLE:
         return False
     try:
         with _conn() as con:
             row = con.execute(
-                "SELECT COUNT(*) FROM finops_daily_resource_costs"
+                "SELECT COUNT(*) FROM finops_etl_runs WHERE status='completed'"
             ).fetchone()
         return (row[0] if row else 0) > 0
     except Exception:

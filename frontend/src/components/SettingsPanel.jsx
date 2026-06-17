@@ -87,7 +87,7 @@ export default function SettingsPanel({ open, onClose, onSaved, subscriptions = 
     cost_floor_usd: 1, ai_cost_threshold_usd: 20,
     cache_ttl_seconds: 1800, demo_mode: false,
     credential_timeout_hours: 0,
-    auto_refresh_interval_hours: 0,
+    auto_refresh_interval_hours: 6,
     // On-premises LDAP
     onprem_dc_host: '', onprem_dc_port: 389,
     onprem_use_ssl: false, onprem_use_starttls: false,
@@ -122,7 +122,7 @@ export default function SettingsPanel({ open, onClose, onSaved, subscriptions = 
         cache_ttl_seconds:           s.cache_ttl_seconds            ?? 1800,
         demo_mode:                   s.demo_mode                    ?? false,
         credential_timeout_hours:    s.credential_timeout_hours     ?? 0,
-        auto_refresh_interval_hours: s.auto_refresh_interval_hours  ?? 0,
+        auto_refresh_interval_hours: s.auto_refresh_interval_hours  ?? 6,
         // masked secrets — leave blank
         azure_client_secret: '',
         azure_openai_key:    '',
@@ -252,40 +252,6 @@ export default function SettingsPanel({ open, onClose, onSaved, subscriptions = 
           {/* ── Azure tab ── */}
           {tab === 'azure' && (
             <>
-              {/* ── Reconfigure button (shown when connected) ── */}
-              {form.azure_subscription_id && (
-                <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-green-900/20 border border-green-800/40">
-                  <div className="flex items-center gap-2 text-xs text-green-400">
-                    <CheckCircle size={13} className="shrink-0" />
-                    {(() => {
-                      const sub = subscriptions.find(s => s.subscription_id === form.azure_subscription_id)
-                      const name = sub?.subscription_name
-                      return name
-                        ? <span>Connected to <span className="font-medium text-white">{name}</span></span>
-                        : <span>Connected to <span className="font-mono">{form.azure_subscription_id.slice(0, 8)}…</span></span>
-                    })()}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setForm(prev => ({ ...prev, azure_subscription_id: '', azure_client_id: '', azure_tenant_id: '', azure_client_secret: '' }))
-                      await api.saveSettings({
-                        AZURE_SUBSCRIPTION_ID: '',
-                        AZURE_CLIENT_ID: '',
-                        AZURE_TENANT_ID: '',
-                        AZURE_CLIENT_SECRET: '',
-                        persist_to_env: true,
-                      }).catch(() => {})
-                      if (onDisconnect) { onDisconnect(); return }
-                      setStatus({ type: 'success', msg: 'Disconnected. Refresh the page to run the setup wizard again.' })
-                    }}
-                    className="text-xs text-gray-500 hover:text-red-400 transition-colors underline underline-offset-2"
-                  >
-                    Disconnect
-                  </button>
-                </div>
-              )}
-
               {/* ── Azure connection is managed by the deployment identity (SP inputs hidden) ── */}
               <div className="rounded-lg border border-blue-800/40 bg-blue-950/20 p-4 space-y-2">
                 <div className="flex items-center gap-2">
@@ -401,80 +367,48 @@ export default function SettingsPanel({ open, onClose, onSaved, subscriptions = 
           {/* ── AI Provider tab ── */}
           {tab === 'ai' && (
             <>
-              {/* Provider selector */}
-              <div className="space-y-2">
-                <label className="block text-xs font-medium text-gray-400">AI Provider</label>
-                <div className="space-y-2">
-                  {PROVIDER_OPTIONS.map(opt => (
-                    <label key={opt.value} className={clsx(
-                      'flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors',
-                      form.ai_provider === opt.value
-                        ? 'border-blue-600 bg-blue-900/20'
-                        : 'border-gray-700 bg-gray-800/40 hover:border-gray-600',
-                    )}>
-                      <input type="radio" name="ai_provider" value={opt.value}
-                        checked={form.ai_provider === opt.value}
-                        onChange={() => setForm(prev => ({ ...prev, ai_provider: opt.value }))}
-                        className="mt-0.5 accent-blue-500"
-                      />
-                      <div>
-                        <p className="text-sm font-medium text-white">{opt.label}</p>
-                        <p className="text-xs text-gray-500 mt-0.5">{opt.desc}</p>
-                      </div>
-                    </label>
-                  ))}
+              {/* AI connection is managed by the deployment — provider/keys are read-only */}
+              <div className="rounded-lg border border-blue-800/40 bg-blue-950/20 p-4 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Info size={13} className="text-blue-400 shrink-0" />
+                  <p className="text-xs font-semibold text-blue-300">AI connection is managed by the deployment</p>
                 </div>
+                <p className="text-xs text-gray-400">
+                  The AI provider, endpoint, model deployment and API key are configured centrally during
+                  deployment and cannot be changed here. Use the button below to verify the connection.
+                </p>
               </div>
 
-              {/* Azure OpenAI fields */}
-              {form.ai_provider === 'azure_openai' && (
-                <div className="space-y-3 pt-2 border-t border-gray-800">
-                  <p className="text-xs text-gray-500">
-                    Requires Azure OpenAI resource. Find credentials in <span className="text-blue-400">Azure Portal → OpenAI → Keys and Endpoint</span>.
-                  </p>
-                  <Field label="Endpoint" value={form.azure_openai_endpoint} onChange={set('azure_openai_endpoint')}
-                    placeholder="https://your-resource.openai.azure.com/"
-                    hint="Base URL only — e.g. https://my-resource.openai.azure.com/ — do not include /openai/v1" />
-                  <Field label="API Key" value={form.azure_openai_key} onChange={set('azure_openai_key')}
-                    placeholder={form._has_aoai_key ? '(already set — leave blank to keep)' : 'Paste key'} masked />
-                  <Field label="Deployment Name" value={form.azure_openai_deployment} onChange={set('azure_openai_deployment')}
-                    placeholder="gpt-4o-mini"
-                    hint="The name YOU gave the deployment in Azure OpenAI Studio — not the model name. Find it under Azure Portal → Azure OpenAI → Model deployments." />
+              {/* Read-only summary of the active AI configuration */}
+              <div className="rounded-lg border border-gray-700/60 bg-gray-800/30 p-4 space-y-2.5">
+                <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wide mb-1">Active AI configuration</h3>
+                <div className="flex items-start gap-3 text-xs">
+                  <span className="text-gray-500 w-24 shrink-0">Provider</span>
+                  <span className="text-gray-200 flex-1">{(PROVIDER_OPTIONS.find(o => o.value === form.ai_provider) || {}).label || form.ai_provider || '—'}</span>
                 </div>
-              )}
-
-              {/* Claude (Anthropic) fields */}
-              {form.ai_provider === 'claude' && (
-                <div className="space-y-3 pt-2 border-t border-gray-800">
-                  <p className="text-xs text-gray-500">
-                    Get your API key at <span className="text-blue-400">console.anthropic.com</span>.
-                    Uses <strong className="text-gray-300">claude-sonnet-4-5-20250514</strong> by default.
-                  </p>
-                  <Field label="Anthropic API Key" value={form.anthropic_key} onChange={set('anthropic_key')}
-                    placeholder={form._has_anthropic_key ? '(already set — leave blank to keep)' : 'sk-ant-…'} masked />
+                {form.ai_provider === 'azure_openai' && (
+                  <>
+                    <div className="flex items-start gap-3 text-xs">
+                      <span className="text-gray-500 w-24 shrink-0">Endpoint</span>
+                      <span className="text-gray-200 flex-1 font-mono break-all">{form.azure_openai_endpoint || '—'}</span>
+                    </div>
+                    <div className="flex items-start gap-3 text-xs">
+                      <span className="text-gray-500 w-24 shrink-0">Deployment</span>
+                      <span className="text-gray-200 flex-1">{form.azure_openai_deployment || '—'}</span>
+                    </div>
+                  </>
+                )}
+                {form.ai_provider === 'azure_ai' && (
+                  <div className="flex items-start gap-3 text-xs">
+                    <span className="text-gray-500 w-24 shrink-0">Endpoint</span>
+                    <span className="text-gray-200 flex-1 font-mono break-all">{form.azure_ai_endpoint || '—'}</span>
+                  </div>
+                )}
+                <div className="flex items-start gap-3 text-xs">
+                  <span className="text-gray-500 w-24 shrink-0">API Key</span>
+                  <span className="text-gray-200 flex-1">{(form._has_aoai_key || form._has_anthropic_key || form._has_azure_ai_key) ? '•••••••• configured' : 'Not set'}</span>
                 </div>
-              )}
-
-              {/* Azure AI Foundry (Claude) fields */}
-              {form.ai_provider === 'azure_ai' && (
-                <div className="space-y-3 pt-2 border-t border-gray-800">
-                  <p className="text-xs text-gray-500">
-                    Claude deployed via Azure AI Foundry. Find credentials under <span className="text-blue-400">Azure AI Foundry → Deployments</span>.
-                  </p>
-                  <Field label="Azure AI Endpoint" value={form.azure_ai_endpoint} onChange={set('azure_ai_endpoint')}
-                    placeholder="https://your-hub.services.ai.azure.com/"
-                    hint="Base endpoint for your Azure AI Foundry project" />
-                  <Field label="Azure AI Key" value={form.azure_ai_key} onChange={set('azure_ai_key')}
-                    placeholder={form._has_azure_ai_key ? '(already set — leave blank to keep)' : 'Paste key'} masked />
-                </div>
-              )}
-
-              {/* Cost threshold (shown for all providers) */}
-              {form.ai_provider !== 'none' && (
-                <NumberField label="Min cost to send to AI (USD/mo)" value={form.ai_cost_threshold_usd}
-                  onChange={set('ai_cost_threshold_usd')} min={0} step={5}
-                  hint="Only resources above this cost are eligible for AI review." />
-              )}
+              </div>
 
               {form.ai_provider !== 'none' && (
                 <button onClick={testAI} disabled={testing} className="btn-ghost flex items-center gap-2 text-sm">
@@ -657,8 +591,8 @@ export default function SettingsPanel({ open, onClose, onSaved, subscriptions = 
         {/* Footer */}
         <div className="px-5 py-4 border-t border-gray-800 flex gap-3 justify-end">
           <button onClick={onClose} className="btn-ghost text-sm">Cancel</button>
-          {/* Save is hidden on the Azure tab — the connection is managed by the deployment and is read-only. */}
-          {tab !== 'azure' && (
+          {/* Save is hidden on the Azure + AI Provider tabs — those connections are managed by the deployment and are read-only. */}
+          {tab !== 'azure' && tab !== 'ai' && (
           <button onClick={save} disabled={loading} className="btn-primary flex items-center gap-2 text-sm">
             {loading && <Loader size={14} className="animate-spin" />}
             Save Settings

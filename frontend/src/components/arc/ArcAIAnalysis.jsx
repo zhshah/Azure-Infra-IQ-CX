@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import clsx from 'clsx'
+import { asText } from '../../utils/safeText'
 import {
   Brain, RefreshCw, AlertTriangle, CheckCircle, ChevronDown, ChevronRight,
   Zap, Shield, TrendingUp, Play, Loader, Target, Server,
@@ -37,9 +38,9 @@ function FindingCard({ finding }) {
             <span className="text-xs opacity-60">{finding.affected_machines} machines</span>
           )}
         </div>
-        <p className="text-xs mt-1 opacity-90 leading-relaxed">{finding.finding}</p>
+        <p className="text-xs mt-1 opacity-90 leading-relaxed">{asText(finding.finding)}</p>
         {finding.recommendation && (
-          <p className="text-xs mt-1 opacity-70 italic">{finding.recommendation}</p>
+          <p className="text-xs mt-1 opacity-70 italic">{asText(finding.recommendation)}</p>
         )}
       </div>
     </div>
@@ -63,7 +64,7 @@ function QuickWinCard({ qw }) {
                 'bg-gray-800 text-gray-400 border-gray-700')}>{qw.impact} impact</span>
             )}
           </div>
-          <p className="text-xs text-teal-400/80 mt-1">{qw.description}</p>
+          <p className="text-xs text-teal-400/80 mt-1">{asText(qw.description)}</p>
           {qw.affected_machines > 0 && (
             <p className="text-xs text-teal-500 mt-1">{qw.affected_machines} machines affected</p>
           )}
@@ -281,7 +282,7 @@ export default function ArcAIAnalysis() {
             {analysis.modernization_opportunities.map((opp, i) => (
               <div key={i} className="rounded-lg border border-blue-800/30 bg-blue-950/10 p-3">
                 <p className="text-sm font-medium text-blue-200">{opp.title}</p>
-                <p className="text-xs text-blue-400/80 mt-1">{opp.description}</p>
+                <p className="text-xs text-blue-400/80 mt-1">{asText(opp.description)}</p>
                 {opp.benefit && <p className="text-xs text-blue-500 mt-1 italic">Benefit: {opp.benefit}</p>}
               </div>
             ))}

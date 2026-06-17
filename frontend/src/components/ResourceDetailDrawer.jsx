@@ -12,6 +12,7 @@
  *   Overview | Security | BCDR | Advisor | AI Findings
  */
 import React, { useEffect, useState, useCallback } from "react";
+import { asText } from "../utils/safeText";
 
 const BASE = "/api";
 
@@ -101,18 +102,18 @@ function FindingCard({ finding, severityKey = "severity", portalUrl }) {
           <span style={{ color: "#64748b", fontSize: 11, fontWeight: 600 }}>{finding.category || finding.azure_service}</span>
         )}
         <span style={{ color: "#f1f5f9", fontWeight: 600, fontSize: 13 }}>
-          {finding.title || finding.name || finding.description?.slice(0, 60) || "Finding"}
+          {finding.title || finding.name || asText(finding.description).slice(0, 60) || "Finding"}
         </span>
       </div>
       {finding.detail && (
-        <p style={{ color: "#94a3b8", fontSize: 12, margin: "4px 0" }}>{finding.detail}</p>
+        <p style={{ color: "#94a3b8", fontSize: 12, margin: "4px 0" }}>{asText(finding.detail)}</p>
       )}
       {finding.description && finding.description !== finding.title && (
-        <p style={{ color: "#94a3b8", fontSize: 12, margin: "4px 0" }}>{finding.description}</p>
+        <p style={{ color: "#94a3b8", fontSize: 12, margin: "4px 0" }}>{asText(finding.description)}</p>
       )}
       {(finding.recommendation || finding.remediation) && (
         <p style={{ color: "#22c55e", fontSize: 12, margin: "4px 0" }}>
-          ✅ {finding.recommendation || finding.remediation}
+          ✅ {asText(finding.recommendation || finding.remediation)}
         </p>
       )}
       {(finding.portal_url || portalUrl) && (

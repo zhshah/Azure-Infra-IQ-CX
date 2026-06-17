@@ -34,7 +34,6 @@ export default function BCDRPlanningPanel({ resources }) {
   const [filterCriticality, setFilterCriticality] = useState('')
   const [filterDrTier, setFilterDrTier] = useState('')
   const [filterText, setFilterText] = useState('')
-  const [stats, setStats] = useState(null)
 
   // Load all BCDR metadata on mount
   useEffect(() => {
@@ -44,12 +43,8 @@ export default function BCDRPlanningPanel({ resources }) {
   const loadMetadata = async () => {
     setLoading(true)
     try {
-      const [allMeta, statsData] = await Promise.all([
-        api.getBCDRMetadataAll(),
-        api.getBCDRMetadataStats()
-      ])
+      const allMeta = await api.getBCDRMetadataAll()
       setMetadata(allMeta || {})
-      setStats(statsData)
     } catch (err) {
       console.error('Failed to load BCDR metadata:', err)
     } finally {
@@ -124,8 +119,8 @@ export default function BCDRPlanningPanel({ resources }) {
     if (filterText) {
       const lower = filterText.toLowerCase()
       filtered = filtered.filter(r =>
-        r.name?.toLowerCase().includes(lower) ||
-        r.type?.toLowerCase().includes(lower) ||
+        (r.resource_name || r.name)?.toLowerCase().includes(lower) ||
+        (r.resource_type || r.type)?.toLowerCase().includes(lower) ||
         r.location?.toLowerCase().includes(lower) ||
         metadata[r.resource_id || r.id]?.business_function?.toLowerCase().includes(lower)
       )
@@ -153,12 +148,12 @@ export default function BCDRPlanningPanel({ resources }) {
       
       switch (sortField) {
         case 'name':
-          aVal = a.name || ''
-          bVal = b.name || ''
+          aVal = a.resource_name || a.name || ''
+          bVal = b.resource_name || b.name || ''
           break
         case 'type':
-          aVal = a.type || ''
-          bVal = b.type || ''
+          aVal = a.resource_type || a.type || ''
+          bVal = b.resource_type || b.type || ''
           break
         case 'location':
           aVal = a.location || ''
@@ -183,6 +178,22 @@ export default function BCDRPlanningPanel({ resources }) {
     
     return sorted
   }, [resources, metadata, sortField, sortDir, filterText, filterCriticality, filterDrTier])
+
+  // Coverage stats derived from the actual resource list + loaded metadata, so the header
+  // is always correct regardless of the backend stats shape.
+  const coverage = useMemo(() => {
+    const list = Array.isArray(resources) ? resources.filter(r => r.resource_id || r.id) : []
+    let categorized = 0, critical = 0, high = 0, tier01 = 0
+    for (const r of list) {
+      const m = metadata[r.resource_id || r.id] || {}
+      if (m.criticality || m.dr_tier || m.rto_target || m.rpo_target || m.business_function) categorized++
+      if (m.criticality === 'Critical') critical++
+      if (m.criticality === 'High') high++
+      if (m.dr_tier === 'Tier 0' || m.dr_tier === 'Tier 1') tier01++
+    }
+    const total = list.length
+    return { total, categorized, pct: total ? Math.round((categorized / total) * 100) : 0, critical, high, tier01 }
+  }, [resources, metadata])
 
   const toggleSort = (field) => {
     if (sortField === field) {
@@ -223,33 +234,29 @@ export default function BCDRPlanningPanel({ resources }) {
           )}
         </div>
         
-        {stats && (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             <div className="bg-gray-900/50 rounded-lg p-3 border border-gray-800">
               <p className="text-xs text-gray-400 mb-1">Total Resources</p>
-              <p className="text-2xl font-bold text-white">{stats.total_resources || 0}</p>
+              <p className="text-2xl font-bold text-white">{coverage.total}</p>
             </div>
             <div className="bg-gray-900/50 rounded-lg p-3 border border-gray-800">
               <p className="text-xs text-gray-400 mb-1">Categorized</p>
-              <p className="text-2xl font-bold text-blue-400">{stats.categorized_count || 0}</p>
-              <p className="text-[10px] text-gray-500 mt-0.5">{stats.coverage_percentage || '0%'}</p>
+              <p className="text-2xl font-bold text-blue-400">{coverage.categorized}</p>
+              <p className="text-[10px] text-gray-500 mt-0.5">{coverage.pct}%</p>
             </div>
             <div className="bg-red-900/20 rounded-lg p-3 border border-red-900/30">
               <p className="text-xs text-gray-400 mb-1">Critical</p>
-              <p className="text-2xl font-bold text-red-400">{stats.by_criticality?.Critical || 0}</p>
+              <p className="text-2xl font-bold text-red-400">{coverage.critical}</p>
             </div>
             <div className="bg-orange-900/20 rounded-lg p-3 border border-orange-900/30">
               <p className="text-xs text-gray-400 mb-1">High</p>
-              <p className="text-2xl font-bold text-orange-400">{stats.by_criticality?.High || 0}</p>
+              <p className="text-2xl font-bold text-orange-400">{coverage.high}</p>
             </div>
             <div className="bg-blue-900/20 rounded-lg p-3 border border-blue-900/30">
               <p className="text-xs text-gray-400 mb-1">Tier 0/1</p>
-              <p className="text-2xl font-bold text-blue-400">
-                {(stats.by_dr_tier?.['Tier 0'] || 0) + (stats.by_dr_tier?.['Tier 1'] || 0)}
-              </p>
+              <p className="text-2xl font-bold text-blue-400">{coverage.tier01}</p>
             </div>
           </div>
-        )}
       </div>
 
       {/* Filters */}
@@ -377,7 +384,7 @@ export default function BCDRPlanningPanel({ resources }) {
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs text-blue-300 truncate max-w-xs">{resource.name}</span>
+                        <span className="font-mono text-xs text-blue-300 truncate max-w-xs">{resource.resource_name || resource.name}</span>
                         {isSaving && (
                           <div className="animate-spin h-3 w-3 border-2 border-blue-400 border-t-transparent rounded-full" />
                         )}
@@ -385,7 +392,7 @@ export default function BCDRPlanningPanel({ resources }) {
                     </td>
                     <td className="px-3 py-2">
                       <span className="text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-400">
-                        {resource.type?.split('/').pop()}
+                        {(resource.resource_type || resource.type)?.split('/').pop()}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-xs text-gray-400">

@@ -7,6 +7,7 @@ import {
   Network, SlidersHorizontal, RotateCcw, Navigation, Copy, Lock, Eye, ShieldOff,
   FolderPlus, FolderInput, Square, CheckSquare, Tag, Pencil,
 } from 'lucide-react'
+import { asText } from '../utils/safeText'
 import SparkLine from './SparkLine'
 import ResourceConnectionModal from './ResourceConnectionModal'
 import TagEditorModal from './TagEditorModal'
@@ -487,7 +488,7 @@ const DEFAULT_VISIBLE   = new Set(ALL_COLS.filter(c => c.defaultVisible).map(c =
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function ResourceTable({ resources, externalFilter = null, onClearExternalFilter, aiEnabled = false, onSaveSelectedAsProject, projects = [] }) {
+export default function ResourceTable({ resources, externalFilter = null, onClearExternalFilter, aiEnabled = false, onSaveSelectedAsProject, projects = [], onAddSelected, addSelectedLabel = 'Add to project' }) {
   const [sortCol,     setSortCol]     = useState('cost_current_month')
   const [sortDir,     setSortDir]     = useState('desc')
   const [search,      setSearch]      = useState('')
@@ -1147,6 +1148,15 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
             <CheckSquare size={15} className="text-blue-400 shrink-0" />
             <span className="text-blue-200 font-medium">{selectedIds.size} resource{selectedIds.size !== 1 ? 's' : ''} selected</span>
             <div className="ml-auto flex items-center gap-2">
+              {onAddSelected ? (
+                <button
+                  onClick={() => { onAddSelected(Array.from(selectedIds)); clearSelection() }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors"
+                >
+                  <FolderPlus size={13} />
+                  {addSelectedLabel} ({selectedIds.size})
+                </button>
+              ) : (<>
               {/* Bulk Tag Selected button */}
               <button
                 onClick={() => setBulkTagEditorOpen(true)}
@@ -1196,6 +1206,7 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
                   )}
                 </div>
               )}
+              </>)}
               <button
                 onClick={clearSelection}
                 className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
@@ -1305,8 +1316,8 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
                         {(r.score_label === 'Not Used' || r.score_label === 'Rarely Used' || r.is_orphan) &&
                           (r.ai_explanation || r.recommendation) && (
                           <p className="text-xs text-gray-600 mt-0.5 truncate max-w-[190px]"
-                             title={r.ai_explanation || r.recommendation}>
-                            {(r.ai_explanation || r.recommendation || '').slice(0, 72)}{(r.ai_explanation || r.recommendation || '').length > 72 ? '…' : ''}
+                             title={asText(r.ai_explanation || r.recommendation)}>
+                            {asText(r.ai_explanation || r.recommendation).slice(0, 72)}{asText(r.ai_explanation || r.recommendation).length > 72 ? '…' : ''}
                           </p>
                         )}
                         {/* D2: Waste Age — idle days + cumulative cost wasted */}

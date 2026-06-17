@@ -58,8 +58,10 @@ _settings: Dict[str, Any] = {
     "credential_timeout_hours": int(os.getenv("CREDENTIAL_TIMEOUT_HOURS", "0")),
     # Feature flags
     "demo_mode": False,
-    # Auto-refresh — 0 = disabled; otherwise run a background scan every N hours
-    "auto_refresh_interval_hours": int(os.getenv("AUTO_REFRESH_INTERVAL_HOURS", "0")),
+    # Auto-refresh — 0 = disabled; otherwise run a background scan every N hours.
+    # Default 6h: proactively keeps the dashboard snapshot fresh with a light scan
+    # without hitting Azure Cost Management often enough to risk 429 throttling.
+    "auto_refresh_interval_hours": int(os.getenv("AUTO_REFRESH_INTERVAL_HOURS", "6")),
     # Optional shared L2 cache + distributed lock (Azure Managed Redis / Redis).
     # Empty = disabled (app degrades gracefully to in-process caching).
     "REDIS_URL":               os.getenv("REDIS_URL", ""),

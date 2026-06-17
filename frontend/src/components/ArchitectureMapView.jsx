@@ -212,12 +212,7 @@ export default function ArchitectureMapView() {
     }
   }, [])
 
-  // Only ever use the direct localhost:3001 engine URL when the BROWSER itself is on
-  // localhost (true local dev). In a deployed app the browser is remote, so localhost
-  // would resolve to the client's own machine — always use the same-origin /zuremap/ proxy.
-  const browserIsLocal = typeof window !== 'undefined' &&
-    ['localhost', '127.0.0.1'].includes(window.location.hostname)
-  const iframeSrc = (useLocal && browserIsLocal) ? ZUREMAP_LOCAL_URL : ZUREMAP_PROXY_URL
+  const iframeSrc = useLocal ? ZUREMAP_LOCAL_URL : ZUREMAP_PROXY_URL
 
   // ── Offline state ──
   if (status === 'offline') {

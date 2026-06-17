@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { TrendingDown, ChevronDown, ChevronRight } from 'lucide-react'
 import clsx from 'clsx'
+import { asText } from '../utils/safeText'
 
 function fmtShort(n) {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
@@ -130,8 +131,8 @@ export default function SavingsPanel({ recommendations }) {
                   </div>
 
                   {/* Recommendation text — full width under resource name */}
-                  <p className="text-sm text-white leading-relaxed mt-1.5" title={r.recommendation}>
-                    {r.recommendation}
+                  <p className="text-sm text-white leading-relaxed mt-1.5" title={asText(r.recommendation)}>
+                    {asText(r.recommendation)}
                   </p>
 
                   {/* Savings bar */}

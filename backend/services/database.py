@@ -402,26 +402,6 @@ def init_db():
         except Exception as e:
             logger.error("Azure SQL Database connection failed: %s", e)
             raise
-        # Self-heal the schema: ensure EVERY table exists on Azure SQL. The 003 migration is
-        # normally a manual one-shot script; running it here (idempotent — per-table IF NOT
-        # EXISTS with per-table error isolation) guarantees a fresh or partially-migrated
-        # deployment gets all tables. Without this, tables such as resource_metrics and
-        # finops_budgets are missing, so snapshot/metrics persistence silently fails and the
-        # app re-scans on every open instead of serving the cached snapshot.
-        try:
-            import importlib.util as _ilu
-            from pathlib import Path as _Path
-            _mig = _Path(__file__).resolve().parent.parent / "migrations" / "003_azure_sql_schema.py"
-            if _mig.exists():
-                _spec = _ilu.spec_from_file_location("_azuresql_schema_migration", str(_mig))
-                _mod = _ilu.module_from_spec(_spec)
-                _spec.loader.exec_module(_mod)
-                _mod.run_migration()
-                logger.info("Azure SQL schema ensured (migration 003 applied at startup)")
-            else:
-                logger.warning("Azure SQL schema migration not found at %s", _mig)
-        except Exception as _se:
-            logger.warning("Azure SQL schema self-heal skipped: %s", _se)
     else:
         # SQLite — just ensure the data directory exists
         _DATA_DIR.mkdir(parents=True, exist_ok=True)

@@ -491,7 +491,7 @@ class AssessmentService:
             config = {
                 "vm_size": hw.get("vmSize"),
                 "os_type": ((storage.get("osDisk") or {}).get("osType")),
-                "os_image": f"{(storage.get('imageReference') or {}).get('publisher','')}/{(storage.get('imageReference') or {}).get('offer','')}/{(storage.get('imageReference') or {}).get('sku','')}",
+                "os_image": f"{(storage.get("imageReference") or {}).get('publisher','')}/{(storage.get("imageReference") or {}).get('offer','')}/{(storage.get("imageReference") or {}).get('sku','')}",
                 "data_disk_count": len(storage.get("dataDisks") or []),
                 "nic_count": len((net_prof.get("networkInterfaces") or [])),
                 "admin_user": os_prof.get("adminUsername"),

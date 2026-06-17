@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ShieldCheck, KeyRound, Users, AppWindow, Brain, ListChecks, AlertTriangle } from 'lucide-react';
 import { getJSON, card, KPI, TabBar, Spinner, ErrorBox, ViewHeader, DataGrid, useSubscriptions } from './mgmt/MgmtWidgets';
 import { GenericAIAnalysis } from './AIModuleReports';
+import { asText } from '../utils/safeText';
 
 const SEV = { high: '#ef4444', medium: '#f59e0b', low: '#eab308', info: '#38bdf8' };
 const CRED_COLOR = { expired: '#ef4444', 'expiring-30': '#f97316', 'expiring-90': '#eab308', valid: '#22c55e', none: '#64748b', unknown: '#64748b' };
@@ -20,8 +21,8 @@ function Finding({ f }) {
         <span style={{ background: c + '22', color: c, borderRadius: 4, padding: '1px 8px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase' }}>{f.severity}</span>
         <span style={{ color: '#f1f5f9', fontSize: 13, fontWeight: 600 }}>{f.title}</span>
       </div>
-      {f.detail && <p style={{ color: '#94a3b8', fontSize: 12, margin: '2px 0' }}>{f.detail}</p>}
-      {f.recommendation && <p style={{ color: '#22c55e', fontSize: 12, margin: '2px 0' }}>✅ {f.recommendation}</p>}
+      {f.detail && <p style={{ color: '#94a3b8', fontSize: 12, margin: '2px 0' }}>{asText(f.detail)}</p>}
+      {f.recommendation && <p style={{ color: '#22c55e', fontSize: 12, margin: '2px 0' }}>✅ {asText(f.recommendation)}</p>}
     </div>
   );
 }
