@@ -24,13 +24,17 @@
 #    -RepoBranch <name>         Branch to use (default: the repo's default branch).
 #    -CloneRoot <path>          Where to download the repo (default: .\infraiq-cx-src).
 #
-#  ACTION SWITCHES  (omit them ALL = safe, read-only "collect evidence" mode)
-#    -DeployLatest        AUTO-DOWNLOAD the repo (no manual git clone needed), build the
-#                         latest image from it, and swap it on the app (new revision; the
-#                         app is NEVER deleted). Source repo = -RepoUrl (CX repo by default).
+#  DEPLOY IS ON BY DEFAULT: with no action switches the script diagnoses, then AUTO-DOWNLOADS
+#  the repo (-RepoUrl), builds the latest image, and swaps it onto the existing app (new
+#  revision; the app is NEVER deleted). It records every diagnostic and proceeds with the
+#  update regardless of WARN/FAIL. Works for BOTH public-access and private-endpoint apps.
+#
+#  ACTION SWITCHES
+#    -CollectOnly         READ-ONLY: diagnose + collect the evidence .zip, build/swap NOTHING.
+#    -DeployLatest        Back-compat (deploy already runs by default). Source repo = -RepoUrl.
 #    -AssignPermissions   Grant the app identity: Reader + Cost Management Reader +
 #                         Monitoring Reader (subscription) + AcrPull (registry).
-#    -FixDnsLinks         Link any MISSING privatelink.* DNS zones to the env VNet.
+#    -FixDnsLinks         Link any MISSING privatelink.* DNS zones to the env VNet (private only).
 #    -GrantSqlAccess      Create/repair the app identity's SQL DB user + roles.
 #    -WhatIf              Preview every change and do NOTHING (dry run).
 #    -Confirm             Ask Y/N before each individual change.
@@ -40,10 +44,13 @@
 #  # 0) Sign in first (do this each day — the token expires):
 #  az login
 #
-#  # 1) COLLECT-ONLY (no changes). Run this FIRST, then send the .zip back:
+#  # 1) DEFAULT: diagnose, then download latest code + build + swap the image (public OR private):
 #  .\Update-InfraIQ-Deployment.ps1 `
 #       -SubscriptionId "00000000-0000-0000-0000-000000000000" `
 #       -ResourceGroup  "rg-infra-iq"
+#
+#  # 1b) READ-ONLY collect-evidence (no changes). Then send the .zip back:
+#  .\Update-InfraIQ-Deployment.ps1 -SubscriptionId <id> -ResourceGroup <rg> -CollectOnly
 #
 #  # 2) PREVIEW a full fix without changing anything (dry run):
 #  .\Update-InfraIQ-Deployment.ps1 -SubscriptionId <id> -ResourceGroup <rg> `
@@ -107,21 +114,27 @@
     Everything is captured to JSON + a readable SUMMARY and zipped.
 
 .PARAMETER SubscriptionId    (required) Customer subscription id.
-.PARAMETER ResourceGroup     (required) RG that holds the app + private resources.
-.PARAMETER DeployLatest      Auto-download the repo (-RepoUrl) then build the latest image and swap it onto the app.
+.PARAMETER ResourceGroup     (required) RG that holds the app + (optional) private resources.
+.PARAMETER CollectOnly       Read-only: run diagnostics + collect the evidence bundle, but do NOT build/swap a new image.
+.PARAMETER DeployLatest      Back-compat switch. Deploy now runs by DEFAULT (clone latest -> build -> swap image); use -CollectOnly to skip.
 .PARAMETER AssignPermissions Assign the app identity the roles it needs (AcrPull, Reader,
                              Cost Management Reader, Monitoring Reader). Global Admin/Owner only.
 .PARAMETER GrantSqlAccess    Create/repair the managed-identity DB user + roles in SQL.
-.PARAMETER FixDnsLinks       Link any MISSING critical private DNS zones to the env's VNet.
+.PARAMETER FixDnsLinks       Link any MISSING critical private DNS zones to the env's VNet (private deployments).
 
 .EXAMPLE
-    # Collect a full evidence bundle only (no changes) — send the .zip back:
+    # DEFAULT: diagnose, then download the latest code + build + swap the image on the existing app
+    # (works for BOTH public-access and private-endpoint deployments):
     .\Update-InfraIQ-Deployment.ps1 -SubscriptionId <id> -ResourceGroup <rg>
 
 .EXAMPLE
-    # Full one-command fix: download the repo, deploy latest code, assign roles, repair DNS + SQL:
+    # Read-only - collect a full evidence bundle, make NO changes (send the .zip back):
+    .\Update-InfraIQ-Deployment.ps1 -SubscriptionId <id> -ResourceGroup <rg> -CollectOnly
+
+.EXAMPLE
+    # Full one-command fix: deploy latest (default) + assign roles + repair DNS + SQL:
     .\Update-InfraIQ-Deployment.ps1 -SubscriptionId <id> -ResourceGroup <rg> `
-        -DeployLatest -AssignPermissions -GrantSqlAccess -FixDnsLinks
+        -AssignPermissions -GrantSqlAccess -FixDnsLinks
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(
@@ -148,12 +161,15 @@ param(
     # Output
     [string] $OutputPath,
 
-    # Mutating actions (opt-in)
-    [switch] $DeployLatest,
+    # Mutating actions
+    [switch] $DeployLatest,       # back-compat: deploy now runs by DEFAULT (see -CollectOnly)
     [switch] $AssignPermissions,
     [switch] $GrantSqlAccess,
     [switch] $FixDnsLinks,
-    [switch] $FixSqlFirewall
+    [switch] $FixSqlFirewall,
+
+    # Read-only: run diagnostics + evidence bundle only; do NOT build/swap a new image
+    [switch] $CollectOnly
 )
 
 $ErrorActionPreference = 'Continue'
@@ -171,7 +187,7 @@ try { Start-Transcript -Path $transcript -Force | Out-Null } catch { }
 $script:Results   = New-Object System.Collections.Generic.List[object]
 $script:NextSteps = New-Object System.Collections.Generic.List[string]
 $script:Diag      = [ordered]@{}
-$script:Diag['meta'] = [ordered]@{ generatedUtc = (Get-Date).ToUniversalTime().ToString('o'); subscriptionId = $SubscriptionId; resourceGroup = $ResourceGroup; tool = 'Update-InfraIQ-Deployment.ps1'; version = '2.0' }
+$script:Diag['meta'] = [ordered]@{ generatedUtc = (Get-Date).ToUniversalTime().ToString('o'); subscriptionId = $SubscriptionId; resourceGroup = $ResourceGroup; tool = 'Update-InfraIQ-Deployment.ps1'; version = '2.2' }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 function Add-Result {
@@ -261,18 +277,22 @@ $fullImageRef = $null
 
 Write-Host ''
 Write-Host '################################################################################' -ForegroundColor Cyan
-Write-Host '#  Azure Infra IQ - deep diagnostic + fixer (private-endpoint aware)            #' -ForegroundColor Cyan
+Write-Host '#  Azure Infra IQ - diagnose + deploy latest image (public & private aware)    #' -ForegroundColor Cyan
 Write-Host '################################################################################' -ForegroundColor Cyan
 Write-Host ("  Subscription : {0}" -f $SubscriptionId)
 Write-Host ("  Resource grp : {0}" -f $ResourceGroup)
 Write-Host ("  Evidence dir : {0}" -f $OutputPath)
+$DoDeploy = -not $CollectOnly
 $modeBits = @()
-if ($DeployLatest)      { $modeBits += 'DEPLOY' }
+if ($DoDeploy)          { $modeBits += 'DEPLOY-LATEST (clone repo -> build -> swap image)' }
 if ($AssignPermissions) { $modeBits += 'ASSIGN-ROLES' }
 if ($GrantSqlAccess)    { $modeBits += 'GRANT-SQL' }
 if ($FixDnsLinks)       { $modeBits += 'FIX-DNS' }
-if ($modeBits.Count -eq 0) { $modeBits = @('COLLECT-ONLY (read-only)') }
+if ($CollectOnly)       { $modeBits = @('COLLECT-ONLY (read-only diagnostics)') }
 Write-Host ("  Mode         : {0}" -f ($modeBits -join ', ')) -ForegroundColor Yellow
+if ($DoDeploy) {
+    Write-Host '  Deploy       : ON by default - records all diagnostics, then downloads the latest code, builds a new image and swaps it onto the existing app (works for BOTH public and private). Use -CollectOnly for read-only.' -ForegroundColor Green
+}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. Prerequisites & sign-in
@@ -393,8 +413,19 @@ if (-not $envObj) {
         $envVnetId = ($infraSubnet -split '/subnets/')[0]
         Add-Result 'Env VNet-integrated' 'PASS' ("VNet: {0}" -f (Get-NameFromId $envVnetId))
     } else {
-        Add-Result 'Env VNet-integrated' 'FAIL' 'The Container Apps environment is NOT VNet-integrated. With private-endpoint-only resources the app cannot reach SQL/OpenAI/ACR. (A VNet-integrated env is required and usually cannot be added after creation.)'
-        $script:NextSteps.Add('CRITICAL: the Container Apps environment is not VNet-integrated. Private resources are unreachable until the env is on a VNet that links the private DNS zones.')
+        # NOT VNet-integrated. This is ONLY a problem when a backing resource is PRIVATE-endpoint-only.
+        # For a PUBLIC-access deployment (SQL/OpenAI publicNetworkAccess=Enabled) VNet integration is
+        # NOT required, so this must not fail the run. Detect public-vs-private and decide accordingly.
+        $sqlPub = $true; $aoaiPub = $true
+        if ($SqlServerName)     { $q  = Invoke-AzText @('sql','server','show','-n',$SqlServerName,'-g',$ResourceGroup,'--query','publicNetworkAccess','-o','tsv');                 if ($q.text  -match '(?i)disabled') { $sqlPub  = $false } }
+        if ($OpenAiAccountName) { $q2 = Invoke-AzText @('cognitiveservices','account','show','-n',$OpenAiAccountName,'-g',$ResourceGroup,'--query','properties.publicNetworkAccess','-o','tsv'); if ($q2.text -match '(?i)disabled') { $aoaiPub = $false } }
+        if ($sqlPub -and $aoaiPub) {
+            Add-Result 'Env VNet-integrated' 'INFO' 'Not VNet-integrated - and not required here: the backing resources allow PUBLIC network access (SQL/OpenAI publicNetworkAccess=Enabled). This is a valid PUBLIC deployment; the app reaches SQL/OpenAI/ACR over public endpoints. (A private-endpoint deployment would instead need a VNet-integrated env that links the private DNS zones.)'
+        } else {
+            $priv = @(); if (-not $sqlPub) { $priv += 'SQL' }; if (-not $aoaiPub) { $priv += 'OpenAI' }
+            Add-Result 'Env VNet-integrated' 'FAIL' ("NOT VNet-integrated AND a backing resource is private-endpoint-only (publicNetworkAccess=Disabled): {0}. The app cannot reach it. Either recreate the env on a VNet that links the private DNS zones, or enable public network access on that resource." -f ($priv -join ', '))
+            $script:NextSteps.Add(("Private resource(s) [{0}] unreachable: the Container Apps env is not VNet-integrated. Recreate the env on a VNet + link the private DNS zones, OR enable public network access on those resources." -f ($priv -join ', ')))
+        }
     }
 }
 
@@ -643,12 +674,13 @@ if ($app) {
 # ──────────────────────────────────────────────────────────────────────────────
 # 11. Build + deploy latest image (opt-in)
 # ──────────────────────────────────────────────────────────────────────────────
-Write-Head 'Build & deploy latest image (opt-in)'
-if (-not $DeployLatest) {
-    Add-Result 'Deploy latest' 'INFO' 'Skipped (pass -DeployLatest to download the repo, build the image, and swap it on the app).'
+Write-Head 'Build & deploy latest image'
+if ($CollectOnly) {
+    Add-Result 'Deploy latest' 'INFO' 'Skipped: -CollectOnly (read-only). Re-run without -CollectOnly to clone the latest repo, build the image, and swap it onto the app.'
 } elseif (-not $AcrName) {
-    Add-Result 'Deploy latest' 'FAIL' 'No ACR resolved; pass -AcrName.'
+    Add-Result 'Deploy latest' 'FAIL' 'No ACR resolved in the RG; pass -AcrName so the image can be built and pushed.'
 } else {
+    Add-Result 'Deploy latest' 'INFO' ('Proceeding with the update regardless of any diagnostic WARN/FAIL above (compatible with public AND private). Source repo: {0}' -f $RepoUrl)
     # Resolve the build context: an explicit -RepoPath if valid, otherwise auto-download -RepoUrl.
     $buildPath = $null
     if ($RepoPath -and (Test-Path (Join-Path $RepoPath 'Dockerfile'))) {
@@ -665,7 +697,8 @@ if (-not $DeployLatest) {
     if ($buildPath) {
         $fullImageRef = '{0}.azurecr.io/{1}' -f $AcrName, $imageRef
         if ($PSCmdlet.ShouldProcess($AcrName, "az acr build $imageRef from $buildPath")) {
-            & az acr build --registry $AcrName --image $imageRef --file (Join-Path $buildPath 'Dockerfile') $buildPath --only-show-errors
+            Write-Host ("  building image {0} in ACR {1} (this can take several minutes)..." -f $imageRef, $AcrName) -ForegroundColor Cyan
+            & az acr build --registry $AcrName --image $imageRef --file (Join-Path $buildPath 'Dockerfile') $buildPath --only-show-errors 2>&1 | Tee-Object -FilePath (Join-Path $OutputPath 'acr_build.log')
             if ($LASTEXITCODE -eq 0) {
                 Add-Result 'Build image' 'FIXED' $fullImageRef
                 if ($app -and $PSCmdlet.ShouldProcess($ContainerAppName, "Update image to $fullImageRef (new revision, no delete)")) {
