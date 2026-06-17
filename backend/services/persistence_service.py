@@ -238,8 +238,12 @@ def save_resource_metrics(metrics_map: Dict[str, Any]) -> None:
                     update_cols=["updated_at", "payload"],
                 )
                 _params = (rid.lower(), now, payload)
-                if is_azure_sql():
-                    _params = _params + _params
+                # NOTE: upsert_conflict_sql's Azure SQL MERGE references the source columns
+                # BY NAME (source.[col]) so it has exactly 3 parameter markers — same as the
+                # SQLite INSERT..ON CONFLICT. Do NOT double the params for Azure SQL: doing so
+                # raised "3 parameter markers, but 6 parameters were supplied" on EVERY row,
+                # which (swallowed below) left resource_metrics permanently EMPTY and the
+                # Utilisation column blank on all Azure SQL deployments.
                 db.execute(_upsert, _params)
             except Exception:
                 pass  # skip individual failures silently
