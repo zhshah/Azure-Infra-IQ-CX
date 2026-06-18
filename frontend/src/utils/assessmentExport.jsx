@@ -11,6 +11,7 @@
  */
 import React from 'react'
 import { pdf, Document, Page, Text, View, StyleSheet, Svg, Path, Rect, Circle, Defs, LinearGradient, Stop, G } from '@react-pdf/renderer'
+import { BrandMark } from './pdfBrand'
 
 // ── Brand palette (matches ExportPDFButton / Azure Estate Overview) ───────────
 const C = {
@@ -130,24 +131,7 @@ const s = StyleSheet.create({
 
 // ── Brand mark (Azure swirl tile) ─────────────────────────────────────────────
 function LogoIcon({ size = 44 }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 40 40">
-      <Defs>
-        <LinearGradient id="aiqGrad" x1="0" y1="0" x2="1" y2="1">
-          <Stop offset="0" stopColor="#2c9cf0" />
-          <Stop offset="1" stopColor="#1668c5" />
-        </LinearGradient>
-      </Defs>
-      <Rect x="0" y="0" width="40" height="40" rx="9" fill="url(#aiqGrad)" />
-      {/* Ascending bars (brand mark) */}
-      <Rect x="9"    y="22" width="5" height="9"  rx="1.5" fill="#bcd9f5" />
-      <Rect x="17.5" y="18" width="5" height="13" rx="1.5" fill="#dcecfb" />
-      <Rect x="26"   y="13" width="5" height="18" rx="1.5" fill="#ffffff" />
-      {/* Growth trend line + node */}
-      <Path d="M10 19 L28 9" stroke="#36e0e6" strokeWidth="2.2" strokeLinecap="round" fill="none" />
-      <Circle cx="28.5" cy="9" r="2.6" fill="#0b2a4a" stroke="#36e0e6" strokeWidth="1.4" />
-    </Svg>
-  )
+  return <BrandMark size={size} />
 }
 
 // ── Score ring (Svg rings + overlaid number; N/A renders a neutral ring) ───────

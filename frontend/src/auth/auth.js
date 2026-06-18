@@ -68,10 +68,24 @@ export function getAccount() {
   return _account
 }
 
-/** Redirect to the Entra sign-in page. */
+/**
+ * Redirect to the Entra sign-in page.
+ * If MSAL was not initialised at boot (e.g. the app loaded in open/local mode),
+ * lazily initialise it from the runtime auth config first. Returns false when
+ * the deployment has no authentication configured (nothing to sign into).
+ */
 export async function login() {
-  if (!_msal) return
+  if (!_msal) {
+    try {
+      const cfg = await loadAuthConfig()
+      if (cfg && cfg.authRequired && cfg.clientId) await initAuth(cfg)
+    } catch {
+      /* fall through to the open-access result below */
+    }
+  }
+  if (!_msal) return false
   await _msal.loginRedirect({ scopes: _scopes })
+  return true
 }
 
 /** Sign out: clears the MSAL session and returns to the app (→ login page). */

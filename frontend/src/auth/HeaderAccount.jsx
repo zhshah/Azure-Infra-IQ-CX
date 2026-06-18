@@ -4,11 +4,13 @@
  * is signed in (e.g. local open mode), so it is safe to mount unconditionally.
  */
 import React, { useState, useEffect } from 'react'
-import { getAccount, logout, getProfilePhoto } from './auth.js'
+import { LogIn, LogOut } from 'lucide-react'
+import { getAccount, login, logout, getProfilePhoto } from './auth.js'
 
 export default function HeaderAccount() {
   const [busy, setBusy] = useState(false)
   const [photo, setPhoto] = useState(null)
+  const [note, setNote] = useState('')
   const account = getAccount()
 
   useEffect(() => {
@@ -29,11 +31,21 @@ export default function HeaderAccount() {
     }
   }, [account])
 
-  if (!account) return null
-
-  const name = account.name || account.username || 'Signed in'
-  const email = account.username || ''
-  const initial = (name || '?').trim().charAt(0).toUpperCase()
+  const onSignIn = async () => {
+    setBusy(true)
+    setNote('')
+    try {
+      const ok = await login()
+      // login() redirects to Entra when auth is configured; it only returns
+      // here (false) when the deployment runs in open/local mode (no sign-in).
+      if (!ok) {
+        setNote('Open access — sign-in is not enabled for this deployment.')
+        setBusy(false)
+      }
+    } catch {
+      setBusy(false)
+    }
+  }
 
   const onSignOut = async () => {
     setBusy(true)
@@ -43,6 +55,42 @@ export default function HeaderAccount() {
       setBusy(false)
     }
   }
+
+  // Open / local mode (no signed-in account): keep an account control in the
+  // header instead of rendering nothing, so the banner is never missing it.
+  if (!account) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: '"Segoe UI", system-ui, -apple-system, sans-serif' }}>
+        {note && (
+          <span style={{ fontSize: 11, color: '#94a3b8', maxWidth: 230, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={note}>{note}</span>
+        )}
+        <button
+          type="button"
+          onClick={onSignIn}
+          disabled={busy}
+          title="Sign in"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '6px 12px', borderRadius: 8,
+            border: '1px solid rgba(148, 163, 184, 0.25)',
+            background: 'rgba(30, 41, 59, 0.4)',
+            color: '#e2e8f0', fontSize: 12, fontWeight: 600,
+            cursor: busy ? 'default' : 'pointer',
+            fontFamily: 'inherit',
+          }}
+          onMouseEnter={(e) => { if (!busy) e.currentTarget.style.background = 'rgba(30, 41, 59, 0.7)' }}
+          onMouseLeave={(e) => { if (!busy) e.currentTarget.style.background = 'rgba(30, 41, 59, 0.4)' }}
+        >
+          <LogIn size={14} />
+          {busy ? 'Opening\u2026' : 'Sign in'}
+        </button>
+      </div>
+    )
+  }
+
+  const name = account.name || account.username || 'Signed in'
+  const email = account.username || ''
+  const initial = (name || '?').trim().charAt(0).toUpperCase()
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontFamily: '"Segoe UI", system-ui, -apple-system, sans-serif' }}>
@@ -77,6 +125,7 @@ export default function HeaderAccount() {
         onMouseEnter={(e) => { if (!busy) e.currentTarget.style.background = 'rgba(30, 41, 59, 0.7)' }}
         onMouseLeave={(e) => { if (!busy) e.currentTarget.style.background = 'rgba(30, 41, 59, 0.4)' }}
       >
+        <LogOut size={14} />
         {busy ? 'Signing out…' : 'Logout'}
       </button>
     </div>

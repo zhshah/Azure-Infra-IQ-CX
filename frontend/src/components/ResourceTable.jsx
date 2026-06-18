@@ -1144,7 +1144,7 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
 
         {/* ── Selection toolbar (shown when resources are checked) ── */}
         {selectedIds.size > 0 && (
-          <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg bg-blue-900/30 border border-blue-700/50 text-sm">
+          <div className="sticky top-0 z-30 flex items-center gap-3 px-4 py-2.5 rounded-lg bg-blue-900/90 backdrop-blur border border-blue-600/60 text-sm shadow-lg">
             <CheckSquare size={15} className="text-blue-400 shrink-0" />
             <span className="text-blue-200 font-medium">{selectedIds.size} resource{selectedIds.size !== 1 ? 's' : ''} selected</span>
             <div className="ml-auto flex items-center gap-2">
@@ -1293,10 +1293,10 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
                       )}
                     >
                       {/* Checkbox */}
-                      <td className="px-3 py-3 w-8" onClick={e => toggleSelect(r.resource_id, e)}>
+                      <td className="px-3 py-3 w-8 cursor-pointer" onClick={e => toggleSelect(r.resource_id, e)}>
                         {selectedIds.has(r.resource_id)
-                          ? <CheckSquare size={13} className="text-blue-400" />
-                          : <Square size={13} className="text-gray-700 group-hover:text-gray-500" />
+                          ? <CheckSquare size={16} className="text-blue-400" />
+                          : <Square size={16} className="text-gray-500 group-hover:text-blue-300" />
                         }
                       </td>
                       {/* Resource Name — sticky */}

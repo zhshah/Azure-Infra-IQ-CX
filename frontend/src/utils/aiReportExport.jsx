@@ -8,6 +8,7 @@
  */
 import React from 'react'
 import { pdf, Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
+import { BrandMark } from './pdfBrand'
 
 const COL = {
   ink: '#0f172a', body: '#1e293b', muted: '#64748b', line: '#e2e8f0',
@@ -108,7 +109,10 @@ function AIReportDoc({ title, category, report }) {
   return (
     <Document>
       <Page size="A4" style={st.page} wrap>
-        <Text style={st.brand}>AZURE INFRA IQ</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 2 }}>
+          <BrandMark size={24} />
+          <Text style={st.brand}>AZURE INFRA IQ</Text>
+        </View>
         <Text style={st.h1}>{title || 'AI Analysis'}</Text>
         <Text style={st.sub}>{category ? `${category} · ` : ''}AI Analysis{when ? `  ·  ${when}` : ''}</Text>
 

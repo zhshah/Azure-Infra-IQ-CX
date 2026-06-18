@@ -2082,8 +2082,8 @@ function AppInner() {
         backdropFilter: 'blur(12px)',
         gap: 12,
       }}>
-        <div className="flex items-center gap-3 shrink-0">
-          <h1 style={{ fontSize: 15, fontWeight: 700, color: '#f1f5f9', letterSpacing: '-0.01em', lineHeight: 1, margin: 0 }}>Azure Infra IQ</h1>
+        <div className="flex items-center gap-3 min-w-0">
+          <h1 style={{ fontSize: 15, fontWeight: 700, color: '#f1f5f9', letterSpacing: '-0.01em', lineHeight: 1, margin: 0, whiteSpace: 'nowrap' }}>Azure Infra IQ</h1>
           <span style={{
             fontSize: 10, fontWeight: 600, color: '#0078d4',
             background: 'rgba(0, 120, 212, 0.12)',
@@ -2104,7 +2104,7 @@ function AppInner() {
             onCreateClick={() => setSaveProjectModalOpen(true)}
           />
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0" style={{ position: 'relative', zIndex: 1, background: '#0c1220', paddingLeft: 8 }}>
           {error && (
             <span style={{
               fontSize: 11, fontWeight: 500, color: '#f97316',

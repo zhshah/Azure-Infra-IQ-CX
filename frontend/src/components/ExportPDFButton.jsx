@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { pdf, Document, Page, Text, View, StyleSheet, Font, Svg, Path, Rect, Circle, Polyline, Defs, LinearGradient, Stop, G } from '@react-pdf/renderer'
+import { BrandMark } from '../utils/pdfBrand'
 import { FileDown, Loader } from 'lucide-react'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -188,24 +189,7 @@ function billingDateRange(kpi) {
 // white "A" glyph (the exact SVG path used by the sidebar logo in App.jsx).
 
 function LogoIcon({ size = 44 }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 40 40">
-      <Defs>
-        <LinearGradient id="brandGrad" x1="0" y1="0" x2="1" y2="1">
-          <Stop offset="0" stopColor="#0078d4" />
-          <Stop offset="1" stopColor="#00b7c3" />
-        </LinearGradient>
-      </Defs>
-      <Rect x="0" y="0" width="40" height="40" rx="9" fill="url(#brandGrad)" />
-      <G transform="translate(5.6 5.6) scale(1.6)">
-        <Path
-          d="M7.5 2L2 14h4l1-2.5h4L12 14h4L10.5 2h-3zm1.5 3l1.5 4.5h-3L9 5z"
-          fill="#ffffff"
-          fillOpacity="0.96"
-        />
-      </G>
-    </Svg>
-  )
+  return <BrandMark size={size} />
 }
 
 // ── Reusable footer ────────────────────────────────────────────────────────────

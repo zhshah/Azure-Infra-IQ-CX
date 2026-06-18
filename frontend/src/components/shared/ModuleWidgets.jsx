@@ -10,6 +10,18 @@ function _download(filename, mime, content) {
   document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
 }
 
+// Brand logo as a base64 data URI for Excel exports — fetched once, then cached.
+let _brandLogoPromise = null
+function _getBrandLogo() {
+  if (!_brandLogoPromise) {
+    _brandLogoPromise = fetch('/branding/logo-mark-256.png')
+      .then(r => (r.ok ? r.blob() : null))
+      .then(b => (b ? new Promise(res => { const fr = new FileReader(); fr.onloadend = () => res(fr.result); fr.onerror = () => res(''); fr.readAsDataURL(b) }) : ''))
+      .catch(() => '')
+  }
+  return _brandLogoPromise
+}
+
 // ── Shared KPI Card ─────────────────────────────────────────────────────────
 
 export function KPICard({ label, value, subtitle, color = 'blue', icon: Icon, onClick }) {
@@ -116,12 +128,16 @@ export function DataTable({ columns, data, title, emptyMsg, exportFilename, page
       [headers.join(','), ...body.map(r => r.join(','))].join('\n'))
   }
 
-  const exportXls = () => {
+  const exportXls = async () => {
     if (!sorted.length) return
     const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const ncol = columns.length
+    const logo = await _getBrandLogo()
+    const brandRow = `<tr><td colspan="${ncol}" style="background:#0A66C2;padding:8px 12px;font-family:Segoe UI,Arial,sans-serif">${logo ? `<img src="${logo}" width="26" height="26" style="vertical-align:middle"/>&nbsp;&nbsp;` : ''}<span style="color:#ffffff;font-size:15pt;font-weight:bold">Azure Infra IQ</span></td></tr>`
+    const subRow = `<tr><td colspan="${ncol}" style="background:#0A66C2;color:#cfe3fa;padding:0 12px 8px;font-family:Segoe UI,Arial,sans-serif;font-size:9pt">${esc(title || 'Report')} &middot; Exported ${esc(new Date().toLocaleString())}</td></tr>`
     const head = `<tr>${columns.map(c => `<th style="background:#1f2937;color:#fff;text-align:left">${esc(c.label)}</th>`).join('')}</tr>`
     const body = sorted.map(row => `<tr>${columns.map(c => `<td>${esc(cellText(c, row))}</td>`).join('')}</tr>`).join('')
-    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1" cellspacing="0">${head}${body}</table></body></html>`
+    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1" cellspacing="0">${brandRow}${subRow}${head}${body}</table></body></html>`
     _download(`${exportFilename || 'report'}-${_stamp()}.xls`, 'application/vnd.ms-excel', html)
   }
 

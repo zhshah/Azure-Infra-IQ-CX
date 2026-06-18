@@ -4922,6 +4922,28 @@ async def finops_resource_optimization():
     }
 
 
+# ── Branding for XLSX exports ─────────────────────────────────
+
+def _xlsx_brand_logo(ws, anchor: str = "F1") -> None:
+    """Overlay the Azure Infra IQ brand mark on a worksheet (best-effort).
+
+    Uses a floating image anchored to an empty top cell so existing row/column
+    layout is untouched. Silently no-ops if Pillow or the asset is unavailable.
+    """
+    try:
+        import os as _os
+        from openpyxl.drawing.image import Image as _XLImage
+        p = _os.path.join(_os.path.dirname(__file__), "assets", "brand-logo.png")
+        if not _os.path.exists(p):
+            return
+        img = _XLImage(p)
+        img.width = 40
+        img.height = 40
+        ws.add_image(img, anchor)
+    except Exception:
+        pass
+
+
 # ── XLSX Export (cost-explorer query → formatted XLSX) ───────────────────────
 
 @app.post("/api/finops/export/xlsx", tags=["FinOps"])
@@ -5089,6 +5111,7 @@ async def finops_report_xlsx():
 
     # ── Sheet 1: Executive Summary ────────────────────────────────────────────
     ws_kpi = wb.active; ws_kpi.title = "Executive Summary"
+    _xlsx_brand_logo(ws_kpi, "E1")
     ws_kpi["A1"] = "Azure FinOps Report"; ws_kpi["A1"].font = TITLE
     ws_kpi["A2"] = f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
     ws_kpi["A2"].font = Font(color="64748B", italic=True, size=9)
@@ -6462,6 +6485,7 @@ async def export_project_assessment_xlsx(project_id: str, body: ProjectAssessExp
 
     # Sheet 1 — Summary
     ws = wb.active; ws.title = "Summary"
+    _xlsx_brand_logo(ws, "D1")
     ws["A1"] = f"{pname} — {cat_label} Assessment"; ws["A1"].font = TITLE
     ws["A2"] = f"Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}  ·  Azure Infra IQ"
     ws["A2"].font = SUBTLE
@@ -10823,10 +10847,14 @@ _BUILD_ID = _compute_build_id()
 
 @app.get("/api/version", include_in_schema=False)
 async def api_version():
-    """Current frontend build id. Polled by the SPA to auto-reload stale tabs."""
+    """Current frontend build id, recomputed fresh from the served index.html on
+    every call so a rebuild/redeploy is reflected immediately (no backend restart
+    required). Polled by the SPA to auto-reload stale tabs onto the new bundle —
+    this prevents an open tab from lingering on deleted chunk hashes (404 →
+    blank/half-loaded panels)."""
     from fastapi.responses import JSONResponse
     return JSONResponse(
-        {"build": _BUILD_ID},
+        {"build": _compute_build_id()},
         headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
     )
 
