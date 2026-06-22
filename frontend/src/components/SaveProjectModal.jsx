@@ -162,8 +162,8 @@ export default function SaveProjectModal({ resourceCount, onSave, onCancel, exis
               >
                 <option value="">Choose project…</option>
                 {existingProjects.map(p => (
-                  <option key={p.id} value={p.id}>
-                    {p.icon} {p.name} ({p.resource_count} resources)
+                  <option key={p.id || p.project_id} value={p.id || p.project_id}>
+                    {p.icon || '📁'} {p.name || p.project_name} ({p.resource_count ?? (p.resource_ids || []).length} resources)
                   </option>
                 ))}
               </select>

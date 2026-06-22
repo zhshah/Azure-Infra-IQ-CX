@@ -36,6 +36,19 @@ export default function ProjectsModule({ resources = [] }) {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('list'); // 'list' | 'detail'
+  // Estate resources for the "Add resources" picker. Prefer the dashboard's data when
+  // present, but fetch the estate directly when it isn't loaded so adding resources to a
+  // project NEVER depends on the main dashboard having been scanned/loaded first.
+  const [estateResources, setEstateResources] = useState(resources);
+
+  useEffect(() => {
+    if (resources && resources.length) { setEstateResources(resources); return; }
+    let alive = true;
+    api.getResources()
+      .then(r => { if (alive && Array.isArray(r) && r.length) setEstateResources(r); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [resources]);
 
   useEffect(() => {
     loadProjects();
@@ -87,7 +100,7 @@ export default function ProjectsModule({ resources = [] }) {
     try {
       await api._request(`/projects/${projectId}`, { method: 'DELETE' });
       await loadProjects();
-      if (selectedProject?.project_id === projectId) {
+      if ((selectedProject?.project_id || selectedProject?.id) === projectId) {
         setSelectedProject(null);
         setView('list');
       }
@@ -141,9 +154,10 @@ export default function ProjectsModule({ resources = [] }) {
           color: selectedProject.color,
           icon: selectedProject.icon,
         }}
-        allResources={resources}
+        allResources={estateResources}
         onBack={() => { setView('list'); setSelectedProject(null); }}
         onResourcesChanged={() => loadProjects(true)}
+        onDelete={() => deleteProject(selectedProject.id || selectedProject.project_id)}
       />
     );
   }
@@ -326,7 +340,7 @@ export default function ProjectsModule({ resources = [] }) {
                     </div>
                     <button
                       onClick={(e) => { e.stopPropagation(); deleteProject(project.project_id || project.id); }}
-                      className="p-1.5 text-gray-600 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors opacity-0 group-hover:opacity-100"
+                      className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
                       title="Delete project"
                     >
                       <Trash2 className="w-4 h-4" />

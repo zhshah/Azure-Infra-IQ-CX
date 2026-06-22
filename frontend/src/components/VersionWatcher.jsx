@@ -16,8 +16,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { RefreshCw, X } from 'lucide-react'
 
-const POLL_MS = 60_000   // how often to check for a newer build
-const IDLE_MS = 60_000   // auto-reload only after this much user inactivity
+const POLL_MS = 20_000   // how often to check for a newer build
+const IDLE_MS = 10_000   // auto-reload only after this much user inactivity
 
 function hardReload() {
   // index.html is served no-cache, so a reload already fetches the new bundle.
@@ -69,6 +69,30 @@ export default function VersionWatcher() {
     }
     const id = setInterval(check, POLL_MS)
     return () => clearInterval(id)
+  }, [bootBuild])
+
+  // FAST PATH for multi-tab users: the instant this tab regains focus / becomes visible,
+  // check the live build DIRECTLY and upgrade immediately if it's stale — so a tab you
+  // switch back to never keeps running old (possibly buggy) code while you wait for the
+  // slow poll. This is what stops the recurring "I clicked but nothing happened" on a tab
+  // that booted before the latest rebuild.
+  useEffect(() => {
+    if (!bootBuild) return undefined
+    const checkNow = async () => {
+      if (reloadingRef.current || document.visibilityState !== 'visible') return
+      try {
+        const r = await fetch('/api/version', { cache: 'no-store' })
+        if (!r.ok) return
+        const j = await r.json()
+        if (j?.build && j.build !== bootBuild) { reloadingRef.current = true; hardReload() }
+      } catch { /* offline / transient — ignore */ }
+    }
+    window.addEventListener('focus', checkNow)
+    document.addEventListener('visibilitychange', checkNow)
+    return () => {
+      window.removeEventListener('focus', checkNow)
+      document.removeEventListener('visibilitychange', checkNow)
+    }
   }, [bootBuild])
 
   // Once a new build is live, upgrade this tab automatically so a stale (possibly

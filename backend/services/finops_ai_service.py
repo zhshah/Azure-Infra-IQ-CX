@@ -72,25 +72,52 @@ def _chat_completion(system: str, user: str, max_tokens: int = 1400) -> Optional
             api_key=api_key,
             api_version="2024-12-01-preview",
         )
+        low_name = (deployment or "").lower()
+        is_reasoning = any(k in low_name for k in ("gpt-5", "gpt5", "o1", "o3", "o4"))
         kwargs = dict(
             model=deployment,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            max_completion_tokens=max_tokens,
         )
+        if is_reasoning:
+            # Reasoning models (gpt-5.x / o-series) spend part of the budget on hidden
+            # reasoning — a small cap returns an EMPTY answer — and reject a custom
+            # temperature. Give headroom + low effort, send no temperature.
+            kwargs["max_completion_tokens"] = max(int(max_tokens) + 6000, 8000)
+            kwargs["reasoning_effort"] = "low"
+        else:
+            kwargs["max_completion_tokens"] = int(max_tokens)
         try:
             resp = client.chat.completions.create(**kwargs)
         except Exception as e:
-            if "max_completion_tokens" in str(e) or "unsupported_parameter" in str(e) or "temperature" in str(e):
-                kwargs.pop("max_completion_tokens", None)
-                kwargs["max_tokens"] = max_tokens
-                kwargs["temperature"] = 0.2
-                resp = client.chat.completions.create(**kwargs)
-            else:
+            _es = str(e).lower()
+            _changed = False
+            if "reasoning_effort" in _es and "reasoning_effort" in kwargs:
+                kwargs.pop("reasoning_effort", None); _changed = True
+            if ("max_completion_tokens" in _es or "unsupported_parameter" in _es) and "max_completion_tokens" in kwargs:
+                kwargs["max_tokens"] = kwargs.pop("max_completion_tokens"); kwargs.pop("reasoning_effort", None)
+                if not is_reasoning:
+                    kwargs["temperature"] = 0.2
+                _changed = True
+            elif "temperature" in _es and "temperature" in kwargs:
+                kwargs.pop("temperature", None); _changed = True
+            if not _changed:
                 raise
-        return resp.choices[0].message.content
+            resp = client.chat.completions.create(**kwargs)
+        text = (getattr(resp.choices[0].message, "content", None) or "").strip()
+        # Reasoning model starved its visible output → retry once with a bigger budget.
+        if not text and is_reasoning:
+            kwargs["max_completion_tokens"] = max(int(max_tokens) * 3, 16000)
+            kwargs["reasoning_effort"] = "low"
+            try:
+                resp = client.chat.completions.create(**kwargs)
+            except Exception:
+                kwargs.pop("reasoning_effort", None)
+                resp = client.chat.completions.create(**kwargs)
+            text = (getattr(resp.choices[0].message, "content", None) or "").strip()
+        return text or None
 
     if provider == "claude":
         api_key = svc.get_value("ANTHROPIC_API_KEY", "")

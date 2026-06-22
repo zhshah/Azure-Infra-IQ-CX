@@ -5,7 +5,7 @@ import {
   ExternalLink, Terminal, Check, Clock, X as XIcon, AlertTriangle,
   MapPin, Server, Database, Cloud, Cpu, Shield, Zap, HardDrive, Filter,
   Network, SlidersHorizontal, RotateCcw, Navigation, Copy, Lock, Eye, ShieldOff,
-  FolderPlus, FolderInput, Square, CheckSquare, Tag, Pencil,
+  FolderPlus, FolderInput, Square, CheckSquare, Tag, Pencil, Loader2, Trash2,
 } from 'lucide-react'
 import { asText } from '../utils/safeText'
 import SparkLine from './SparkLine'
@@ -475,7 +475,7 @@ const ALL_COLS = [
   { key: 'ai_action',                 label: 'Advisor',           sortable: false, alwaysVisible: false, defaultVisible: true  },
   // Optional extras (hidden by default)
   { key: 'sku',                       label: 'SKU / Tier',        sortable: true,  alwaysVisible: false, defaultVisible: false },
-  { key: 'subscription_id',           label: 'Subscription',      sortable: true,  alwaysVisible: false, defaultVisible: false },
+  { key: 'subscription_id',           label: 'Subscription',      sortable: true,  alwaysVisible: false, defaultVisible: true  },
   { key: 'carbon_kg_per_month',       label: 'Carbon (kg CO₂/mo)', sortable: true, alwaysVisible: false, defaultVisible: false },
   { key: 'days_since_active',         label: 'Days Since Active', sortable: true,  alwaysVisible: false, defaultVisible: false },
   { key: 'data_confidence',           label: 'Data Confidence',   sortable: true,  alwaysVisible: false, defaultVisible: false },
@@ -483,12 +483,33 @@ const ALL_COLS = [
   { key: 'missing_tags',              label: 'Missing Tags',      sortable: false, alwaysVisible: false, defaultVisible: false },
 ]
 
-const COLS_STORAGE_KEY  = 'azure-optimizer-columns'
+const COLS_STORAGE_KEY  = 'azure-optimizer-columns-v2'
 const DEFAULT_VISIBLE   = new Set(ALL_COLS.filter(c => c.defaultVisible).map(c => c.key))
+
+// BCDR Planning Phase 1 fields surfaced as optional columns here (the SAME central record
+// shown in the BCDR ▸ Planning grid). Only fields with a saved value are auto-revealed.
+const BCDR_META_COLS = [
+  { field: 'criticality',             label: 'Criticality' },
+  { field: 'dr_tier',                 label: 'DR Tier' },
+  { field: 'rto_target',              label: 'RTO' },
+  { field: 'rpo_target',              label: 'RPO' },
+  { field: 'business_function',       label: 'Business Function' },
+  { field: 'target_region',           label: 'Target Region' },
+  { field: 'environment',             label: 'Environment' },
+  { field: 'data_classification',     label: 'Data Class' },
+  { field: 'desired_sku',             label: 'Desired SKU' },
+  { field: 'business_owner',          label: 'Business Owner' },
+  { field: 'financial_loss_per_hour', label: 'Loss / hr' },
+  { field: 'app_dependencies',        label: 'App Dependencies' },
+  { field: 'compliance',              label: 'Compliance' },
+  { field: 'notes',                   label: 'Notes' },
+]
+const BCDR_META_LABEL  = Object.fromEntries(BCDR_META_COLS.map(c => [c.field, c.label]))
+const BCDR_META_FIELDS = new Set(BCDR_META_COLS.map(c => c.field))
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function ResourceTable({ resources, externalFilter = null, onClearExternalFilter, aiEnabled = false, onSaveSelectedAsProject, projects = [], onAddSelected, addSelectedLabel = 'Add to project' }) {
+export default function ResourceTable({ resources, externalFilter = null, onClearExternalFilter, aiEnabled = false, onSaveSelectedAsProject, projects = [], onAddSelected, addSelectedLabel = 'Add to project', onRemoveSelected, removeSelectedLabel = 'Remove from project', tableMaxHeight = null }) {
   const [sortCol,     setSortCol]     = useState('cost_current_month')
   const [sortDir,     setSortDir]     = useState('desc')
   const [search,      setSearch]      = useState('')
@@ -498,8 +519,11 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
   const [typeFilter,  setTypeFilter]  = useState('') // resource type filter
   const [locationFilter, setLocationFilter] = useState('') // location filter
   const [rgFilter,    setRgFilter]    = useState('') // resource group filter
+  const [subFilter,   setSubFilter]   = useState('') // subscription filter (primary scope)
+  const [subNameMap,  setSubNameMap]  = useState({}) // { subscription_id: name } from /api/subscriptions
   const [expanded,    setExpanded]    = useState(null)
   const [selectedIds, setSelectedIds] = useState(new Set())
+  const [removingFromProject, setRemovingFromProject] = useState(false)
   const [addToMenuOpen, setAddToMenuOpen] = useState(false)
   const addToMenuRef = useRef(null)
   const [cliResource,        setCliResource]        = useState(null)
@@ -527,7 +551,13 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
   const [tagFilter,       setTagFilter]       = useState({})   // {key: value} filter
   const [tagEditResource, setTagEditResource] = useState(null) // resource being tagged
   const [bulkTagEditorOpen, setBulkTagEditorOpen] = useState(false) // bulk tag editor modal
+  const [addingToProject, setAddingToProject] = useState(false) // in-flight "Add to project" (shows a spinner; the save can take a few seconds on remote SQL)
   
+  // ── BCDR Planning metadata (Criticality / DR Tier / RTO / RPO …) ───────────
+  // The SAME central record shown in BCDR ▸ Planning Phase 1, surfaced here so the
+  // planning data a user enters is visible everywhere they look up a resource.
+  const [bcdrMetaMap, setBcdrMetaMap] = useState({})   // {resource_id: {field: val}} (original-case keys)
+
   // ── Azure icon cache ──────────────────────────────────────────────────────
   const [iconCache, setIconCache] = useState({}) // {resourceType: icon_path}
 
@@ -540,10 +570,11 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
     return [...keys].sort()
   }, [resources])
 
-  // Auto-show top 5 most common Azure tags as columns
+  // Auto-show top 5 most common Azure tags as columns (once)
+  const autoAzureDone = useRef(false)
   useEffect(() => {
-    if (azureTagKeys.length === 0 || visibleTagCols.size > 0) return
-    
+    if (autoAzureDone.current || azureTagKeys.length === 0) return
+
     // Count frequency of each tag key
     const frequency = {}
     for (const r of resources) {
@@ -551,20 +582,79 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
         frequency[k] = (frequency[k] || 0) + 1
       }
     }
-    
+
     // Sort by frequency and show top 5
     const topKeys = Object.entries(frequency)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
       .map(([k]) => `az:${k}`)
-    
-    setVisibleTagCols(new Set(topKeys))
+
+    autoAzureDone.current = true
+    setVisibleTagCols(prev => new Set([...prev, ...topKeys]))
   }, [azureTagKeys, resources])
+
+  // Auto-show custom tag columns that actually have a value, so tags set via the Tag Resource
+  // / Bulk Tag editors are immediately visible without manually enabling each column. Tracks
+  // keys already auto-shown (in a ref) so it never re-adds a column the user hid, yet still
+  // reveals newly-added tag keys after a save (customTagsMap is refreshed on save).
+  const autoShownCustom = useRef(new Set())
+  useEffect(() => {
+    const toAdd = []
+    for (const rid in customTagsMap) {
+      const tags = customTagsMap[rid] || {}
+      for (const k of Object.keys(tags)) {
+        const col = `ct:${k}`
+        if (String(tags[k] ?? '').trim() !== '' && !autoShownCustom.current.has(col)) {
+          autoShownCustom.current.add(col)
+          toAdd.push(col)
+        }
+      }
+    }
+    if (toAdd.length) setVisibleTagCols(prev => new Set([...prev, ...toAdd]))
+  }, [customTagsMap])
+
+  // Auto-reveal BCDR Planning columns that have a saved value, so the planning record set in
+  // BCDR ▸ Planning Phase 1 shows up here automatically. Tracked in a ref so a column the user
+  // hides stays hidden, while newly-populated fields still appear after a reload.
+  const autoShownBcdr = useRef(new Set())
+  useEffect(() => {
+    const toAdd = []
+    for (const rid in bcdrMetaMap) {
+      const rec = bcdrMetaMap[rid] || {}
+      for (const f of Object.keys(rec)) {
+        if (!BCDR_META_FIELDS.has(f)) continue
+        const col = `bm:${f}`
+        if (String(rec[f] ?? '').trim() !== '' && !autoShownBcdr.current.has(col)) {
+          autoShownBcdr.current.add(col)
+          toAdd.push(col)
+        }
+      }
+    }
+    if (toAdd.length) setVisibleTagCols(prev => new Set([...prev, ...toAdd]))
+  }, [bcdrMetaMap])
+
+  // Case-robust lookup index for BCDR metadata (stored original-case; lowercase it so a row
+  // matches regardless of resource_id casing drift between the scan and the planning store).
+  const bcdrByLowerId = useMemo(() => {
+    const out = {}
+    for (const k in (bcdrMetaMap || {})) out[(k || '').toLowerCase()] = bcdrMetaMap[k]
+    return out
+  }, [bcdrMetaMap])
 
   // Load tag schema + custom tags on mount
   useEffect(() => {
     fetch('/api/tags/schema').then(r => r.json()).then(s => setTagSchema(s)).catch(() => {})
     fetch('/api/tags/all').then(r => r.json()).then(t => setCustomTagsMap(t || {})).catch(() => {})
+    // BCDR Planning metadata — the central record set in BCDR ▸ Planning Phase 1.
+    fetch('/api/bcdr/metadata').then(r => (r.ok ? r.json() : {})).then(m => setBcdrMetaMap(m || {})).catch(() => {})
+    // Resolve subscription display names for the Subscription filter + column.
+    fetch('/api/subscriptions').then(r => (r.ok ? r.json() : [])).then(list => {
+      if (Array.isArray(list)) {
+        const m = {}
+        for (const sub of list) { if (sub && sub.subscription_id) m[sub.subscription_id] = sub.subscription_name || sub.subscription_id }
+        setSubNameMap(m)
+      }
+    }).catch(() => {})
   }, [])
   
   // Load Azure icons for all unique resource types
@@ -724,13 +814,15 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
       (r.location || '').toLowerCase().includes(q) ||
       // Also search in tags
       Object.values(r.tags || {}).some(v => String(v).toLowerCase().includes(q)) ||
-      Object.values(customTagsMap[r.resource_id?.toLowerCase()] || {}).some(v => String(v).toLowerCase().includes(q))
+      Object.values(customTagsMap[r.resource_id?.toLowerCase()] || {}).some(v => String(v).toLowerCase().includes(q)) ||
+      Object.values(bcdrByLowerId[r.resource_id?.toLowerCase()] || {}).some(v => String(v).toLowerCase().includes(q))
     )
     if (scoreFilter) rows = rows.filter(r => r.score_label === scoreFilter)
     if (catFilter)   rows = rows.filter(r => (r.resource_category || 'other') === catFilter)
     if (typeFilter)  rows = rows.filter(r => r.resource_type === typeFilter)
     if (locationFilter) rows = rows.filter(r => r.location === locationFilter)
     if (rgFilter)    rows = rows.filter(r => r.resource_group === rgFilter)
+    if (subFilter)   rows = rows.filter(r => r.subscription_id === subFilter)
     if (showAnomaly)  rows = rows.filter(r => r.is_anomaly)
     if (showNoBackup) rows = rows.filter(r =>
       (r.resource_type || '').toLowerCase() === 'microsoft.compute/virtualmachines' && !r.has_backup
@@ -761,7 +853,7 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
       return sortDir === 'asc' ? cmp : -cmp
     })
     return rows
-  }, [resources, search, scoreFilter, catFilter, typeFilter, locationFilter, rgFilter, showAnomaly, showNoBackup, sortCol, sortDir, tagFilter, customTagsMap, externalFilter])
+  }, [resources, search, scoreFilter, catFilter, typeFilter, locationFilter, rgFilter, subFilter, showAnomaly, showNoBackup, sortCol, sortDir, tagFilter, customTagsMap, bcdrByLowerId, externalFilter])
 
   const snoozedCount = useMemo(() =>
     (resources || []).filter(r => actions[r.resource_id] === 'snoozed').length,
@@ -803,6 +895,23 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
     const s = new Set((resources || []).map(r => r.resource_group).filter(Boolean))
     return [...s].sort()
   }, [resources])
+
+  // Subscription id -> display name (from /api/subscriptions, supplemented by each resource's
+  // own subscription_name). Used by the Subscription filter and the Subscription column.
+  const subNameById = useMemo(() => {
+    const m = { ...subNameMap }
+    for (const r of (resources || [])) {
+      if (r.subscription_id && !m[r.subscription_id] && r.subscription_name) m[r.subscription_id] = r.subscription_name
+    }
+    return m
+  }, [resources, subNameMap])
+  const subName = (sid) => (sid ? (subNameById[sid] || (sid.length > 10 ? sid.slice(0, 8) + '\u2026' : sid)) : '\u2014')
+
+  // Distinct subscriptions for the filter dropdown (sorted by display name)
+  const subscriptions = useMemo(() => {
+    const s = new Set((resources || []).map(r => r.subscription_id).filter(Boolean))
+    return [...s].sort((a, b) => subName(a).localeCompare(subName(b)))
+  }, [resources, subNameById])
 
   function exportCSV() {
     const cols = ['resource_name','resource_type','resource_category','location','resource_group',
@@ -890,7 +999,7 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
             <p className="text-xs text-gray-600 mt-0.5">
               {visibleScored.length} of {resources?.length ?? 0} shown
               {hideSnoozed && snoozedCount > 0 && ` · ${snoozedCount} snoozed`}
-              {(scoreFilter || catFilter || typeFilter || locationFilter || rgFilter || search || externalFilter) && ' · filtered'}
+              {(scoreFilter || catFilter || typeFilter || locationFilter || rgFilter || subFilter || search || externalFilter) && ' · filtered'}
             </p>
           </div>
 
@@ -904,6 +1013,19 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
                 className="bg-gray-800 border border-gray-700 rounded-lg pl-8 pr-3 py-1.5 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-blue-600 w-52"
               />
             </div>
+
+            {/* Subscription filter — primary scope (resolves subscription name) */}
+            <select
+              value={subFilter}
+              onChange={e => { setSubFilter(e.target.value); setPage(0) }}
+              className="bg-gray-800 border border-blue-700/50 rounded-lg px-2.5 py-1.5 text-xs text-blue-100 focus:outline-none focus:border-blue-500 max-w-[210px]"
+              title={subFilter ? subName(subFilter) : 'All Subscriptions'}
+            >
+              <option value="">All Subscriptions</option>
+              {subscriptions.map(sid => (
+                <option key={sid} value={sid}>{subName(sid)}</option>
+              ))}
+            </select>
 
             {/* Status filter */}
             <select
@@ -974,7 +1096,7 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
             </select>
 
             {/* Clear All Filters button */}
-            {(scoreFilter || catFilter || typeFilter || locationFilter || rgFilter || search) && (
+            {(scoreFilter || catFilter || typeFilter || locationFilter || rgFilter || subFilter || search) && (
               <button
                 onClick={() => {
                   setScoreFilter('')
@@ -982,6 +1104,7 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
                   setTypeFilter('')
                   setLocationFilter('')
                   setRgFilter('')
+                  setSubFilter('')
                   setSearch('')
                   setPage(0)
                 }}
@@ -1095,6 +1218,26 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
                         </label>
                       )
                     })}
+                    {/* BCDR Planning section — the central planning record (Criticality / DR Tier / RTO / RPO …) */}
+                    {Object.keys(bcdrMetaMap).length > 0 && (
+                      <>
+                        <div className="px-2 pt-2 pb-1">
+                          <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider">BCDR Planning</span>
+                        </div>
+                        {BCDR_META_COLS.map(c => (
+                          <label key={`bm_${c.field}`} className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-gray-800/60">
+                            <input
+                              type="checkbox"
+                              checked={visibleTagCols.has(`bm:${c.field}`)}
+                              onChange={() => toggleTagCol(`bm:${c.field}`)}
+                              className="w-3.5 h-3.5 rounded accent-emerald-500"
+                            />
+                            <span className="text-xs text-gray-300">{c.label}</span>
+                            <Tag size={9} className="text-emerald-600 ml-auto" />
+                          </label>
+                        ))}
+                      </>
+                    )}
                     {/* Azure Tags section */}
                     {azureTagKeys.length > 0 && (
                       <>
@@ -1148,13 +1291,34 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
             <CheckSquare size={15} className="text-blue-400 shrink-0" />
             <span className="text-blue-200 font-medium">{selectedIds.size} resource{selectedIds.size !== 1 ? 's' : ''} selected</span>
             <div className="ml-auto flex items-center gap-2">
+              {onRemoveSelected && (
+                <button
+                  onClick={async () => {
+                    if (removingFromProject) return
+                    setRemovingFromProject(true)
+                    try { const ok = await onRemoveSelected(Array.from(selectedIds)); if (ok !== false) clearSelection() }
+                    finally { setRemovingFromProject(false) }
+                  }}
+                  disabled={removingFromProject}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600/90 hover:bg-red-600 disabled:opacity-80 disabled:cursor-wait text-white text-xs font-medium transition-colors"
+                >
+                  {removingFromProject ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                  {removingFromProject ? 'Removing\u2026' : `${removeSelectedLabel} (${selectedIds.size})`}
+                </button>
+              )}
               {onAddSelected ? (
                 <button
-                  onClick={() => { onAddSelected(Array.from(selectedIds)); clearSelection() }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors"
+                  onClick={async () => {
+                    if (addingToProject) return
+                    setAddingToProject(true)
+                    try { const ok = await onAddSelected(Array.from(selectedIds)); if (ok !== false) clearSelection() }
+                    finally { setAddingToProject(false) }
+                  }}
+                  disabled={addingToProject}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-80 disabled:cursor-wait text-white text-xs font-medium transition-colors"
                 >
-                  <FolderPlus size={13} />
-                  {addSelectedLabel} ({selectedIds.size})
+                  {addingToProject ? <Loader2 size={13} className="animate-spin" /> : <FolderPlus size={13} />}
+                  {addingToProject ? 'Adding\u2026' : `${addSelectedLabel} (${selectedIds.size})`}
                 </button>
               ) : (<>
               {/* Bulk Tag Selected button */}
@@ -1191,12 +1355,12 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
                           <p className="px-3 py-1 text-xs text-gray-600 uppercase tracking-wider">Add to existing</p>
                           {projects.map(p => (
                             <button
-                              key={p.id}
-                              onClick={() => { setAddToMenuOpen(false); onSaveSelectedAsProject({ mode: 'add', ids: Array.from(selectedIds), projectId: p.id }) }}
+                              key={p.id || p.project_id}
+                              onClick={() => { setAddToMenuOpen(false); onSaveSelectedAsProject({ mode: 'add', ids: Array.from(selectedIds), projectId: p.id || p.project_id }) }}
                               className="flex items-center gap-2 w-full px-3 py-2 rounded-lg hover:bg-gray-800 text-xs text-gray-300 transition-colors"
                             >
                               <span className="text-sm">{p.icon || '📁'}</span>
-                              <span className="truncate">{p.name}</span>
+                              <span className="truncate">{p.name || p.project_name}</span>
                               <span className="ml-auto text-gray-600">{(p.resource_ids || []).length}</span>
                             </button>
                           ))}
@@ -1218,9 +1382,12 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
         )}
 
         {/* ── Table ── */}
-        <div className="overflow-x-auto rounded-lg border border-gray-800/80">
-          <table className="w-full text-left" style={{ minWidth: '1060px' }}>
-            <thead>
+        <div
+          className={clsx('overflow-x-auto rounded-lg border border-gray-800/80', tableMaxHeight && 'overflow-y-auto')}
+          style={tableMaxHeight ? { maxHeight: tableMaxHeight } : undefined}
+        >
+          <table className="w-full text-left" style={{ minWidth: `${112 + visibleColDefs.length * 132 + visibleTagCols.size * 130}px` }}>
+            <thead className={clsx(tableMaxHeight && 'sticky top-0 z-20')}>
               <tr className="bg-gray-800/70 border-b border-gray-700/60">
                 {/* Select-all checkbox */}
                 <th className="px-3 py-2.5 w-8">
@@ -1255,8 +1422,10 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
                 {[...visibleTagCols].map(tagKey => (
                   <th key={tagKey} className="px-3 py-2.5 text-xs font-semibold text-gray-400 uppercase tracking-wider whitespace-nowrap">
                     <span className="flex items-center gap-1">
-                      <Tag size={10} className={tagKey.startsWith('ct:') ? 'text-purple-500' : 'text-blue-400'} />
-                      {tagKey.startsWith('ct:')
+                      <Tag size={10} className={tagKey.startsWith('bm:') ? 'text-emerald-400' : tagKey.startsWith('ct:') ? 'text-purple-500' : 'text-blue-400'} />
+                      {tagKey.startsWith('bm:')
+                        ? (BCDR_META_LABEL[tagKey.slice(3)] || tagKey.slice(3))
+                        : tagKey.startsWith('ct:')
                         ? (tagSchema.find(s => s.tag_key === tagKey.slice(3))?.display_name || tagKey.slice(3))
                         : tagKey.startsWith('az:')
                         ? tagKey.slice(3)
@@ -1585,8 +1754,9 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
                       )}
                       {vis.has('subscription_id') && (
                         <td className="px-3 py-3">
-                          <span className="text-xs text-gray-500 font-mono">
-                            {r.subscription_id ? r.subscription_id.slice(0, 8) + '…' : '—'}
+                          <span className="text-xs text-gray-400 truncate max-w-[170px] inline-block align-bottom"
+                                title={r.subscription_id ? `${subName(r.subscription_id)}  ·  ${r.subscription_id}` : '—'}>
+                            {subName(r.subscription_id)}
                           </span>
                         </td>
                       )}
@@ -1635,7 +1805,9 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
                       {/* ── Tag value columns ── */}
                       {[...visibleTagCols].map(tagKey => {
                         const merged = getMergedTags(r)
-                        const val = tagKey.startsWith('az:')
+                        const val = tagKey.startsWith('bm:')
+                          ? (bcdrByLowerId[r.resource_id?.toLowerCase()] || {})[tagKey.slice(3)]
+                          : tagKey.startsWith('az:')
                           ? (r.tags || {})[tagKey.slice(3)]
                           : merged[tagKey.slice(3)]
                         return (

@@ -200,17 +200,60 @@ def _call_ai(system_prompt: str, user_prompt: str, max_tokens: int = MAX_TOKENS_
                 )
                 return text
             else:  # azure_openai
-                response = client.chat.completions.create(
+                low_name = (model or "").lower()
+                # gpt-5.x and the o-series are REASONING models. They (a) reject a custom
+                # `temperature` (only the default is accepted) and (b) spend part of the
+                # token budget on hidden reasoning — so a normal cap starves the visible
+                # answer and returns an EMPTY string (the "Empty AI response" error), with
+                # high latency. For those models: send NO temperature, give generous
+                # max_completion_tokens headroom, and request low reasoning effort (keeps
+                # latency sane and leaves budget for the actual answer). Older models keep
+                # max_completion_tokens + temperature.
+                is_reasoning = any(k in low_name for k in ("gpt-5", "gpt5", "o1", "o3", "o4"))
+                kwargs = dict(
                     model=model,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    max_completion_tokens=max_tokens,
-                    temperature=0.3,
                     response_format={"type": "json_object"},
                 )
-                text = response.choices[0].message.content.strip()
+                if is_reasoning:
+                    kwargs["max_completion_tokens"] = max(int(max_tokens) + 8000, 16000)
+                    kwargs["reasoning_effort"] = "low"
+                else:
+                    kwargs["max_completion_tokens"] = int(max_tokens)
+                    kwargs["temperature"] = 0.3
+
+                try:
+                    response = client.chat.completions.create(**kwargs)
+                except Exception as _pe:
+                    # Strip any parameter this model/deployment/SDK rejects, then retry.
+                    _es = str(_pe).lower()
+                    _changed = False
+                    if "reasoning_effort" in _es and "reasoning_effort" in kwargs:
+                        kwargs.pop("reasoning_effort", None); _changed = True
+                    if "temperature" in _es and "temperature" in kwargs:
+                        kwargs.pop("temperature", None); _changed = True
+                    if ("max_completion_tokens" in _es or "unsupported_parameter" in _es) and "max_completion_tokens" in kwargs:
+                        kwargs["max_tokens"] = kwargs.pop("max_completion_tokens"); kwargs.pop("reasoning_effort", None); _changed = True
+                    if not _changed:
+                        raise
+                    response = client.chat.completions.create(**kwargs)
+
+                text = (getattr(response.choices[0].message, "content", None) or "").strip()
+                # Reasoning model spent the whole budget on reasoning → empty answer.
+                # Retry once with a much bigger budget so it can actually emit the JSON.
+                if not text and is_reasoning:
+                    kwargs["max_completion_tokens"] = max(int(max_tokens) * 3, 32000)
+                    kwargs["reasoning_effort"] = "low"
+                    try:
+                        response = client.chat.completions.create(**kwargs)
+                    except Exception:
+                        kwargs.pop("reasoning_effort", None)
+                        response = client.chat.completions.create(**kwargs)
+                    text = (getattr(response.choices[0].message, "content", None) or "").strip()
+
                 elapsed = _time.time() - t0
                 usage = getattr(response, "usage", None)
                 logger.info(

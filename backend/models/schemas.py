@@ -357,6 +357,7 @@ class DashboardData(BaseModel):
     active_resource_group:    str = ""
     active_subscription_id:   str = ""
     scan_scope_active:        bool = False  # true when a default scope is limiting the scan
+    inventory_only:           bool = False  # true = fast inventory paint (cost/scores/AI on-demand)
     active_reservations:            List[Dict[str, Any]] = Field(default_factory=list)
     reservation_over_commitment_usd: float             = 0.0   # estimated monthly waste from underutilized RIs
     reservation_recommendations:    List[Dict[str, Any]] = Field(default_factory=list)

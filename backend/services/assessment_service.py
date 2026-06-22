@@ -952,17 +952,37 @@ Return a JSON object with this EXACT structure:
     def _analyze_with_azure_openai(self, prompt: str) -> Dict[str, Any]:
         """Analyze using Azure OpenAI"""
         try:
-            response = self.azure_openai_client.chat.completions.create(
-                model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini"),
+            _m = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+            _kw = dict(
+                model=_m,
                 messages=[
                     {"role": "system", "content": "You are a senior Azure infrastructure architect and BCDR specialist. "
                        "Provide specific, actionable analysis citing exact resource names. "
                        "Output strict JSON only."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.3,
-                max_completion_tokens=6000,
             )
+            # gpt-5.x / o-series are reasoning models: no custom temperature, and they need
+            # token headroom (reasoning is drawn from the budget) or they return empty text.
+            if any(k in _m.lower() for k in ("gpt-5", "gpt5", "o1", "o3", "o4")):
+                _kw["max_completion_tokens"] = 14000
+                _kw["reasoning_effort"] = "low"
+            else:
+                _kw["max_completion_tokens"] = 6000
+                _kw["temperature"] = 0.3
+            try:
+                response = self.azure_openai_client.chat.completions.create(**_kw)
+            except Exception as _e:
+                _es = str(_e).lower()
+                if "reasoning_effort" in _es:
+                    _kw.pop("reasoning_effort", None)
+                elif "max_completion_tokens" in _es or "unsupported_parameter" in _es:
+                    _kw["max_tokens"] = _kw.pop("max_completion_tokens", 6000); _kw.pop("reasoning_effort", None)
+                elif "temperature" in _es:
+                    _kw.pop("temperature", None)
+                else:
+                    raise
+                response = self.azure_openai_client.chat.completions.create(**_kw)
             
             content = response.choices[0].message.content
             if "```json" in content:
@@ -1637,15 +1657,35 @@ Top Recommendations: {json.dumps(recs_list[:10], default=str)}
                 "production-quality infrastructure assessments. Base ALL analysis on actual resource configurations. "
                 "Output strict JSON only. Reference specific resource names in every recommendation."
             )
-            return self.azure_openai_client.chat.completions.create(
-                model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini"),
+            _m = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+            _kw = dict(
+                model=_m,
                 messages=[
                     {"role": "system", "content": effective_system},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.3,
-                max_completion_tokens=max_tokens,
             )
+            # Reasoning models (gpt-5.x / o-series): no temperature + token headroom + low
+            # effort, else they spend the budget on reasoning and return empty content.
+            if any(k in _m.lower() for k in ("gpt-5", "gpt5", "o1", "o3", "o4")):
+                _kw["max_completion_tokens"] = max(int(max_tokens) + 8000, 16000)
+                _kw["reasoning_effort"] = "low"
+            else:
+                _kw["max_completion_tokens"] = int(max_tokens)
+                _kw["temperature"] = 0.3
+            try:
+                return self.azure_openai_client.chat.completions.create(**_kw)
+            except Exception as _e:
+                _es = str(_e).lower()
+                if "reasoning_effort" in _es:
+                    _kw.pop("reasoning_effort", None)
+                elif "max_completion_tokens" in _es or "unsupported_parameter" in _es:
+                    _kw["max_tokens"] = _kw.pop("max_completion_tokens", max_tokens); _kw.pop("reasoning_effort", None)
+                elif "temperature" in _es:
+                    _kw.pop("temperature", None)
+                else:
+                    raise
+                return self.azure_openai_client.chat.completions.create(**_kw)
         
         try:
             with ThreadPoolExecutor(max_workers=1) as executor:

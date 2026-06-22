@@ -136,6 +136,7 @@ export const api = {
 
   // Projects — portal-first resource grouping
   getProjects:   ()                  => request('/projects').then(r => Array.isArray(r) ? r : (r?.projects || [])),
+  getResources:  ()                  => request('/resources').then(r => Array.isArray(r) ? r : (r?.resources || [])),
   createProject: (body)              => request('/projects', { method: 'POST', body: JSON.stringify(body) }),
   updateProject: (id, body)          => request(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteProject: async (id)          => {
@@ -175,6 +176,27 @@ export const api = {
   },
   getProjectResourceTags:  (ids)            => request(`/tags/all${ids && ids.length ? `?resource_ids=${encodeURIComponent(ids.join(','))}` : ''}`),
 
+  // BCDR Planning & Assessment — consultant-grade 4-section plan for a saved project
+  runBcdrPlan: (id, inputs) => request(`/projects/${id}/bcdr-plan`, { method: 'POST', body: JSON.stringify({ inputs: inputs || {} }) }),
+  exportBcdrPlanXlsx: async (id, result) => {
+    const res = await fetch(`${BASE}/projects/${id}/bcdr-plan/export.xlsx`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result }),
+    })
+    if (!res.ok) {
+      const t = await res.text().catch(() => '')
+      let detail; try { detail = JSON.parse(t).detail } catch {}
+      throw new Error(detail || `Excel export failed (HTTP ${res.status})`)
+    }
+    const blob = await res.blob()
+    const cd = res.headers.get('Content-Disposition') || ''
+    const fname = cd.match(/filename="?([^"]+)"?/)?.[1] || `bcdr-plan-${id}.xlsx`
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = fname
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+  },
+
   // Dependencies
   getDependencySummary:  ()          => request('/dependencies/summary'),
   getDependencyClusters: ()          => request('/dependencies/clusters'),
@@ -202,7 +224,7 @@ export const api = {
   upsertTagSchema:       (entry)     => request('/tags/schema', { method: 'POST', body: JSON.stringify(entry) }),
   deleteTagSchema:       (key)       => request(`/tags/schema/${encodeURIComponent(key)}`, { method: 'DELETE' }),
   getResourceTags:       (id)        => request(`/tags/resource/${encodeURIComponent(id)}`),
-  setResourceTags:       (id, tags)  => request(`/tags/resource/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ tags }) }),
+  setResourceTags:       (id, tags, merge = false)  => request(`/tags/resource/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ tags, merge }) }),
   bulkTagResources:      (ids, tags) => request('/tags/bulk', { method: 'POST', body: JSON.stringify({ resource_ids: ids, tags }) }),
   getAllTags:             (ids)       => request(`/tags/all${ids ? `?resource_ids=${ids.join(',')}` : ''}`),
   getTagStats:           ()          => request('/tags/stats'),
@@ -246,7 +268,44 @@ export const api = {
     body: JSON.stringify({ updates }) 
   }),
   deleteBCDRMetadata:    (id)        => request(`/bcdr/metadata/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // BCDR Consultant Report (full 13-section grounded report)
+  generateBcdrConsultantReport: (customer_info, project_id) => request('/bcdr/consultant-report', {
+    method: 'POST', body: JSON.stringify({ customer_info: customer_info || {}, project_id: project_id || null }),
+  }),
+  exportBcdrConsultantXlsx: async (report) => {
+    const res = await fetch(`${BASE}/bcdr/consultant-report/export.xlsx`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ report }),
+    })
+    if (!res.ok) {
+      const t = await res.text().catch(() => ''); let detail; try { detail = JSON.parse(t).detail } catch {}
+      throw new Error(detail || `Excel export failed (HTTP ${res.status})`)
+    }
+    const blob = await res.blob()
+    const cd = res.headers.get('Content-Disposition') || ''
+    const fname = cd.match(/filename="?([^"]+)"?/)?.[1] || 'bcdr-assessment-report.xlsx'
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = fname
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+  },
   getBCDRMetadataStats:  ()          => request('/bcdr/metadata/stats'),
+
+  // BCDR Phase 1 supporting inputs (uploaded files stored in Azure SQL)
+  listBcdrAttachments:   (resourceId) =>
+    request(`/bcdr/attachments?resource_id=${encodeURIComponent(resourceId || '')}`).then(r => r?.attachments || []),
+  uploadBcdrAttachment:  async (resourceId, file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('resource_id', resourceId || '')
+    const res = await fetch(`${BASE}/bcdr/attachments`, { method: 'POST', body: fd })
+    if (!res.ok) {
+      const t = await res.text().catch(() => ''); let d; try { d = JSON.parse(t).detail } catch {}
+      throw new Error(d || `Upload failed (HTTP ${res.status})`)
+    }
+    return res.json()
+  },
+  deleteBcdrAttachment:  (id) => request(`/bcdr/attachments/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  bcdrAttachmentDownloadUrl: (id) => `${BASE}/bcdr/attachments/${encodeURIComponent(id)}/download`,
 
   // Resource Snapshots
   getResourceSnapshots:  (id, limit) => request(`/snapshots/${encodeURIComponent(id)}${limit ? `?limit=${limit}` : ''}`),

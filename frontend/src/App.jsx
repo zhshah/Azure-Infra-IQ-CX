@@ -352,6 +352,7 @@ import GovernanceView    from './components/GovernanceView'
 import AdvisorView       from './components/AdvisorView'
 import ServiceHealthView from './components/ServiceHealthView'
 import IdentityView     from './components/IdentityView'
+import M365SecurityDashboard from './components/M365SecurityDashboard'
 import QuotaView         from './components/QuotaView'
 import KPICards          from './components/KPICards'
 import ScoreDonut        from './components/ScoreDonut'
@@ -408,6 +409,8 @@ import NetworkingDashboard    from './components/networking/NetworkingDashboard'
 import NetworkingAIAnalysis   from './components/networking/NetworkingAIAnalysis'
 import { MaturityAIAnalysis, SecurityAIAnalysis, InnovationAIAnalysis, MigrationAIAnalysis, BackupAIAnalysis, ResilienceAIAnalysis, DeepBCDRAnalysis } from './components/AIModuleReports'
 import { buildSubNameMap, subNameRenderer, scoreBadgeRenderer, severityBadgeRenderer, costRenderer, boolBadgeRenderer } from './utils/subscriptionNames.jsx'
+import { ToastHost, notify } from './components/Toast'
+import { addToExistingProject } from './utils/projectActions'
 import AVSDRPanel from './components/AVSDRPanel'
 import SaveProjectModal        from './components/SaveProjectModal'
 import InfraAIPanel           from './components/infra/InfraAIPanel'
@@ -823,6 +826,11 @@ function TopRecommendations({ data, resources, onNavigate }) {
 function EstateOverview({ resources, backupCoverage, onNavigate }) {
   const rs = resources || []
   const typeCount = (pattern) => rs.filter(r => (r.resource_type || '').toLowerCase().includes(pattern)).length
+  const money = (n) => (n >= 1000000 ? `$${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : `$${Math.round(n)}`)
+  const uniq = (key) => new Set(rs.map(r => r[key]).filter(Boolean)).size
+  const totalCost = rs.reduce((s, r) => s + (r.cost_current_month || 0), 0)
+  const billableCount = rs.filter(r => (r.cost_current_month || 0) > 0).length
+  const taggedPct = rs.length ? Math.round((rs.filter(r => r.tags && Object.keys(r.tags).length > 0).length / rs.length) * 100) : 0
 
   const widgets = [
     {
@@ -885,6 +893,29 @@ function EstateOverview({ resources, backupCoverage, onNavigate }) {
       color: '#f59e0b',
       nav: 'security',
     },
+    {
+      title: 'Cost & Spend',
+      icon: '/icons/general/10003-icon-service-Reservations.svg',
+      stats: [
+        { label: 'Monthly Spend', value: totalCost > 0 ? money(totalCost) : '—' },
+        { label: 'Annual Run-Rate', value: totalCost > 0 ? money(totalCost * 12) : '—' },
+        { label: 'Billable', value: billableCount },
+      ],
+      color: '#10b981',
+      nav: 'finops',
+    },
+    {
+      title: 'Governance',
+      icon: '/icons/management + governance/00003-icon-service-Advisor.svg',
+      stats: [
+        { label: 'Subscriptions', value: uniq('subscription_id') },
+        { label: 'Regions', value: uniq('location') },
+        { label: 'Resource Groups', value: uniq('resource_group') },
+        { label: 'Tagged', value: `${taggedPct}%` },
+      ],
+      color: '#6366f1',
+      nav: 'governance',
+    },
   ]
 
   return (
@@ -922,7 +953,7 @@ function EstateOverview({ resources, backupCoverage, onNavigate }) {
 }
 
 // ── Strategic Navigator ────────────────────────────────────────────────────────
-function StrategicNav({ data, onNavigate }) {
+function StrategicNav({ data, resources, onNavigate }) {
   const cm      = data?.cloud_maturity
   const gaps    = data?.security_gaps   ?? []
   const igaps   = data?.innovation_gaps ?? []
@@ -937,6 +968,14 @@ function StrategicNav({ data, onNavigate }) {
   const wave1     = mopps.filter(o => o.migration_wave === 1).length
   const adopted   = (data?.service_adoption_scores ?? []).filter(s => s.adopted).length
   const totalSave = lopps.reduce((s, o) => s + (o.estimated_monthly_saving ?? 0), 0)
+  const res       = resources ?? []
+  const zoneRedundant = res.filter(r => String(r.zone_status || '').toLowerCase() === 'zoneredundant').length
+  const zonePct   = res.length ? Math.round((zoneRedundant / res.length) * 100) : null
+  const wafFindings = gaps.length + igaps.length + (bc?.total_gaps ?? 0) + (acr?.total_gaps ?? 0)
+  const isVM      = (r) => { const t = String(r.resource_type || '').toLowerCase(); return t.includes('microsoft.compute/virtualmachines') && !t.includes('/extensions') }
+  const winVMs    = res.filter(r => isVM(r) && /win/i.test(String(r.os_type || ''))).length
+  const sqlAhb    = res.filter(r => /sql\/managedinstances|sql\/servers\/databases|sqlvirtualmachines?/i.test(String(r.resource_type || ''))).length
+  const ahbEligible = winVMs + sqlAhb
 
   const secAccent = critSec > 0 ? '#ef4444' : highSec > 0 ? '#f97316' : '#22c55e'
   const matAccent = cm ? (cm.overall_score >= 65 ? '#22c55e' : cm.overall_score >= 40 ? '#eab308' : '#ef4444') : '#64748b'
@@ -993,6 +1032,27 @@ function StrategicNav({ data, onNavigate }) {
       accent: acr && acr.critical_count > 0 ? '#ef4444' : acr && acr.high_count > 0 ? '#f97316' : '#3b82f6',
       cta: 'Explore adoption →',
     },
+    {
+      key: 'waf',         Icon: Target,
+      title: 'Well-Architected',
+      primary: wafFindings > 0 ? `${wafFindings} Findings` : '5 Pillars',
+      secondary: 'Across 5 WAF pillars · Reliability to Cost',
+      accent: '#6366f1', cta: 'Run review →',
+    },
+    {
+      key: 'resilience',  Icon: Globe,
+      title: 'Resilience',
+      primary: zonePct != null ? `${zonePct}% Zone-Redundant` : 'Availability',
+      secondary: zonePct != null ? `${zoneRedundant} of ${res.length} resources zone-resilient` : 'Zones · replication · failover readiness',
+      accent: '#06b6d4', cta: 'Assess resilience →',
+    },
+    {
+      key: 'hybrid',      nav: 'licensing', Icon: HardDrive,
+      title: 'Hybrid Benefit',
+      primary: `${ahbEligible} Eligible`,
+      secondary: ahbEligible > 0 ? `${winVMs} Windows VMs · ${sqlAhb} SQL` : 'Azure Hybrid Benefit candidates',
+      accent: '#f59e0b', cta: 'Review savings →',
+    },
   ]
 
   return (
@@ -1004,7 +1064,7 @@ function StrategicNav({ data, onNavigate }) {
         {cards.map(c => (
           <button
             key={c.key}
-            onClick={() => onNavigate(c.key)}
+            onClick={() => onNavigate(c.nav || c.key)}
             className="text-left"
             style={{
               background: '#0f172a', border: `1px solid ${c.accent}25`,
@@ -1435,7 +1495,7 @@ function AppInner() {
   const loadWatchdog = useRef(null)
   const dataRef = useRef(null)   // mirrors `data` so a background refresh can avoid blanking the screen
 
-  const load = useCallback(async (forceRefresh = false, rgFilter = selectedResourceGroup) => {
+  const load = useCallback(async (forceRefresh = false, rgFilter = selectedResourceGroup, inventoryOnly = false) => {
     // Clean up any existing SSE connection
     if (sseCleanup.current) {
       sseCleanup.current()
@@ -1475,6 +1535,9 @@ function AppInner() {
     // Build query params
     const params = new URLSearchParams()
     if (forceRefresh) params.set('refresh', 'true')
+    // Inventory-only fast load (C): lists resources without the slow Cost Management /
+    // AI calls. Used to auto-paint the estate on open; cost & AI load on a full refresh.
+    if (inventoryOnly) params.set('inventory', 'true')
     // Always send resource_group when the user has touched the dropdown —
     // empty string signals "All" (clears scope override); null/undefined means "not specified".
     if (rgFilter !== null && rgFilter !== undefined) params.set('resource_group', rgFilter)
@@ -1604,25 +1667,26 @@ function AppInner() {
                 setLoading(false)
                 launchedFromCache.current = true
                 setLaunched(true)
-                // Stale-while-revalidate: the snapshot paints instantly above.
-                // If it's older than 30 min, kick off a live refresh in the
-                // background — the dashboard stays fully interactive (data is
-                // already on screen) and updates in place when the scan finishes.
-                // Recent snapshots are left untouched so a transient cost-API
-                // throttle can't clobber good figures with $0 on open.
-                const asOfRaw = cached.data_as_of || cached.last_refreshed
-                const ageMin = asOfRaw ? (Date.now() - new Date(asOfRaw).getTime()) / 60000 : Infinity
-                if (ageMin > 30) {
-                  setTimeout(() => load(true), 600)
-                }
+                // NOTE: startup auto-refresh intentionally disabled. A cached snapshot
+                // paints instantly and is left as-is on open — the tool never fetches
+                // from Azure on load. Use Refresh to pull fresh data on demand.
               } else {
-                // Credentials configured but no saved data — auto-start scan, skip wizard
+                // No saved snapshot — auto-load the FAST inventory only (resources in
+                // seconds, NO Cost Management / AI calls). Cost, scores & AI stay
+                // on-demand (Refresh). Non-blocking: the empty state shows inline
+                // progress, then the resource table paints.
+                setLoading(false)
                 setLaunched(true)
+                setTimeout(() => load(true, undefined, true), 300)
               }
             })
             .catch(() => {
-              // Backend error — still auto-launch so scan runs
+              // Cache/backend error — fall back to the FAST inventory load (resources
+              // only) so a transient snapshot error still shows the estate; cost & AI
+              // stay on-demand. If the backend is truly down this no-ops gracefully.
+              setLoading(false)
               setLaunched(true)
+              setTimeout(() => load(true, undefined, true), 300)
             })
             .finally(() => setLoadingFromCache(false))
         }
@@ -1659,14 +1723,16 @@ function AppInner() {
     return () => { cancelled = true }
   }, [])
 
-  // Start scan only after user explicitly clicks Launch (not when loaded from cache)
+  // Startup auto-scan intentionally removed — the tool does NOT fetch from Azure on open.
+  // A scan runs only on explicit user action (header Refresh button or the dashboard
+  // "Load Azure data" empty-state). This effect now only tears down an in-flight SSE
+  // stream on unmount.
   useEffect(() => {
     if (!launched) return
     if (launchedFromCache.current) {
-      launchedFromCache.current = false  // reset so manual refresh still works
+      launchedFromCache.current = false  // reset so a later manual refresh still works
       return
     }
-    load()
     return () => { if (sseCleanup.current) sseCleanup.current() }
   }, [launched, load])
 
@@ -1990,25 +2056,17 @@ function AppInner() {
     )
   }
 
-  const isStreaming = (loading || refreshing) && progressPct < 100
-
-  // Only take over the full screen on the very first load (no data yet).
-  // Refreshes keep the dashboard visible with an inline progress indicator,
-  // so the portal never blocks once it has live data on screen.
-  if (isStreaming && !data) {
-    return (
-      <ProgressOverlay
-        steps={progressSteps}
-        currentPct={progressPct}
-        currentMessage={progressMsg}
-      />
-    )
-  }
+  // NOTE: the full-screen "Loading Azure Data" ProgressOverlay has been REMOVED — a scan must
+  // never take over the screen. While a scan runs we keep the normal layout and show a
+  // non-blocking inline indicator (the dashboard empty-state progress when there is no data
+  // yet, or the header "Refreshing…" badge once data is on screen). Resources paint as soon as
+  // the resources-first SSE partial arrives.
 
   if (error && !data) return <ErrorView message={error} onRetry={() => load()} />
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: '#080c14' }}>
+      <ToastHost />
       <SidebarNav
         view={view}
         onNavigate={(v) => { setView(v); setModuleListMode(false) }}
@@ -2039,14 +2097,23 @@ function AppInner() {
       {!isDemoMode && data?.scan_scope_active && (
         <ScopeBanner data={data} onOpenSettings={() => setSettingsOpen(true)} />
       )}
-      {!isDemoMode && aiProvider === 'none' && !aiBannerHidden && (
-        <AIDisabledBanner
-          onOpenSettings={() => setSettingsOpen(true)}
-          onDismiss={() => {
-            setAiBannerHidden(true)
-            sessionStorage.setItem('ai-banner-dismissed', '1')
-          }}
-        />
+      {!isDemoMode && data?.inventory_only && (
+        <div style={{ background: 'rgba(2,132,199,0.10)', borderBottom: '1px solid rgba(2,132,199,0.30)', padding: '8px 24px' }}>
+          <div style={{ maxWidth: 1536, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, fontSize: 13 }}>
+            <span style={{ color: '#7dd3fc', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Database size={14} />
+              <span><strong>Inventory loaded</strong> — {data.resources?.length || 0} resources. Cost, scores and AI analysis load on demand.</span>
+            </span>
+            <button
+              onClick={() => load(true)}
+              disabled={isRefreshing}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 8, border: 'none', fontSize: 12, fontWeight: 600, background: '#0078d4', color: '#fff', cursor: isRefreshing ? 'not-allowed' : 'pointer', opacity: isRefreshing ? 0.6 : 1, whiteSpace: 'nowrap' }}
+            >
+              <RefreshCw size={13} className={clsx(isRefreshing && 'animate-spin')} />
+              {isRefreshing ? 'Loading…' : 'Load cost & AI'}
+            </button>
+          </div>
+        </div>
       )}
 
       <FilterBar
@@ -2226,7 +2293,7 @@ function AppInner() {
           <div className="space-y-6">
             <ModuleViewToggle label="Cloud Adoption & Modernization" listMode={moduleListMode} onToggle={setModuleListMode} />
             {moduleListMode ? (
-              <ResourceTable resources={filteredResources} externalFilter={tableFilter} onClearExternalFilter={() => setTableFilter(null)} aiEnabled={data?.ai_enabled ?? false} projects={projects} onSaveSelectedAsProject={({ mode, ids, projectId }) => { setSelectedResourceIds(new Set(ids)); if (mode === 'new') setSaveProjectModalOpen(true); else api.addProjectResources(projectId, ids).then(() => api.getProjects().then(setProjects)) }} />
+              <ResourceTable resources={filteredResources} externalFilter={tableFilter} onClearExternalFilter={() => setTableFilter(null)} aiEnabled={data?.ai_enabled ?? false} projects={projects} onSaveSelectedAsProject={({ mode, ids, projectId }) => { setSelectedResourceIds(new Set(ids)); if (mode === 'new') setSaveProjectModalOpen(true); else { const _p = projects.find(x => (x.id || x.project_id) === projectId); addToExistingProject(projectId, ids, _p?.name || _p?.project_name).then(u => u && setProjects(u)) } }} />
             ) : (
               <CloudAdoptionPanel acrOpportunities={data?.acr_opportunities} />
             )}
@@ -2448,10 +2515,11 @@ function AppInner() {
                 const created = await api.createProject({ name, resource_ids: ids, description, color, icon })
                 setProjects(prev => [created, ...prev])
                 setActiveProjectId(created.id)
+                notify(`Created project "${name}" with ${ids.length} resource${ids.length !== 1 ? 's' : ''}.`, 'success')
               } else {
-                await api.addProjectResources(addToId, ids)
-                const updated = await api.getProjects()
-                setProjects(updated)
+                const _p = projects.find(x => (x.id || x.project_id) === addToId)
+                const updated = await addToExistingProject(addToId, ids, _p?.name || _p?.project_name)
+                if (updated) setProjects(updated)
               }
               setSelectedResourceIds(new Set())
               setSaveProjectModalOpen(false)
@@ -2459,10 +2527,55 @@ function AppInner() {
           />
         )}
 
-        {view === 'overview' && <>
+        {/* Empty state — the tool no longer auto-scans on startup. Show a clear manual
+            entry point instead of a blank/zeroed dashboard. Sidebar modules remain
+            reachable and load their own data independently. */}
+        {view === 'overview' && !data && (
+          <div className="flex flex-col items-center justify-center text-center" style={{ minHeight: '60vh', gap: 18 }}>
+            <div style={{ padding: 16, borderRadius: 16, background: 'rgba(0,120,212,0.10)', border: '1px solid rgba(0,120,212,0.25)' }}>
+              <Cloud size={32} style={{ color: '#3b9bf0' }} />
+            </div>
+            <div style={{ maxWidth: 460 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', margin: 0 }}>
+                {(loading || refreshing) ? 'Loading your Azure resources…' : 'No Azure data loaded'}
+              </h2>
+              <p style={{ fontSize: 13, color: '#94a3b8', marginTop: 8, lineHeight: 1.6 }}>
+                {(loading || refreshing)
+                  ? (progressMsg || 'Connecting to Azure… your resources will appear here as they load.')
+                  : 'This tool does not scan your subscription on startup. When you\u2019re ready, load live cost, utilisation and resource data on demand \u2014 or open the assessment modules in the sidebar, which load their own data independently.'}
+              </p>
+            </div>
+            {(loading || refreshing) && (
+              <div style={{ width: 320, height: 4, background: '#1e293b', borderRadius: 999, overflow: 'hidden' }}>
+                <div style={{ width: `${progressPct || 5}%`, height: '100%', background: '#0078d4', borderRadius: 999, transition: 'width 0.4s' }} />
+              </div>
+            )}
+            <button
+              onClick={() => load(true)}
+              disabled={loading || refreshing}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '10px 20px', borderRadius: 8, border: 'none',
+                fontSize: 13, fontWeight: 600,
+                background: '#0078d4', color: '#ffffff',
+                cursor: (loading || refreshing) ? 'not-allowed' : 'pointer',
+                opacity: (loading || refreshing) ? 0.6 : 1,
+                boxShadow: '0 1px 4px rgba(0,120,212,0.25)',
+              }}
+            >
+              <RefreshCw size={14} className={clsx((loading || refreshing) && 'animate-spin')} />
+              {(loading || refreshing) ? 'Loading…' : 'Load Azure data'}
+            </button>
+          </div>
+        )}
+
+        {view === 'overview' && data && <>
 
         {/* Strategic Navigator — links to all value tabs */}
-        <StrategicNav data={data} onNavigate={setView} />
+        <StrategicNav data={data} resources={filteredResources} onNavigate={setView} />
+
+        {/* Microsoft 365 Security Operations — compact estate-wide security strip */}
+        <M365SecurityDashboard compact onOpen={() => setView('security')} />
 
         {/* AI Insights — estate-wide AI intelligence dashboard (per-category) */}
         <AIInsightsDashboard onNavigate={setView} />
@@ -2573,9 +2686,8 @@ function AppInner() {
             if (mode === 'new') {
               setSaveProjectModalOpen(true)
             } else {
-              api.addProjectResources(projectId, ids).then(() =>
-                api.getProjects().then(setProjects)
-              )
+              const _p = projects.find(x => (x.id || x.project_id) === projectId)
+              addToExistingProject(projectId, ids, _p?.name || _p?.project_name).then(u => u && setProjects(u))
             }
           }}
         />
@@ -3308,6 +3420,7 @@ function SecurityView({ data, filteredResources, moduleListMode, setModuleListMo
     <div className="space-y-4">
       <ModuleTabBar tabs={[
         { key: 'dashboard', label: 'Dashboard', Icon: Shield },
+        { key: 'm365', label: 'M365 Security', Icon: Lock },
         { key: 'reports', label: 'Reports', Icon: ClipboardList },
         { key: 'ai', label: 'AI Analysis', Icon: Brain },
       ]} activeTab={tab} onTabChange={setTab} />
@@ -3363,7 +3476,7 @@ function SecurityView({ data, filteredResources, moduleListMode, setModuleListMo
                 onClearExternalFilter={() => setTableFilter(null)}
                 aiEnabled={data?.ai_enabled ?? false}
                 projects={projects}
-                onSaveSelectedAsProject={({ mode, ids, projectId }) => { setSelectedResourceIds(new Set(ids)); if (mode === 'new') setSaveProjectModalOpen(true); else api.addProjectResources(projectId, ids).then(() => api.getProjects().then(setProjects)) }}
+                onSaveSelectedAsProject={({ mode, ids, projectId }) => { setSelectedResourceIds(new Set(ids)); if (mode === 'new') setSaveProjectModalOpen(true); else { const _p = projects.find(x => (x.id || x.project_id) === projectId); addToExistingProject(projectId, ids, _p?.name || _p?.project_name).then(u => u && setProjects(u)) } }}
               />
             </div>
           ) : (
@@ -3374,6 +3487,7 @@ function SecurityView({ data, filteredResources, moduleListMode, setModuleListMo
           )}
         </div>
       )}
+      {tab === 'm365' && <M365SecurityDashboard />}
       {tab === 'reports' && (
         <DataTable
           title="Security Gaps Report"

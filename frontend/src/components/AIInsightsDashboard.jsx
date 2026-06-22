@@ -282,6 +282,17 @@ export default function AIInsightsDashboard({ onNavigate }) {
       .catch(() => {});
   }, [load]);
 
+  // Post-scan auto-warm (B) populates the core category cards server-side. While any
+  // card is still missing, re-fetch the READ-ONLY summary so freshly-warmed cards
+  // appear without a manual reload. Bounded (~5 min) and never triggers analysis.
+  const warmPollsRef = useRef(0);
+  useEffect(() => {
+    const anyMissing = (data?.modules || []).some((m) => !m.available);
+    if (!anyMissing || warmPollsRef.current >= 12) return undefined;
+    const id = setTimeout(() => { warmPollsRef.current += 1; load(); }, 25000);
+    return () => clearTimeout(id);
+  }, [data, load]);
+
   const generateOne = useCallback(async (m) => {
     setBusyKeys((p) => ({ ...p, [m.key]: true }));
     try {

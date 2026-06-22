@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 import pathlib
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, Response
@@ -567,6 +567,7 @@ async def _build_dashboard(
     resource_group_filter: Optional[str] = None,
     skip_metrics: bool = False,
     subscription_id: Optional[str] = None,
+    inventory_only: bool = False,
 ) -> DashboardData:
 
     async def report(step: str, msg: str, pct: int):
@@ -639,14 +640,21 @@ async def _build_dashboard(
         return value
 
     resources_task      = loop.run_in_executor(executor, partial(list_all_resources, sub_ids))
-    costs_task          = loop.run_in_executor(executor, partial(get_two_month_costs, sub_ids))
-    advisor_task        = loop.run_in_executor(executor, partial(get_advisor_recommendations, sub_ids))
-    daily_task          = loop.run_in_executor(executor, partial(get_daily_costs, 60, sub_ids))          if fetch_cost_trends else _resolved({})
-    monthly_hist_task   = loop.run_in_executor(executor, partial(get_monthly_cost_history, 6, sub_ids))  if fetch_cost_trends else _resolved({})
-    total_daily_task    = loop.run_in_executor(executor, partial(get_total_daily_costs, sub_ids))        if fetch_cost_trends else _resolved(([], []))
     sub_names_task      = loop.run_in_executor(executor, partial(_fetch_subscription_names, sub_ids))
+    # Inventory-only fast path (C): list resources + subscription names ONLY — no Cost
+    # Management or Advisor calls — so the estate paints in seconds on open. Cost,
+    # scores and AI stay on-demand (a manual Refresh runs the full scan below).
+    if not inventory_only:
+        costs_task          = loop.run_in_executor(executor, partial(get_two_month_costs, sub_ids))
+        advisor_task        = loop.run_in_executor(executor, partial(get_advisor_recommendations, sub_ids))
+        daily_task          = loop.run_in_executor(executor, partial(get_daily_costs, 60, sub_ids))          if fetch_cost_trends else _resolved({})
+        monthly_hist_task   = loop.run_in_executor(executor, partial(get_monthly_cost_history, 6, sub_ids))  if fetch_cost_trends else _resolved({})
+        total_daily_task    = loop.run_in_executor(executor, partial(get_total_daily_costs, sub_ids))        if fetch_cost_trends else _resolved(([], []))
 
-    await report("costs", f"Fetching 2 months of cost data across {len(sub_ids)} subscription(s)…", 15)
+    if inventory_only:
+        await report("resources", f"Listing resources across {len(sub_ids)} subscription(s)…", 15)
+    else:
+        await report("costs", f"Fetching 2 months of cost data across {len(sub_ids)} subscription(s)…", 15)
 
     # Wrap each task with a timeout so a slow/rate-limited API call
     # cannot block the entire dashboard. Cost tasks get a slightly longer
@@ -670,12 +678,25 @@ async def _build_dashboard(
     sub_names = await _guarded(sub_names_task, {})
     if resource_group_filter:
         resources = [r for r in resources if r["resource_group"].lower() == resource_group_filter.lower()]
-    if progress_cb and resources:
+    _rf_payload = None
+    if resources:
         try:
             _rf_payload = _resources_first_payload(resources, sub_ids, sub_names)
-            await progress_cb({"type": "partial", "pct": 18, "data": _rf_payload.model_dump()})
+            if progress_cb and not inventory_only:
+                await progress_cb({"type": "partial", "pct": 18, "data": _rf_payload.model_dump()})
         except Exception as _rfe:
             logger.debug("Resources-first paint skipped: %s", _rfe)
+
+    # Inventory-only fast path (C): return the resource inventory now and STOP — no
+    # Cost Management, scoring or AI. The caller surfaces it as the 'done' payload;
+    # cost/scores/AI are loaded later on a full refresh.
+    if inventory_only:
+        _inv = _rf_payload if _rf_payload is not None else _resources_first_payload(resources, sub_ids, sub_names)
+        try:
+            _inv.inventory_only = True
+        except Exception:
+            pass
+        return _inv
 
     (curr_costs, prev_costs, cost_fetch_error), advisor_map, daily_costs_raw, monthly_hist_raw, (total_daily_cm, total_daily_pm) = await asyncio.gather(
         # If the cost task times out it's almost always tenant-shared 429 throttling,
@@ -2052,6 +2073,130 @@ async def get_health_score():
     }
 
 
+# ── Post-scan warm-up: AI insight cards (B) + FinOps/metrics pre-warm (D) ──────
+# After a successful estate scan, proactively warm the per-category AI "insights"
+# cards so the home dashboard is populated WITHOUT the user clicking "Analyze", and
+# kick the utilisation-metrics snapshot + FinOps warehouse so those views are ready.
+# Everything is BEST-EFFORT, NON-BLOCKING (compute runs in worker threads),
+# single-flight (in-process flag + cross-replica Redis lock) and honours the 12h AI
+# cache, so it does real work at most ~twice/day. Disable with AI_AUTOWARM_ENABLED=false.
+_ai_warmup_state: dict = {"running": False, "last_run_ts": None}
+
+# Core estate-health categories auto-warmed after a scan (B). Heavier "AI
+# Assessments" (WAF/CAF/SQL/AppService/VM/Entra) stay lazy/on-open (C) to bound tokens.
+_AI_WARMUP_CORE = ("ai_cloud_maturity", "ai_security_posture", "ai_innovation",
+                   "ai_migration", "ai_backup", "ai_resilience")
+
+
+async def _ai_insights_warmup(reason: str = "scan") -> None:
+    import time as _time
+    if _ai_warmup_state["running"]:
+        return
+    if not settings_svc.get_value("AI_AUTOWARM_ENABLED", True):
+        return
+    _last = _ai_warmup_state.get("last_run_ts")
+    if _last and (_time.time() - _last) < 3600:
+        return  # ran recently; the 12h cache is the real freshness gate
+    try:
+        if not ai_infra_svc.is_available():
+            return  # no AI provider configured — nothing to warm
+    except Exception:
+        return
+    _token = cache_svc.acquire_lock("lock:ai_warmup", ttl_seconds=3600)
+    if _token is None:
+        return  # another replica is already warming
+    _ai_warmup_state["running"] = True
+    try:
+        from services.tagging_service import get_latest_ai_analysis
+        # Cheap up-front freshness probe — skip the whole job (and the resource/arc/
+        # defender loads) when every core category is already fresh in the 12h cache.
+        stale = []
+        for _atype in _AI_WARMUP_CORE:
+            try:
+                if not await asyncio.to_thread(get_latest_ai_analysis, _atype, None, 12):
+                    stale.append(_atype)
+            except Exception:
+                stale.append(_atype)
+        if not stale:
+            return
+
+        resources = await asyncio.to_thread(_get_resources_list)
+        if not resources:
+            return
+        arc_data = await asyncio.to_thread(_get_arc_data)
+        defender_data = None
+        if "ai_security_posture" in stale:
+            try:
+                from services.defender_service import get_full_security_posture
+                defender_data = await asyncio.to_thread(get_full_security_posture)
+            except Exception:
+                defender_data = None
+        backup_coverage = None
+        if "ai_backup" in stale:
+            try:
+                _dd = _cache.get("dashboard_data") or _cache.get("data:*") or _cache.get("data")
+                if _dd is not None and getattr(_dd, "backup_coverage", None) is not None:
+                    _bc = _dd.backup_coverage
+                    backup_coverage = _bc.dict() if hasattr(_bc, "dict") else _bc
+            except Exception:
+                backup_coverage = None
+
+        from services.ai_module_analysis_service import (
+            analyze_cloud_maturity_ai, analyze_security_ai, analyze_innovation_ai,
+            analyze_migration_ai, analyze_backup_ai, analyze_resilience_ai,
+        )
+        builders = {
+            "ai_cloud_maturity":   lambda: analyze_cloud_maturity_ai(resources, arc_data=arc_data, force_refresh=False),
+            "ai_security_posture": lambda: analyze_security_ai(resources, arc_data=arc_data, defender_data=defender_data, force_refresh=False),
+            "ai_innovation":       lambda: analyze_innovation_ai(resources, arc_data=arc_data, force_refresh=False),
+            "ai_migration":        lambda: analyze_migration_ai(resources, arc_data=arc_data, force_refresh=False),
+            "ai_backup":           lambda: analyze_backup_ai(resources, arc_data=arc_data, backup_coverage=backup_coverage, force_refresh=False),
+            "ai_resilience":       lambda: analyze_resilience_ai(resources, arc_data=arc_data, force_refresh=False),
+        }
+        warmed = 0
+        for _atype in _AI_WARMUP_CORE:
+            if _atype not in stale:
+                continue
+            try:
+                await asyncio.to_thread(builders[_atype])
+                warmed += 1
+            except Exception as _e:
+                logger.warning("AI insights warm-up failed for %s: %s", _atype, _e)
+            await asyncio.sleep(1)  # gentle pacing between AI calls
+        if warmed:
+            logger.info("AI insights warm-up (%s): generated %d/%d categories", reason, warmed, len(stale))
+    except Exception as _e:
+        logger.warning("AI insights warm-up aborted: %s", _e)
+    finally:
+        _ai_warmup_state["running"] = False
+        _ai_warmup_state["last_run_ts"] = _time.time()
+        cache_svc.release_lock("lock:ai_warmup", _token)
+
+
+async def _post_scan_warmup(reason: str = "scan") -> None:
+    """Best-effort warm-up chained off a successful estate scan: AI insight cards
+    (B) + FinOps warehouse & utilisation-metrics pre-warm (D). Self-guarded; never
+    affects the scan result."""
+    # (D) Utilisation metrics — only if we have no snapshot yet.
+    try:
+        if not _metrics_snapshot_state.get("running") and not _metrics_snapshot_state.get("last_run_ts"):
+            asyncio.create_task(_metrics_snapshot_run())
+    except Exception:
+        pass
+    # (D) FinOps warehouse — only on first-ever run (no data yet); the nightly
+    # scheduler keeps it fresh afterwards.
+    try:
+        if _FINOPS_WAREHOUSE_AVAILABLE and not finops_warehouse_svc.has_warehouse_data():
+            asyncio.create_task(_run_warehouse_etl_async("post_scan_initial", initial=True))
+    except Exception:
+        pass
+    # (B) AI insight cards.
+    try:
+        await _ai_insights_warmup(reason)
+    except Exception:
+        pass
+
+
 # ── SSE streaming endpoint ─────────────────────────────────────────────────────
 
 @app.get("/api/dashboard/stream")
@@ -2060,6 +2205,7 @@ async def stream_dashboard(
     resource_group: Optional[str] = None,
     subscription: Optional[str] = None,
     fast: bool = True,
+    inventory: bool = False,
 ):
     """SSE endpoint — streams progress then live data.
 
@@ -2116,6 +2262,7 @@ async def stream_dashboard(
                 resource_group_filter=resource_group,
                 skip_metrics=fast,
                 subscription_id=subscription,
+                inventory_only=inventory,
             )
             # A scan that comes back EMPTY (0 resources) is almost always transient — a
             # Cost/ARM throttle, a per-subscription API hiccup, or the managed identity's
@@ -2152,7 +2299,12 @@ async def stream_dashboard(
             # role has finished propagating and read 0 resources — saving that would make
             # the empty result stick until a manual refresh. Keeping the prior good
             # snapshot (or none) lets the startup catch-up self-heal once RBAC is ready.
-            if data.resources:
+            if inventory:
+                # Inventory-only fast paint (C): do NOT persist (cost=0 placeholder) and
+                # do NOT trigger the cost/AI warm — those stay on-demand. Resources are
+                # already live in _cache for any on-demand per-category analysis.
+                pass
+            elif data.resources:
                 try:
                     _dash_json = json.loads(data.model_dump_json())
                     persistence_svc.save_dashboard(_dash_json)
@@ -2160,6 +2312,14 @@ async def stream_dashboard(
                         cache_svc.set_json("dash:latest", _dash_json, ttl_seconds=24 * 3600)
                 except Exception as _pe:
                     logger.warning("Could not persist dashboard snapshot: %s", _pe)
+                # Post-scan warm-up (B+D): populate the per-category AI insight cards
+                # and pre-warm FinOps warehouse + utilisation metrics in the background.
+                # Best-effort, single-flight, respects the 12h AI cache — never blocks
+                # or affects this scan's result.
+                try:
+                    asyncio.create_task(_post_scan_warmup("dashboard_scan"))
+                except Exception:
+                    pass
             else:
                 logger.warning(
                     "Skipping dashboard snapshot persist: scan returned 0 resources "
@@ -6647,6 +6807,362 @@ async def export_project_assessment_xlsx(project_id: str, body: ProjectAssessExp
     )
 
 
+# ── BCDR Planning & Assessment (consultant-grade 4-section plan) ───────────────
+
+class BcdrPlanBody(BaseModel):
+    # User-supplied business intent for this run (all optional — falls back to project metadata).
+    inputs: Dict[str, Any] = {}
+
+
+class BcdrPlanExportBody(BaseModel):
+    result: Dict[str, Any]
+
+
+@app.post("/api/projects/{project_id}/bcdr-plan")
+async def run_bcdr_plan(project_id: str, body: BcdrPlanBody):
+    """Generate a consultant-grade BCDR Planning & Assessment for a saved project.
+
+    Scopes ONLY to the project's resources and grounds the model on each resource's REAL
+    posture (backup / zone / replica / private-endpoint / cost / utilisation) + custom tags +
+    the user-supplied business requirements (classification, RTO/RPO, criticality, DR strategy).
+    Produces the four consultant sections, a resilience posture score and a phased roadmap.
+    Persists the run alongside the other project assessments.
+    """
+    import asyncio
+    from services.bcdr_plan_service import generate_bcdr_plan
+
+    project = project_svc.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project_ids = {r.lower() for r in (project.get("resource_ids") or [])}
+    if not project_ids:
+        raise HTTPException(status_code=400, detail="Project has no resources to assess. Add resources first.")
+
+    all_resources = _get_resources_list()
+    if not all_resources:
+        raise HTTPException(status_code=404, detail="No resource data — run a scan first")
+
+    subset = [r for r in all_resources if (r.get("resource_id") or "").lower() in project_ids]
+    if not subset:
+        raise HTTPException(
+            status_code=404,
+            detail="None of this project's resources are in the current scan. Run a scan first.",
+        )
+
+    try:
+        result = await asyncio.to_thread(generate_bcdr_plan, project, subset, body.inputs or {})
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("BCDR plan failed (project=%s): %s", project_id, exc)
+        _low = str(exc).lower()
+        if any(k in _low for k in ("connection error", "timeout", "getaddrinfo", "temporarily unavailable", "service unavailable", "apiconnection")):
+            raise HTTPException(
+                status_code=503,
+                detail="AI service is unreachable. Verify the Azure OpenAI endpoint/key and network connectivity, then retry.",
+            )
+        raise HTTPException(status_code=500, detail=f"BCDR plan failed: {exc}")
+
+    record = project_svc.save_project_assessment(project_id, result)
+    return {"assessment": record, "result": result}
+
+
+@app.post("/api/projects/{project_id}/bcdr-plan/export.xlsx")
+async def export_bcdr_plan_xlsx(project_id: str, body: BcdrPlanExportBody):
+    """Export a BCDR Planning & Assessment as an enterprise, multi-sheet Excel workbook.
+
+    Sheets: Executive Summary, Resilience Pillars, Critical Services, Workload Prioritization,
+    Modernization, FinOps & Cost, Roadmap, Risks & Assumptions, Resources Analyzed.
+    """
+    project = project_svc.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    result = body.result or {}
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+    except ImportError:
+        raise HTTPException(status_code=500, detail="openpyxl is not installed on the server")
+    from io import BytesIO
+
+    HFILL = PatternFill("solid", fgColor="1E3A5F")
+    HFONT = Font(bold=True, color="FFFFFF", size=11)
+    TITLE = Font(bold=True, color="2D8CFF", size=15)
+    SUBTLE = Font(color="64748B", italic=True, size=9)
+    BOLD = Font(bold=True)
+    WRAP = Alignment(wrap_text=True, vertical="top")
+    SEV_FILL = {
+        "critical": PatternFill("solid", fgColor="7F1D1D"),
+        "high":     PatternFill("solid", fgColor="9A3412"),
+        "medium":   PatternFill("solid", fgColor="854D0E"),
+        "low":      PatternFill("solid", fgColor="334155"),
+    }
+    SEV_FONT = Font(bold=True, color="FFFFFF")
+
+    def _header(ws, headers, row=1):
+        for col, h in enumerate(headers, 1):
+            c = ws.cell(row=row, column=col, value=h)
+            c.fill = HFILL; c.font = HFONT
+            c.alignment = Alignment(horizontal="left", vertical="center")
+
+    def _widths(ws, widths):
+        for col, w in widths.items():
+            ws.column_dimensions[col].width = w
+
+    def _section_title(ws, row, text):
+        c = ws.cell(row=row, column=1, value=text)
+        c.fill = HFILL; c.font = HFONT
+
+    def _affected(item):
+        ars = item.get("affected_resources") or item.get("resources") or []
+        names = []
+        for a in ars:
+            if isinstance(a, dict):
+                names.append(a.get("resource_name") or a.get("name") or a.get("resource_id") or "")
+            else:
+                names.append(str(a))
+        names = [n for n in names if n]
+        s = ", ".join(names)
+        extra = item.get("affected_count")
+        if isinstance(extra, int) and extra > len(names):
+            s += f" (+{extra - len(names)} more)"
+        return s
+
+    pname = project.get("name") or "Project"
+    score = result.get("overall_resilience_score")
+    if not isinstance(score, (int, float)):
+        score = result.get("overall_score")
+    wb = openpyxl.Workbook()
+
+    # Sheet 1 — Executive Summary
+    ws = wb.active; ws.title = "Executive Summary"
+    try:
+        _xlsx_brand_logo(ws, "E1")
+    except Exception:
+        pass
+    ws["A1"] = f"{pname} — BCDR Planning & Assessment"; ws["A1"].font = TITLE
+    ws["A2"] = f"Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}  ·  Azure Infra IQ  ·  Confidential"
+    ws["A2"].font = SUBTLE
+    inputs = result.get("inputs") or {}
+    meta_rows = [
+        ("Project / Workload", pname),
+        ("Resilience Score", f"{score if score is not None else '—'} / 100"),
+        ("Posture", result.get("posture_label") or result.get("score_label") or "—"),
+        ("Resources Analyzed", result.get("resource_count", 0)),
+        ("Dependencies Mapped", (result.get("dependency_summary") or {}).get("edge_count") or "—"),
+        ("Single Points of Failure", (result.get("dependency_summary") or {}).get("spof_count") or "—"),
+        ("Tag Coverage", f"{result.get('tag_coverage_pct', 0)}%"),
+        ("AI Model", result.get("model", "—")),
+        ("Data Classification", inputs.get("data_classification") or project.get("data_classification") or "—"),
+        ("Compliance", inputs.get("compliance") or "—"),
+        ("Default Target RTO", inputs.get("default_rto") or project.get("rto_target") or "—"),
+        ("Default Target RPO", inputs.get("default_rpo") or project.get("rpo_target") or "—"),
+        ("Preferred DR Strategy", inputs.get("dr_strategy") or project.get("dr_tier") or "—"),
+        ("Business Unit", project.get("business_unit") or "—"),
+        ("Owner", project.get("owner") or "—"),
+    ]
+    r = 4
+    for k, v in meta_rows:
+        ws.cell(row=r, column=1, value=k).font = BOLD
+        ws.cell(row=r, column=2, value=v)
+        r += 1
+    r += 1
+    _section_title(ws, r, "Executive Summary"); ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2); r += 1
+    ec = ws.cell(row=r, column=1, value=result.get("executive_summary", "")); ec.alignment = WRAP
+    ws.merge_cells(start_row=r, start_column=1, end_row=r + 5, end_column=2); ws.row_dimensions[r].height = 80; r += 7
+    _section_title(ws, r, "Resilience Maturity"); ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2); r += 1
+    mc = ws.cell(row=r, column=1, value=result.get("maturity_summary", "")); mc.alignment = WRAP
+    ws.merge_cells(start_row=r, start_column=1, end_row=r + 3, end_column=2)
+    _widths(ws, {"A": 28, "B": 90})
+
+    # Sheet 2 — Resilience Pillars
+    ws = wb.create_sheet("Resilience Pillars")
+    _header(ws, ["Pillar", "Score (0-100)", "Rationale"])
+    for i, p in enumerate(result.get("pillar_scores") or [], 2):
+        ws.cell(row=i, column=1, value=p.get("name"))
+        ws.cell(row=i, column=2, value=p.get("score"))
+        ws.cell(row=i, column=3, value=p.get("rationale")).alignment = WRAP
+    _widths(ws, {"A": 38, "B": 14, "C": 90})
+
+    # Sheet 3 — Critical Services Identification
+    ws = wb.create_sheet("Critical Services")
+    cs = result.get("critical_services") or {}
+    row = 1
+    ws.cell(row=row, column=1, value="Section 1 — Critical Services Identification").font = TITLE; row += 1
+    if cs.get("summary"):
+        sc = ws.cell(row=row, column=1, value=cs["summary"]); sc.alignment = WRAP
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6); row += 2
+    _header(ws, ["Tier", "Count", "Rationale", "Resources"], row=row); row += 1
+    for t in cs.get("tiers") or []:
+        ws.cell(row=row, column=1, value=t.get("tier")).font = BOLD
+        ws.cell(row=row, column=2, value=t.get("count"))
+        ws.cell(row=row, column=3, value=t.get("rationale")).alignment = WRAP
+        ws.cell(row=row, column=4, value=_affected(t)).alignment = WRAP
+        row += 1
+    row += 1
+    _header(ws, ["Dependency From", "Dependency To", "Type", "Risk"], row=row); row += 1
+    for d in cs.get("key_dependencies") or []:
+        ws.cell(row=row, column=1, value=d.get("from"))
+        ws.cell(row=row, column=2, value=d.get("to"))
+        ws.cell(row=row, column=3, value=d.get("type"))
+        ws.cell(row=row, column=4, value=d.get("risk")).alignment = WRAP
+        row += 1
+    row += 1
+    _header(ws, ["Severity", "BCDR Gap", "Detail", "Affected Resources"], row=row); row += 1
+    for g in cs.get("bcdr_gaps") or []:
+        sev = str(g.get("severity", "")).lower()
+        sc = ws.cell(row=row, column=1, value=sev.upper() or "—")
+        if sev in SEV_FILL:
+            sc.fill = SEV_FILL[sev]; sc.font = SEV_FONT
+        ws.cell(row=row, column=2, value=g.get("title")).font = BOLD
+        ws.cell(row=row, column=3, value=g.get("detail")).alignment = WRAP
+        ws.cell(row=row, column=4, value=_affected(g)).alignment = WRAP
+        row += 1
+    _widths(ws, {"A": 20, "B": 30, "C": 70, "D": 44})
+
+    # Sheet 4 — Workload Prioritization
+    ws = wb.create_sheet("Workload Prioritization")
+    wp = result.get("workload_prioritization") or {}
+    row = 1
+    ws.cell(row=row, column=1, value="Section 2 — BCDR & Workload Prioritization").font = TITLE; row += 1
+    if wp.get("summary"):
+        sc = ws.cell(row=row, column=1, value=wp["summary"]); sc.alignment = WRAP
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9); row += 2
+    _header(ws, ["Workload", "Criticality", "Current RTO", "Current RPO", "Target RTO", "Target RPO", "Gap", "Recommended DR Approach", "Priority"], row=row); row += 1
+    for w in wp.get("workloads") or []:
+        ws.cell(row=row, column=1, value=w.get("workload")).font = BOLD
+        ws.cell(row=row, column=2, value=w.get("criticality"))
+        ws.cell(row=row, column=3, value=w.get("current_rto"))
+        ws.cell(row=row, column=4, value=w.get("current_rpo"))
+        ws.cell(row=row, column=5, value=w.get("target_rto"))
+        ws.cell(row=row, column=6, value=w.get("target_rpo"))
+        ws.cell(row=row, column=7, value=w.get("gap")).alignment = WRAP
+        ws.cell(row=row, column=8, value=w.get("recommended_dr_approach")).alignment = WRAP
+        ws.cell(row=row, column=9, value=w.get("priority")).font = BOLD
+        row += 1
+    _widths(ws, {"A": 28, "B": 16, "C": 14, "D": 14, "E": 14, "F": 14, "G": 34, "H": 56, "I": 9})
+
+    # Sheet 5 — Infrastructure Modernization
+    ws = wb.create_sheet("Modernization")
+    mod = result.get("modernization") or {}
+    row = 1
+    ws.cell(row=row, column=1, value="Section 3 — Infrastructure Modernization").font = TITLE; row += 1
+    if mod.get("summary"):
+        sc = ws.cell(row=row, column=1, value=mod["summary"]); sc.alignment = WRAP
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6); row += 2
+    _header(ws, ["Workload", "Current State", "Disposition (7R)", "Target Architecture", "Benefit", "Effort"], row=row); row += 1
+    for c in mod.get("candidates") or []:
+        ws.cell(row=row, column=1, value=c.get("workload")).font = BOLD
+        ws.cell(row=row, column=2, value=c.get("current_state")).alignment = WRAP
+        ws.cell(row=row, column=3, value=c.get("disposition")).font = BOLD
+        ws.cell(row=row, column=4, value=c.get("target_architecture")).alignment = WRAP
+        ws.cell(row=row, column=5, value=c.get("benefit")).alignment = WRAP
+        ws.cell(row=row, column=6, value=c.get("effort"))
+        row += 1
+    _widths(ws, {"A": 28, "B": 44, "C": 16, "D": 50, "E": 40, "F": 10})
+
+    # Sheet 6 — FinOps & Cost Visibility
+    ws = wb.create_sheet("FinOps & Cost")
+    fin = result.get("finops") or {}
+    row = 1
+    ws.cell(row=row, column=1, value="Section 4 — FinOps & Cost Visibility").font = TITLE; row += 1
+    if fin.get("summary"):
+        sc = ws.cell(row=row, column=1, value=fin["summary"]); sc.alignment = WRAP
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5); row += 2
+    _section_title(ws, row, "Cost Observations"); row += 1
+    for o in fin.get("cost_observations") or []:
+        ws.cell(row=row, column=1, value=f"• {o}").alignment = WRAP
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5); row += 1
+    row += 1
+    _header(ws, ["Optimization Lever", "Action", "Est. Monthly Saving", "Affected Resources"], row=row); row += 1
+    for lv in fin.get("optimization_levers") or []:
+        ws.cell(row=row, column=1, value=lv.get("lever")).font = BOLD
+        ws.cell(row=row, column=2, value=lv.get("action")).alignment = WRAP
+        ws.cell(row=row, column=3, value=lv.get("est_monthly_saving"))
+        ws.cell(row=row, column=4, value=_affected(lv)).alignment = WRAP
+        row += 1
+    row += 1
+    _section_title(ws, row, "Azure Infra IQ Reporting Capabilities"); row += 1
+    for cap in fin.get("reporting_capabilities") or []:
+        ws.cell(row=row, column=1, value=f"• {cap}").alignment = WRAP
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5); row += 1
+    _widths(ws, {"A": 30, "B": 56, "C": 20, "D": 40})
+
+    # Sheet 7 — Roadmap
+    ws = wb.create_sheet("Roadmap")
+    _header(ws, ["Phase", "Workstream", "Outcomes"])
+    for i, ph in enumerate(result.get("roadmap") or [], 2):
+        ws.cell(row=i, column=1, value=ph.get("phase")).font = BOLD
+        ws.cell(row=i, column=2, value=ph.get("workstream"))
+        outs = ph.get("outcomes") or []
+        ws.cell(row=i, column=3, value="\n".join(f"• {o}" for o in outs)).alignment = WRAP
+    _widths(ws, {"A": 34, "B": 18, "C": 90})
+
+    # Sheet 8 — Risks & Assumptions
+    ws = wb.create_sheet("Risks & Assumptions")
+    _header(ws, ["#", "Key Risk / Data Gap"])
+    for i, k in enumerate(result.get("key_risks") or [], 2):
+        ws.cell(row=i, column=1, value=i - 1)
+        ws.cell(row=i, column=2, value=k).alignment = WRAP
+    base = (len(result.get("key_risks") or [])) + 3
+    ws.cell(row=base, column=2, value="Assumptions").font = BOLD
+    for j, a in enumerate(result.get("assumptions") or [], base + 1):
+        ws.cell(row=j, column=2, value=f"• {a}").alignment = WRAP
+    _widths(ws, {"A": 6, "B": 100})
+
+    # Sheet 9 — Resources Analyzed
+    ws = wb.create_sheet("Resources Analyzed")
+    _header(ws, ["Resource", "Type", "Resource Group", "Location", "SKU", "Cost MTD",
+                 "Est. Saving/mo", "Backup", "Zone", "Private Endpoint", "RI Covered", "Business Tags"])
+
+    def _yn(v):
+        return "Yes" if v is True else ("No" if v is False else "—")
+
+    try:
+        pid_set = {x.lower() for x in (project.get("resource_ids") or [])}
+        subset = [x for x in _get_resources_list() if (x.get("resource_id") or "").lower() in pid_set]
+        try:
+            import services.tagging_service as _tagsvc
+            tags_lower = {k.lower(): v for k, v in (_tagsvc.get_all_custom_tags() or {}).items()}
+        except Exception:
+            tags_lower = {}
+        for i, rr in enumerate(subset, 2):
+            rid = rr.get("resource_id") or ""
+            ct = tags_lower.get(rid.lower()) or {}
+            ws.cell(row=i, column=1, value=rr.get("resource_name") or rid.split("/")[-1])
+            ws.cell(row=i, column=2, value=(rr.get("resource_type") or "").split("/")[-1])
+            ws.cell(row=i, column=3, value=rr.get("resource_group"))
+            ws.cell(row=i, column=4, value=rr.get("location"))
+            ws.cell(row=i, column=5, value=rr.get("sku"))
+            c = ws.cell(row=i, column=6, value=rr.get("cost_current_month")); c.number_format = "#,##0.00"
+            c = ws.cell(row=i, column=7, value=rr.get("estimated_monthly_savings")); c.number_format = "#,##0.00"
+            ws.cell(row=i, column=8, value=_yn(rr.get("has_backup")))
+            ws.cell(row=i, column=9, value=rr.get("zone_status") or "—")
+            ws.cell(row=i, column=10, value=_yn(rr.get("has_private_endpoint")))
+            ws.cell(row=i, column=11, value=_yn(rr.get("ri_covered")))
+            ws.cell(row=i, column=12, value=", ".join(f"{k}: {v}" for k, v in ct.items())).alignment = WRAP
+    except Exception as _exc:
+        logger.warning("bcdr export: resources sheet failed: %s", _exc)
+    _widths(ws, {"A": 30, "B": 20, "C": 26, "D": 14, "E": 18, "F": 12, "G": 14,
+                 "H": 9, "I": 14, "J": 15, "K": 11, "L": 44})
+
+    for sheet in wb.worksheets:
+        if sheet.title != "Executive Summary":
+            sheet.freeze_panes = "A2"
+
+    buf = BytesIO(); wb.save(buf); buf.seek(0)
+    safe = "".join(c if (c.isalnum() or c in "-_") else "_" for c in pname)
+    fname = f"{safe}-BCDR-Plan-{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 class AIReportExportBody(BaseModel):
     title: str = "AI Analysis"
     category: str = ""
@@ -7044,6 +7560,15 @@ class BCDRMetadataBody(BaseModel):
     rpo_target:        Optional[str] = None
     business_function: Optional[str] = None
     notes:             Optional[str] = None
+    # Consultant intake fields (Phase 1 BCDR vendor questions)
+    target_region:           Optional[str] = None
+    desired_sku:             Optional[str] = None
+    environment:             Optional[str] = None
+    business_owner:          Optional[str] = None
+    financial_loss_per_hour: Optional[str] = None
+    app_dependencies:        Optional[str] = None
+    data_classification:     Optional[str] = None
+    compliance:              Optional[str] = None
 
 class BulkBCDRMetadataBody(BaseModel):
     updates: List[Dict[str, Any]]
@@ -7058,16 +7583,39 @@ async def get_all_bcdr_metadata():
     return bcdr_meta_svc.get_all_bcdr_metadata()
 
 
+# NOTE: literal sub-paths (/bulk, /stats) MUST be declared BEFORE the greedy
+# {resource_id:path} routes below. Otherwise FastAPI matches POST /api/bcdr/metadata/bulk
+# against {resource_id:path} (resource_id="bulk") and the bulk body is parsed as a single
+# BCDRMetadataBody — silently writing an empty "bulk" row and never saving the real resources.
+@app.post("/api/bcdr/metadata/bulk")
+async def bulk_save_bcdr_metadata(body: BulkBCDRMetadataBody):
+    """Bulk save BCDR metadata for multiple resources."""
+    if not bcdr_meta_svc:
+        raise HTTPException(status_code=503, detail="bcdr_metadata_service not available")
+
+    count = bcdr_meta_svc.bulk_save_bcdr_metadata(body.updates)
+    return {"ok": True, "updated_count": count}
+
+
+@app.get("/api/bcdr/metadata/stats")
+async def get_bcdr_metadata_stats():
+    """Get statistics about BCDR metadata coverage."""
+    if not bcdr_meta_svc:
+        return {"error": "bcdr_metadata_service not available"}
+
+    return bcdr_meta_svc.get_bcdr_metadata_stats()
+
+
 @app.get("/api/bcdr/metadata/{resource_id:path}")
 async def get_resource_bcdr_metadata(resource_id: str):
     """Get BCDR metadata for a single resource."""
     if not bcdr_meta_svc:
         raise HTTPException(status_code=503, detail="bcdr_metadata_service not available")
-    
+
     metadata = bcdr_meta_svc.get_bcdr_metadata(resource_id)
     if not metadata:
         return {"resource_id": resource_id, "metadata": None}
-    
+
     return metadata
 
 
@@ -7076,20 +7624,10 @@ async def save_resource_bcdr_metadata(resource_id: str, body: BCDRMetadataBody):
     """Save or update BCDR metadata for a resource."""
     if not bcdr_meta_svc:
         raise HTTPException(status_code=503, detail="bcdr_metadata_service not available")
-    
-    metadata = body.dict()
+
+    metadata = body.dict(exclude_unset=True)
     result = bcdr_meta_svc.save_bcdr_metadata(resource_id, metadata)
     return result
-
-
-@app.post("/api/bcdr/metadata/bulk")
-async def bulk_save_bcdr_metadata(body: BulkBCDRMetadataBody):
-    """Bulk save BCDR metadata for multiple resources."""
-    if not bcdr_meta_svc:
-        raise HTTPException(status_code=503, detail="bcdr_metadata_service not available")
-    
-    count = bcdr_meta_svc.bulk_save_bcdr_metadata(body.updates)
-    return {"ok": True, "updated_count": count}
 
 
 @app.delete("/api/bcdr/metadata/{resource_id:path}")
@@ -7097,18 +7635,71 @@ async def delete_resource_bcdr_metadata(resource_id: str):
     """Delete BCDR metadata for a resource."""
     if not bcdr_meta_svc:
         raise HTTPException(status_code=503, detail="bcdr_metadata_service not available")
-    
+
     success = bcdr_meta_svc.delete_bcdr_metadata(resource_id)
     return {"ok": success}
 
 
-@app.get("/api/bcdr/metadata/stats")
-async def get_bcdr_metadata_stats():
-    """Get statistics about BCDR metadata coverage."""
+# ── BCDR Phase 1 supporting inputs / uploads (stored in Azure SQL) ────────────
+# Users attach supporting documents (existing DR runbooks, architecture diagrams,
+# requirements, RTO/RPO sign-off, dependency maps…) per resource as part of the BCDR
+# planning exercise. Stored in Azure SQL; text content also grounds the AI assessment.
+
+@app.post("/api/bcdr/attachments")
+async def upload_bcdr_attachment(
+    file: UploadFile = File(...),
+    resource_id: str = Form(""),
+    project_id: str = Form(""),
+):
+    """Upload a supporting Phase 1 input for a resource (and/or project). Stored in Azure SQL."""
     if not bcdr_meta_svc:
-        return {"error": "bcdr_metadata_service not available"}
-    
-    return bcdr_meta_svc.get_bcdr_metadata_stats()
+        raise HTTPException(status_code=503, detail="bcdr_metadata_service not available")
+    raw = await file.read()
+    try:
+        meta = bcdr_meta_svc.save_attachment(
+            (resource_id or None), (project_id or None),
+            file.filename or "upload", (file.content_type or "application/octet-stream"), raw,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail=str(exc))
+    return meta
+
+
+@app.get("/api/bcdr/attachments")
+async def list_bcdr_attachments(resource_id: str = "", project_id: str = ""):
+    """List Phase 1 supporting inputs (metadata only) for a resource and/or project."""
+    if not bcdr_meta_svc:
+        raise HTTPException(status_code=503, detail="bcdr_metadata_service not available")
+    return {"attachments": bcdr_meta_svc.list_attachments((resource_id or None), (project_id or None))}
+
+
+@app.get("/api/bcdr/attachments/{att_id}/download")
+async def download_bcdr_attachment(att_id: str):
+    """Download a stored Phase 1 supporting input."""
+    if not bcdr_meta_svc:
+        raise HTTPException(status_code=503, detail="bcdr_metadata_service not available")
+    rec = bcdr_meta_svc.get_attachment(att_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    import base64 as _b64
+    try:
+        data = _b64.b64decode(rec.get("content_b64") or "")
+    except Exception:
+        data = b""
+    fname = rec.get("filename") or "download"
+    return Response(
+        content=data,
+        media_type=rec.get("content_type") or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.delete("/api/bcdr/attachments/{att_id}")
+async def delete_bcdr_attachment(att_id: str):
+    """Delete a stored Phase 1 supporting input."""
+    if not bcdr_meta_svc:
+        raise HTTPException(status_code=503, detail="bcdr_metadata_service not available")
+    return {"ok": bcdr_meta_svc.delete_attachment(att_id)}
 
 
 # ── BCDR Deliverables API (Timeline, Testing Plan, Compliance, Strategy, Excel) ──
@@ -7160,6 +7751,394 @@ async def bcdr_excel_report():
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+# ── BCDR Consultant Report (full 13-section grounded report) ──────────────────
+
+class ConsultantReportBody(BaseModel):
+    customer_info: Dict[str, Any] = {}
+    project_id: Optional[str] = None
+
+
+class ConsultantReportExportBody(BaseModel):
+    report: Dict[str, Any]
+
+
+@app.post("/api/bcdr/consultant-report")
+async def bcdr_consultant_report(body: ConsultantReportBody):
+    """Generate the full consultant-grade BCDR Planning & Assessment report, grounded on the
+    live resource inventory + the customer's Phase-1 classification metadata + an AI pass.
+
+    When ``project_id`` is supplied the report is scoped to that project's resources only
+    (consistent with the project BCDR plan); otherwise it covers the whole estate."""
+    import asyncio
+    from services.bcdr_report_service import generate_consultant_report
+
+    resources = _get_resources_list()
+    if not resources:
+        raise HTTPException(status_code=404, detail="No resource data — run a scan first")
+
+    if body.project_id:
+        project = project_svc.get_project(body.project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        project_ids = {r.lower() for r in (project.get("resource_ids") or [])}
+        if not project_ids:
+            raise HTTPException(status_code=400, detail="Project has no resources to assess. Add resources first.")
+        resources = [r for r in resources if (r.get("resource_id") or "").lower() in project_ids]
+        if not resources:
+            raise HTTPException(
+                status_code=404,
+                detail="None of this project's resources are in the current scan. Run a scan first.",
+            )
+
+    try:
+        meta = bcdr_meta_svc.get_all_bcdr_metadata() if bcdr_meta_svc else {}
+    except Exception:
+        meta = {}
+    try:
+        report = await asyncio.to_thread(
+            generate_consultant_report, resources, meta, body.customer_info or {}
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.error("BCDR consultant report failed: %s", exc)
+        _low = str(exc).lower()
+        if any(k in _low for k in ("connection error", "timeout", "getaddrinfo", "temporarily unavailable", "service unavailable", "apiconnection")):
+            raise HTTPException(status_code=503, detail="AI service is unreachable. Verify the Azure OpenAI endpoint/key, then retry.")
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {exc}")
+    return report
+
+
+@app.post("/api/bcdr/consultant-report/export.xlsx")
+async def bcdr_consultant_report_xlsx(body: ConsultantReportExportBody):
+    """Export the consultant BCDR report as a multi-sheet enterprise Excel workbook."""
+    rep = body.report or {}
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+    except ImportError:
+        raise HTTPException(status_code=500, detail="openpyxl is not installed on the server")
+    from io import BytesIO
+
+    HFILL = PatternFill("solid", fgColor="1E3A5F"); HFONT = Font(bold=True, color="FFFFFF", size=11)
+    TITLE = Font(bold=True, color="2D8CFF", size=15); SUBTLE = Font(color="64748B", italic=True, size=9)
+    BOLD = Font(bold=True); WRAP = Alignment(wrap_text=True, vertical="top")
+    SEV = {"critical": PatternFill("solid", fgColor="7F1D1D"), "high": PatternFill("solid", fgColor="9A3412"),
+           "medium": PatternFill("solid", fgColor="854D0E"), "low": PatternFill("solid", fgColor="334155")}
+    SEVF = Font(bold=True, color="FFFFFF")
+
+    def hdr(ws, headers, row=1):
+        for c, h in enumerate(headers, 1):
+            cell = ws.cell(row=row, column=c, value=h); cell.fill = HFILL; cell.font = HFONT
+            cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    def widths(ws, w):
+        for col, val in w.items():
+            ws.column_dimensions[col].width = val
+
+    def lst(v):
+        return "\n".join(f"• {x}" for x in v) if isinstance(v, list) else (v or "")
+
+    def section(ws, title, row, span=4):
+        cell = ws.cell(row=row, column=1, value=title); cell.font = HFONT; cell.fill = HFILL
+        for c in range(2, span + 1):
+            ws.cell(row=row, column=c).fill = HFILL
+        return row + 1
+
+    def bullets(ws, items, row, span=4):
+        for x in (items or []):
+            cell = ws.cell(row=row, column=1, value=f"• {x}"); cell.alignment = WRAP
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span); row += 1
+        return row
+
+    def para(ws, text, row, span=4):
+        cell = ws.cell(row=row, column=1, value=text if text not in (None, "") else "—"); cell.alignment = WRAP
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span); return row + 1
+
+    cover = rep.get("cover", {}); es = rep.get("executive_summary", {}); metrics = rep.get("metrics", {})
+    bc = rep.get("bc_requirements", {}) or {}
+    md = rep.get("methodology", {}) or {}
+    cur = rep.get("current_state", {}) or {}
+    csf = cur.get("findings", {}) or {}
+    dash = cur.get("executive_dashboard", {}) or {}
+    ga = rep.get("gap_analysis", {}) or {}
+    bi = ga.get("business_impact", {}) or {}
+    ra = rep.get("recommended_architecture", {}) or {}
+    dt = rep.get("dr_testing", {}) or {}
+    cc = rep.get("conclusion", {}) or {}
+    cust = cover.get("customer_name", "Customer")
+    wb = openpyxl.Workbook()
+
+    # 1 — Executive Summary
+    ws = wb.active; ws.title = "Executive Summary"
+    try:
+        _xlsx_brand_logo(ws, "E1")
+    except Exception:
+        pass
+    ws["A1"] = f"{cust} — Business Continuity & Disaster Recovery Plan"; ws["A1"].font = TITLE
+    ws["A2"] = f"Prepared by {cover.get('prepared_by','')}  ·  v{cover.get('report_version','')}  ·  {cover.get('date','')}  ·  Confidential"; ws["A2"].font = SUBTLE
+    r = 4
+    for k, v in [("Customer", cust), ("Assessment Period", cover.get("assessment_period", "")),
+                 ("Maturity Score", f"{rep.get('overall_score','—')} / 100"), ("Posture", rep.get("score_label", "—")),
+                 ("Total Resources", metrics.get("total_resources", 0)),
+                 ("Zone-Redundant", metrics.get("zone_redundant", 0)), ("Non-Zonal", metrics.get("non_zonal", 0)),
+                 ("Backup Coverage", f"{metrics.get('backup_coverage_pct',0)}%"),
+                 ("DR Coverage", f"{metrics.get('dr_coverage_pct',0)}%"),
+                 ("Regions", metrics.get("region_count", 0)), ("AI Model", rep.get("model", "—"))]:
+        ws.cell(row=r, column=1, value=k).font = BOLD; ws.cell(row=r, column=2, value=v); r += 1
+    r += 1; r = section(ws, "Purpose", r); r = para(ws, es.get("purpose", ""), r)
+    r += 1; r = section(ws, "Business Drivers", r); r = bullets(ws, es.get("business_drivers", []), r)
+    r += 1; r = section(ws, "Scope", r); r = para(ws, es.get("scope", ""), r)
+    r += 1; r = section(ws, "Current Resiliency Posture", r); r = para(ws, es.get("current_posture", ""), r)
+    r += 1; r = section(ws, "Major Risks", r); r = bullets(ws, es.get("major_risks", []), r)
+    r += 1; r = section(ws, "Top Recommendations", r)
+    for rec in es.get("top_recommendations", []):
+        if isinstance(rec, dict):
+            r = para(ws, f"• {rec.get('action','')} — {rec.get('business_outcome','')}", r)
+    widths(ws, {"A": 32, "B": 60, "C": 20, "D": 30})
+
+    # 2 — Customer Environment Overview
+    ws = wb.create_sheet("Environment Overview")
+    ws["A1"] = "Customer Environment Overview"; ws["A1"].font = TITLE
+    r = 3
+    for k, v in [("Subscriptions assessed", metrics.get("subscription_count", 0)),
+                 ("Azure regions in use", metrics.get("region_count", 0)),
+                 ("Workloads analyzed", metrics.get("total_resources", 0)),
+                 ("Categorized in Phase 1", f"{metrics.get('categorized',0)} of {metrics.get('total_resources',0)}"),
+                 ("Total monthly spend", f"${metrics.get('total_monthly_cost',0):,.0f}"),
+                 ("Regions", ", ".join(metrics.get("regions", []) or []))]:
+        ws.cell(row=r, column=1, value=k).font = BOLD
+        cell = ws.cell(row=r, column=2, value=v); cell.alignment = WRAP
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=4); r += 1
+    widths(ws, {"A": 28, "B": 30, "C": 20, "D": 30})
+
+    # 3 — Workload Classification
+    ws = wb.create_sheet("Workload Classification"); hdr(ws, ["Tier", "Business Criticality", "Count", "Examples"])
+    for i, t in enumerate(rep.get("workload_classification", []), 2):
+        ws.cell(row=i, column=1, value=t.get("tier")).font = BOLD
+        ws.cell(row=i, column=2, value=t.get("business_criticality"))
+        ws.cell(row=i, column=3, value=t.get("count"))
+        ws.cell(row=i, column=4, value=", ".join(t.get("examples", []) or [])).alignment = WRAP
+    widths(ws, {"A": 28, "B": 26, "C": 8, "D": 70})
+
+    # 4 — Business Continuity Requirements
+    ws = wb.create_sheet("BC Requirements")
+    ws["A1"] = "Business Continuity Requirements"; ws["A1"].font = TITLE
+    r = 3
+    r = section(ws, "Regulatory Requirements", r); r = bullets(ws, bc.get("regulatory", []), r)
+    r += 1; r = section(ws, "Data Residency Considerations", r); r = para(ws, bc.get("data_residency", ""), r)
+    r += 1; r = section(ws, "Operational Requirements", r); r = bullets(ws, bc.get("operational", []), r)
+    widths(ws, {"A": 30, "B": 30, "C": 20, "D": 30})
+
+    # 5 — Recovery Objectives (RTO/RPO matrix)
+    ws = wb.create_sheet("RTO-RPO Matrix"); hdr(ws, ["Workload", "Current RTO", "Target RTO", "Current RPO", "Target RPO", "Gap"])
+    for i, o in enumerate(rep.get("recovery_objectives", []), 2):
+        ws.cell(row=i, column=1, value=o.get("workload")).font = BOLD
+        ws.cell(row=i, column=2, value=o.get("current_rto")); ws.cell(row=i, column=3, value=o.get("target_rto"))
+        ws.cell(row=i, column=4, value=o.get("current_rpo")); ws.cell(row=i, column=5, value=o.get("target_rpo"))
+        ws.cell(row=i, column=6, value=o.get("gap")).alignment = WRAP
+    widths(ws, {"A": 30, "B": 14, "C": 14, "D": 14, "E": 14, "F": 44})
+
+    # 6 — Assessment Methodology
+    ws = wb.create_sheet("Methodology")
+    ws["A1"] = "Assessment Methodology"; ws["A1"].font = TITLE
+    r = 3
+    r = section(ws, "Discovery Activities", r); r = bullets(ws, md.get("discovery_activities", []), r)
+    r += 1; r = section(ws, "Assessment Areas", r); r = para(ws, ", ".join(md.get("assessment_areas", []) or []), r)
+    widths(ws, {"A": 30, "B": 30, "C": 20, "D": 30})
+
+    # 7 — Current State Findings
+    ws = wb.create_sheet("Current State")
+    ws["A1"] = "Current State Findings"; ws["A1"].font = TITLE
+    r = 3; r = section(ws, "Executive Dashboard", r)
+    for k, v in [("Total Azure Resources", dash.get("total_resources", 0)),
+                 ("Zone-Redundant", dash.get("zone_redundant", 0)), ("Non-Zonal", dash.get("non_zonal", 0)),
+                 ("Locally Redundant (LRS)", dash.get("locally_redundant", 0)),
+                 ("Backup Coverage", f"{dash.get('backup_coverage_pct',0)}%"),
+                 ("DR Coverage", f"{dash.get('dr_coverage_pct',0)}%")]:
+        ws.cell(row=r, column=1, value=k).font = BOLD; ws.cell(row=r, column=2, value=v); r += 1
+    r += 1
+    for label, key in [("Compute", "compute"), ("Data Services", "data_services"), ("Storage", "storage"),
+                       ("Networking", "networking"), ("Identity & Security", "identity_security"),
+                       ("Backup & Disaster Recovery", "backup_dr")]:
+        items = csf.get(key, [])
+        if items:
+            r = section(ws, label, r); r = bullets(ws, items, r); r += 1
+    widths(ws, {"A": 32, "B": 40, "C": 20, "D": 30})
+
+    # 8 — Gap Analysis (+ Business Impact)
+    ws = wb.create_sheet("Gap Analysis"); hdr(ws, ["Area", "Finding", "Risk", "Severity"])
+    i = 2
+    for g in ga.get("resiliency_gaps", []):
+        ws.cell(row=i, column=1, value=g.get("area")).font = BOLD
+        ws.cell(row=i, column=2, value=g.get("finding")).alignment = WRAP
+        ws.cell(row=i, column=3, value=g.get("risk")).alignment = WRAP
+        sv = str(g.get("severity", "")).lower(); sc = ws.cell(row=i, column=4, value=sv.upper() or "—")
+        if sv in SEV:
+            sc.fill = SEV[sv]; sc.font = SEVF
+        i += 1
+    i += 1; i = section(ws, "Business Impact Analysis", i)
+    for label, val in [("Service outage impact", bi.get("service_outage_impact")),
+                       ("Data loss exposure", bi.get("data_loss_exposure")),
+                       ("Financial exposure", bi.get("financial_exposure") or "Not supplied"),
+                       ("Compliance risks", bi.get("compliance_risks"))]:
+        ws.cell(row=i, column=1, value=label).font = BOLD
+        ws.cell(row=i, column=2, value=val or "—").alignment = WRAP
+        ws.merge_cells(start_row=i, start_column=2, end_row=i, end_column=4); i += 1
+    mew = bi.get("most_exposed_workloads", [])
+    if mew:
+        ws.cell(row=i, column=1, value="Most-exposed workloads").font = BOLD
+        ws.cell(row=i, column=2, value=", ".join(mew)).alignment = WRAP
+        ws.merge_cells(start_row=i, start_column=2, end_row=i, end_column=4)
+    widths(ws, {"A": 20, "B": 56, "C": 40, "D": 14})
+
+    # 9 — Recommended BCDR Architecture
+    ws = wb.create_sheet("Architecture")
+    ws["A1"] = "Recommended BCDR Architecture"; ws["A1"].font = TITLE
+    r = 3
+    ws.cell(row=r, column=1, value="Failover Model").font = BOLD
+    ws.cell(row=r, column=2, value=ra.get("failover_model") or "—"); r += 1
+    ws.cell(row=r, column=1, value="Rationale").font = BOLD
+    ws.cell(row=r, column=2, value=ra.get("failover_rationale") or "—").alignment = WRAP
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=4); r += 2
+    r = section(ws, "Recommended Target State", r); r = para(ws, ra.get("target_state", ""), r); r += 1
+    r = section(ws, "Recommended Protection Strategy", r)
+    ws.cell(row=r, column=1, value="Azure Service").font = HFONT; ws.cell(row=r, column=1).fill = HFILL
+    sc2 = ws.cell(row=r, column=2, value="Recommended DR Mechanism"); sc2.font = HFONT; sc2.fill = HFILL
+    for c in (3, 4):
+        ws.cell(row=r, column=c).fill = HFILL
+    r += 1
+    for p in ra.get("protection_strategy", []):
+        ws.cell(row=r, column=1, value=p.get("azure_service")).font = BOLD
+        ws.cell(row=r, column=2, value=p.get("recommendation")).alignment = WRAP
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=4); r += 1
+    r += 1; r = section(ws, "Deployment Plan — Building the Target State", r)
+    for n, x in enumerate(ra.get("deployment_plan", []), 1):
+        if isinstance(x, dict):
+            ws.cell(row=r, column=1, value=f"{n}. {x.get('step','')}").font = BOLD
+            ws.cell(row=r, column=2, value=x.get("detail", "")).alignment = WRAP
+            ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=4); r += 1
+    r += 1; r = section(ws, "Activation & Failover Plan", r)
+    for n, x in enumerate(ra.get("activation_plan", []), 1):
+        if isinstance(x, dict):
+            ws.cell(row=r, column=1, value=f"{n}. {x.get('step','')}").font = BOLD
+            ws.cell(row=r, column=2, value=x.get("detail", "")).alignment = WRAP
+            ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=4); r += 1
+    widths(ws, {"A": 38, "B": 70, "C": 15, "D": 15})
+
+    # 10 — Proposed BCDR Solution Options
+    ws = wb.create_sheet("Solution Options"); hdr(ws, ["Option", "Approach", "Cost", "RTO/RPO", "Best For"])
+    for i, o in enumerate(rep.get("solution_options", []), 2):
+        ws.cell(row=i, column=1, value=o.get("name")).font = BOLD
+        ws.cell(row=i, column=2, value=o.get("approach")).alignment = WRAP
+        ws.cell(row=i, column=3, value=o.get("cost_level")); ws.cell(row=i, column=4, value=o.get("rto_rpo"))
+        ws.cell(row=i, column=5, value=o.get("best_for")).alignment = WRAP
+    widths(ws, {"A": 28, "B": 50, "C": 10, "D": 20, "E": 36})
+
+    # 11 — Cost & Licensing
+    ws = wb.create_sheet("Cost & Licensing"); hdr(ws, ["Component", "Existing", "Additional"])
+    cl = rep.get("cost_licensing", {}) or {}
+    i = 2
+    for c in cl.get("monthly_estimate", []):
+        ws.cell(row=i, column=1, value=c.get("component")).font = BOLD
+        ws.cell(row=i, column=2, value=c.get("existing")); ws.cell(row=i, column=3, value=c.get("additional")); i += 1
+    i += 1; i = section(ws, "Licensing & Service Impact", i, span=3); i = bullets(ws, cl.get("licensing_impact", []), i, span=3)
+    if cl.get("assumptions"):
+        i += 1; i = section(ws, "Assumptions", i, span=3); i = bullets(ws, cl.get("assumptions", []), i, span=3)
+    widths(ws, {"A": 40, "B": 18, "C": 18})
+
+    # 12 — Implementation Roadmap
+    ws = wb.create_sheet("Roadmap"); hdr(ws, ["Phase", "Activities", "Outcomes"])
+    for i, ph in enumerate(rep.get("roadmap", []), 2):
+        ws.cell(row=i, column=1, value=ph.get("phase")).font = BOLD
+        ws.cell(row=i, column=2, value=lst(ph.get("activities", []))).alignment = WRAP
+        ws.cell(row=i, column=3, value=lst(ph.get("outcomes", []))).alignment = WRAP
+    widths(ws, {"A": 30, "B": 60, "C": 50})
+
+    # 13 — DR Testing & Operational Readiness
+    ws = wb.create_sheet("DR Testing")
+    ws["A1"] = "DR Testing & Operational Readiness"; ws["A1"].font = TITLE
+    r = 3
+    r = section(ws, "DR Test Plan", r); r = bullets(ws, dt.get("test_plan", []), r)
+    if dt.get("failback"):
+        r += 1; r = section(ws, "Failback Procedure", r); r = bullets(ws, dt.get("failback", []), r)
+    r += 1; r = section(ws, "Operational Runbooks", r); r = bullets(ws, dt.get("runbooks", []), r)
+    if dt.get("validation_checklist"):
+        r += 1; r = section(ws, "Validation Checklist", r); r = bullets(ws, dt.get("validation_checklist", []), r)
+    widths(ws, {"A": 30, "B": 30, "C": 20, "D": 30})
+
+    # 14 — Risk Register
+    ws = wb.create_sheet("Risk Register"); hdr(ws, ["Risk", "Probability", "Impact", "Mitigation"])
+    for i, rk in enumerate(rep.get("risk_register", []), 2):
+        ws.cell(row=i, column=1, value=rk.get("risk")).alignment = WRAP
+        ws.cell(row=i, column=2, value=rk.get("probability")); ws.cell(row=i, column=3, value=rk.get("impact"))
+        ws.cell(row=i, column=4, value=rk.get("mitigation")).alignment = WRAP
+    widths(ws, {"A": 44, "B": 13, "C": 12, "D": 56})
+
+    # 15 — Conclusion & Next Steps
+    ws = wb.create_sheet("Conclusion")
+    ws["A1"] = "Conclusion & Next Steps"; ws["A1"].font = TITLE
+    r = 3
+    r = section(ws, "Recommended Immediate Actions", r); r = bullets(ws, cc.get("immediate_actions", []), r)
+    r += 1; r = section(ws, "Medium-Priority Initiatives", r); r = bullets(ws, cc.get("medium_priority", []), r)
+    r += 1; r = section(ws, "Long-Term Resiliency Improvements", r); r = bullets(ws, cc.get("long_term", []), r)
+    r += 1; r = section(ws, "Expected Outcomes", r); r = bullets(ws, cc.get("expected_outcomes", []), r)
+    widths(ws, {"A": 30, "B": 30, "C": 20, "D": 30})
+
+    # 16 — Service-by-Service Recommendations (Appendix D)
+    ws = wb.create_sheet("Service Recommendations"); hdr(ws, ["Service", "Current State", "Recommended DR Mechanism", "Priority"])
+    for i, sr in enumerate(rep.get("appendices", {}).get("service_recommendations", []), 2):
+        ws.cell(row=i, column=1, value=sr.get("service")).font = BOLD
+        ws.cell(row=i, column=2, value=sr.get("current")).alignment = WRAP
+        ws.cell(row=i, column=3, value=sr.get("recommended")).alignment = WRAP
+        ws.cell(row=i, column=4, value=sr.get("priority"))
+    widths(ws, {"A": 28, "B": 40, "C": 44, "D": 10})
+
+    # 17 — Resource Inventory (Appendix A)
+    ws = wb.create_sheet("Resource Inventory")
+    hdr(ws, ["Resource", "Type", "Location", "Subscription", "SKU", "Zone Status", "Backup",
+             "Cost/mo", "Criticality", "DR Tier", "Target RTO", "Target Region", "Owner", "$ Loss/hr"])
+    for i, r2 in enumerate(rep.get("appendices", {}).get("inventory", []), 2):
+        ws.cell(row=i, column=1, value=r2.get("resource_name"))
+        ws.cell(row=i, column=2, value=r2.get("resource_type")); ws.cell(row=i, column=3, value=r2.get("location"))
+        ws.cell(row=i, column=4, value=r2.get("subscription_id")); ws.cell(row=i, column=5, value=r2.get("sku"))
+        ws.cell(row=i, column=6, value=r2.get("zone_status"))
+        ws.cell(row=i, column=7, value="Yes" if r2.get("has_backup") else "No")
+        cc2 = ws.cell(row=i, column=8, value=r2.get("cost_current_month")); cc2.number_format = "#,##0.00"
+        ws.cell(row=i, column=9, value=r2.get("criticality")); ws.cell(row=i, column=10, value=r2.get("dr_tier"))
+        ws.cell(row=i, column=11, value=r2.get("target_rto")); ws.cell(row=i, column=12, value=r2.get("target_region"))
+        ws.cell(row=i, column=13, value=r2.get("business_owner")); ws.cell(row=i, column=14, value=r2.get("financial_loss_per_hour"))
+    widths(ws, {"A": 28, "B": 18, "C": 14, "D": 16, "E": 16, "F": 16, "G": 8, "H": 12,
+                "I": 12, "J": 10, "K": 12, "L": 14, "M": 18, "N": 12})
+
+    for sheet in wb.worksheets:
+        if sheet.title != "Executive Summary":
+            sheet.freeze_panes = "A2"
+
+    buf = BytesIO(); wb.save(buf); buf.seek(0)
+    safe = "".join(c if (c.isalnum() or c in "-_") else "_" for c in cust)
+    fname = f"{safe}-BCDR-Plan-{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# ── Microsoft 365 Security Operations (Graph-backed, Vigil365-style) ───────────
+@app.get("/api/security/m365", tags=["Security"])
+async def m365_security_dashboard():
+    """Aggregated Microsoft 365 security signals (Defender XDR, Entra ID Protection,
+    Intune, Conditional Access) via Microsoft Graph. Read-only; each card falls back to
+    a labelled sample when the matching Graph permission/license is unavailable."""
+    try:
+        from services.m365_security_service import get_m365_security_dashboard
+        return await asyncio.to_thread(get_m365_security_dashboard)
+    except Exception as exc:
+        logger.error("M365 security dashboard failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"M365 security aggregation failed: {exc}")
 
 
 # ── Custom Tagging API ────────────────────────────────────────────────────────
@@ -7310,7 +8289,7 @@ async def set_resource_tags(resource_id: str, body: ResourceTagsBody):
     """Set custom tags for a resource (replace or merge mode)."""
     if body.merge:
         # Merge mode: get existing tags and update with new ones
-        existing = tagging_svc.get_resource_tags(resource_id)
+        existing = tagging_svc.get_custom_tags(resource_id)
         merged = {**existing, **body.tags}
         tagging_svc.set_resource_tags(resource_id, merged)
     else:
@@ -7324,7 +8303,7 @@ async def bulk_tag_resources(body: BulkTagBody):
     """Apply tags to multiple resources at once (replace or merge mode)."""
     for rid in body.resource_ids:
         if body.merge:
-            existing = tagging_svc.get_resource_tags(rid)
+            existing = tagging_svc.get_custom_tags(rid)
             merged = {**existing, **body.tags}
             tagging_svc.set_resource_tags(rid, merged)
         else:

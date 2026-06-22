@@ -331,8 +331,13 @@ def _build_system_prompt(cat: Dict[str, Any]) -> str:
         "in the data — a field (e.g. type_full, has_backup, has_private_endpoint, sku, util_pct, "
         "telemetry_source) or a custom_tag (e.g. Criticality, RPO, RTO). If you cannot cite a present "
         "value, DO NOT output the item.\n"
-        "- The user's 'custom_tags' (Criticality, DR_Tier, RPO, RTO, Environment, Owner, DataClass) are "
-        "authoritative business intent — ground every score and recommendation in them.\n\n"
+        "- The user's 'custom_tags' are authoritative business intent from the Phase 1 BCDR planning "
+        "exercise — ground every score and recommendation in them. They may include: Criticality, "
+        "DR_Tier, RPO, RTO, Environment, Owner, DataClass, BusinessFunction, TargetRegion, DesiredSKU, "
+        "FinancialLossPerHour, AppDependencies, Compliance and PlanningNotes. Treat TargetRegion/DesiredSKU "
+        "as the customer's intended DR target state, FinancialLossPerHour as downtime business impact, "
+        "AppDependencies as recovery-ordering constraints, and Compliance/DataClass as residency/retention "
+        "drivers.\n\n"
         "RESOURCE-TYPE FIT (MANDATORY — this is what keeps the assessment specific, not generic):\n"
         "- For EACH resource, first determine what its Azure type ('type_full') actually IS and DOES, then "
         "assess it ONLY against controls that are RELEVANT to that type. Tailor every finding and "
@@ -470,13 +475,25 @@ def assess_project(project: Dict[str, Any], resources: List[Any], category: str)
     resource_dicts = [r if isinstance(r, dict) else getattr(r, "__dict__", {}) for r in (resources or [])]
     compressed = [_compress_resource(r) for r in resource_dicts]
     _enrich_with_custom_tags(compressed)
+
+    # 1b. Merge the user's Phase 1 BCDR planning inputs (criticality, DR tier, RTO/RPO, target
+    # region, desired SKU, business owner, financial loss/hr, app dependencies, data class,
+    # compliance) into each resource's custom_tags so they GROUND the assessment, and pull in any
+    # supporting documents the user uploaded in Phase 1. Phase 1 is authoritative business intent.
+    attach_block = ""
+    try:
+        import services.bcdr_metadata_service as _bcdr
+        attach_block = _bcdr.build_planning_grounding(compressed)
+    except Exception as exc:
+        logger.warning("BCDR Phase 1 enrichment skipped: %s", exc)
+
     tagged_count = sum(1 for r in compressed if r.get("custom_tags"))
     tag_summary = _build_tag_summary(compressed)
     resources_json = _serialize_for_ai(compressed)
 
     # 2. Build prompts and call the model (reuses the shared retry/backoff client).
     system_prompt = _build_system_prompt(cat)
-    user_prompt = _build_user_prompt(project, cat, tag_summary, resources_json, len(compressed))
+    user_prompt = _build_user_prompt(project, cat, tag_summary, resources_json, len(compressed)) + attach_block
     raw = _call_ai(system_prompt, user_prompt, max_tokens=MAX_TOKENS_PROJECT_ASSESSMENT)
 
     # 3. Parse robustly (handles token-cap truncation gracefully).

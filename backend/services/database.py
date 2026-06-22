@@ -45,7 +45,36 @@ _DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent.parent / "data
 _SQLITE_PATH = _DATA_DIR / "scans.db"
 
 # Azure SQL (used when provider=azuresql)
-_AZURE_SQL_CONN_STR: str = os.environ.get("AZURE_SQL_CONNECTION_STRING", "")
+def _resolve_sql_conn_str() -> str:
+    """Resolve the Azure SQL connection string robustly.
+
+    python-dotenv can mangle or drop a connection string that contains a ``$`` (it
+    interpolates POSIX-style ``$VAR`` references) or other special characters, leaving
+    the env var empty or with a wrong password. So: use the OS environment value when it
+    is well-formed, otherwise read the ``.env`` file LITERALLY (no interpolation) so the
+    exact password — ``$`` and all — is preserved. In production the env var is injected
+    directly (no ``.env`` present) and is used as-is.
+    """
+    env_val = os.environ.get("AZURE_SQL_CONNECTION_STRING", "")
+    if env_val and "Server=" in env_val and "Database=" in env_val and "Pwd=" in env_val:
+        return env_val
+    try:
+        env_path = Path(__file__).resolve().parent.parent / ".env"
+        if env_path.exists():
+            for raw in env_path.read_text(encoding="utf-8").splitlines():
+                s = raw.strip()
+                if s.startswith("AZURE_SQL_CONNECTION_STRING="):
+                    val = s.split("=", 1)[1].strip()
+                    if len(val) >= 2 and val[0] in "\"'" and val[-1] == val[0]:
+                        val = val[1:-1]
+                    if val:
+                        return val
+    except Exception:
+        pass
+    return env_val
+
+
+_AZURE_SQL_CONN_STR: str = _resolve_sql_conn_str()
 
 # Module-level flag for quick checks
 _pyodbc_available: bool = False

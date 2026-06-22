@@ -29,6 +29,24 @@ from services.database import get_raw_connection, is_azure_sql, create_table_sql
 
 logger = logging.getLogger(__name__)
 
+# projects stores named groups of resource IDs. DDL is written in SQLite dialect;
+# create_table_sql() translates it for Azure SQL (TEXT->NVARCHAR, IF NOT EXISTS guard).
+# This MUST be ensured on BOTH backends — the old code only created it on SQLite, so a
+# fresh Azure SQL database had no projects table and every create/add failed with 500.
+_PROJECTS_DDL = """
+CREATE TABLE IF NOT EXISTS projects (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    description  TEXT DEFAULT '',
+    resource_ids TEXT NOT NULL DEFAULT '[]',
+    color        TEXT DEFAULT '#3b82f6',
+    icon         TEXT DEFAULT '📁',
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+)
+"""
+_projects_table_ensured = False
+
 # project_assessments stores tag-grounded AI assessment runs per project + category.
 # DDL is written in SQLite dialect; create_table_sql() translates it for Azure SQL.
 _PROJECT_ASSESSMENTS_DDL = """
@@ -96,20 +114,17 @@ def _ensure_metadata_columns(db) -> None:
 
 def _conn():
     db = get_raw_connection()
-    if not is_azure_sql():
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS projects (
-                id           TEXT PRIMARY KEY,
-                name         TEXT NOT NULL,
-                description  TEXT DEFAULT '',
-                resource_ids TEXT NOT NULL DEFAULT '[]',
-                color        TEXT DEFAULT '#3b82f6',
-                icon         TEXT DEFAULT '📁',
-                created_at   TEXT NOT NULL,
-                updated_at   TEXT NOT NULL
-            )
-        """)
-        db.commit()
+    # Ensure the projects table on BOTH backends (Azure SQL DDL is auto-translated,
+    # idempotent via IF NOT EXISTS). Runs once per process. Previously this was created
+    # only on SQLite, leaving a fresh Azure SQL database with no projects table.
+    global _projects_table_ensured
+    if not _projects_table_ensured:
+        try:
+            db.execute(create_table_sql(_PROJECTS_DDL, indexed_cols={"id"}))
+            db.commit()
+            _projects_table_ensured = True
+        except Exception as exc:
+            logger.warning("projects table ensure failed (will retry next call): %s", exc)
     # Ensure the assessments table on BOTH backends (Azure SQL DDL is auto-translated,
     # idempotent via IF NOT EXISTS). Runs once per process.
     global _assessments_table_ensured
@@ -266,24 +281,59 @@ def delete_project(project_id: str) -> bool:
         return False
 
 
+def _mutate_project_resources(project_id: str, resource_ids: List[str], add: bool) -> Optional[Dict[str, Any]]:
+    """Add or remove resource ids in a SINGLE connection (1 SELECT + 1 UPDATE).
+
+    Previously add/remove called get_project() → update_project() (which itself did
+    get_project() → UPDATE → get_project()), i.e. ~4 separate connections + round-trips.
+    On remote Azure SQL that was ~6 seconds per add and looked like the click did nothing.
+    Doing it in one connection cuts the round-trips (and the latency) by more than half.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        db = _conn()
+        try:
+            if is_azure_sql():
+                cur = db.cursor()
+                cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+                rows = _cursor_rows_to_dicts(cur)
+                row = rows[0] if rows else None
+            else:
+                db.row_factory = sqlite3.Row
+                r = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+                row = dict(r) if r else None
+            if not row:
+                return None
+            current = json.loads(row.get("resource_ids") or "[]")
+            if add:
+                merged = list(set(current) | {r.lower() for r in resource_ids if r})
+            else:
+                remove_set = {r.lower() for r in resource_ids}
+                merged = [r for r in current if r not in remove_set]
+            db.execute(
+                "UPDATE projects SET resource_ids = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(merged), now, project_id),
+            )
+            db.commit()
+            # Build the return locally from the row we already have — no extra SELECT.
+            row["resource_ids"] = json.dumps(merged)
+            row["updated_at"] = now
+            return _row_to_dict(row)
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.error("mutate project resources (%s) failed: %s", "add" if add else "remove", exc)
+        raise
+
+
 def add_resources_to_project(project_id: str, resource_ids: List[str]) -> Optional[Dict[str, Any]]:
     """Append resources to an existing project (no duplicates)."""
-    existing = get_project(project_id)
-    if not existing:
-        return None
-    current = set(existing["resource_ids"])
-    new_ids = current | {r.lower() for r in resource_ids if r}
-    return update_project(project_id, resource_ids=list(new_ids))
+    return _mutate_project_resources(project_id, resource_ids, add=True)
 
 
 def remove_resources_from_project(project_id: str, resource_ids: List[str]) -> Optional[Dict[str, Any]]:
     """Remove specific resources from a project."""
-    existing = get_project(project_id)
-    if not existing:
-        return None
-    remove_set = {r.lower() for r in resource_ids}
-    remaining = [r for r in existing["resource_ids"] if r not in remove_set]
-    return update_project(project_id, resource_ids=remaining)
+    return _mutate_project_resources(project_id, resource_ids, add=False)
 
 
 # ── Project assessments (tag-grounded AI runs per category) ────────────────────
