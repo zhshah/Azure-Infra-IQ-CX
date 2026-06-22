@@ -185,8 +185,11 @@ export default function FilterBar({
     count: typeCounts[t] || 0,
   }))
 
+  const MG_ICON  = '/icons/general/10011-icon-service-Management-Groups.svg'
+  const SUB_ICON = '/icons/general/10002-icon-service-Subscriptions.svg'
+
   const subOptions = [
-    { value: '', label: `All ${effectiveSubs.length} subscriptions`, description: 'Show every accessible subscription' },
+    { value: '', label: `All ${effectiveSubs.length} subscriptions`, description: 'Show every accessible subscription', icon: SUB_ICON },
     ...mgGroups.map(mg => {
       const ids = mg.subscription_ids || []
       return {
@@ -195,6 +198,7 @@ export default function FilterBar({
         group: 'Management Groups',
         level: mg.level || 0,
         disabled: ids.length === 0,
+        icon: MG_ICON,
         description: ids.length
           ? `${ids.length} subscription${ids.length === 1 ? '' : 's'}`
           : 'No accessible subscriptions',
@@ -206,6 +210,7 @@ export default function FilterBar({
           label: 'Management groups unavailable',
           group: 'Management Groups',
           disabled: true,
+          icon: MG_ICON,
           description: "Grant the identity 'Management Group Reader' at the tenant root to see the hierarchy",
         }]
       : []),
@@ -213,6 +218,7 @@ export default function FilterBar({
       value: s.subscription_id,
       label: s.subscription_name || s.subscription_id.slice(0, 8) + '\u2026',
       group: 'Subscriptions',
+      icon: SUB_ICON,
       description: s.resource_count != null
         ? `$${(s.cost_current ?? 0).toFixed(0)}/mo · ${s.resource_count} resources`
         : `$${(s.cost_current ?? 0).toFixed(0)}/mo`,

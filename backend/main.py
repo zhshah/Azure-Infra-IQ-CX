@@ -7463,6 +7463,251 @@ async def bcdr_dashboard():
     return build_bcdr_dashboard_summary(assessments)
 
 
+@app.get("/api/bcdr/resilience")
+async def bcdr_resilience():
+    """Per-resource resiliency rows for the interactive Resiliency Explorer.
+
+    Joins the GENUINE zone assessment (zone_status / geo_redundant / workload_tier /
+    zone_risk_score computed from real resources) with the resource's cost & backup
+    signals and any BCDR Planning metadata (criticality / DR tier / RTO / RPO). The
+    client filters and charts these rows by subscription / resource-group / region /
+    type / criticality so every graph reflects the selected context — no AI, no mock.
+    """
+    assessments = _get_bcdr_assessments()  # list[ZoneAssessment]
+
+    # Index the curated resource dicts by id (for cost / backup / power state).
+    data = _cache.get("data:*") or _cache.get("data")
+    res_by_id: dict = {}
+    if data:
+        for r in (data.resources or []):
+            try:
+                d = r.model_dump()
+            except Exception:
+                continue
+            res_by_id[(d.get("resource_id") or "").lower()] = d
+
+    # BCDR Planning metadata (criticality / DR tier / RTO / RPO), keyed by id.
+    meta_lower: dict = {}
+    try:
+        raw_meta = bcdr_meta_svc.get_all_bcdr_metadata() if bcdr_meta_svc else {}
+        meta_lower = {(k or "").lower(): v for k, v in (raw_meta or {}).items()}
+    except Exception as exc:
+        logger.warning("bcdr resilience: metadata lookup failed: %s", exc)
+
+    # Custom tags (our own tagging layer), keyed by lowercased id — for tag-based filtering.
+    custom_lower: dict = {}
+    try:
+        raw_custom = tagging_svc.get_all_custom_tags()
+        custom_lower = {(k or "").lower(): (v or {}) for k, v in (raw_custom or {}).items()}
+    except Exception as exc:
+        logger.warning("bcdr resilience: custom tag lookup failed: %s", exc)
+
+    settings = settings_svc.get()
+    sub_names = {s.get("id", ""): s.get("name", "") for s in settings.get("subscriptions", [])}
+    try:
+        for _sid, _sname in (_sub_name_map() or {}).items():
+            if _sname:
+                sub_names[_sid] = _sname
+    except Exception:
+        pass
+
+    rows = []
+    for a in assessments:
+        ad = a.to_dict() if hasattr(a, "to_dict") else dict(a)
+        rid = ad.get("resource_id") or ""
+        rl = rid.lower()
+        rd = res_by_id.get(rl, {})
+        m = meta_lower.get(rl, {}) or {}
+        sub_id = ad.get("subscription_id") or rd.get("subscription_id") or ""
+        rows.append({
+            "resource_id":       rid,
+            "resource_name":     ad.get("resource_name") or rd.get("resource_name"),
+            "resource_type":     ad.get("resource_type") or rd.get("resource_type"),
+            "resource_group":    ad.get("resource_group") or rd.get("resource_group"),
+            "subscription_id":   sub_id,
+            "subscription_name": sub_names.get(sub_id, ""),
+            "location":          ad.get("location") or rd.get("location"),
+            # Genuine resiliency signals (computed by the zone assessment)
+            "zone_status":       ad.get("zone_status") or "Unknown",
+            "zone_detail":       ad.get("zone_detail") or "",
+            "geo_redundant":     bool(ad.get("geo_redundant")),
+            "paired_region":     ad.get("paired_region"),
+            "workload_tier":     ad.get("workload_tier") or "Unknown",
+            "zone_risk_score":   ad.get("zone_risk_score") or 0,
+            "needs_dr_action":   bool(ad.get("needs_dr_action")),
+            # Cost / protection (curated resource record)
+            "has_backup":        bool(rd.get("has_backup")),
+            "has_lock":          bool(rd.get("has_lock")),
+            "cost_current_month": rd.get("cost_current_month") or 0,
+            "final_score":       rd.get("final_score"),
+            "power_state":       rd.get("power_state"),
+            "sku":               rd.get("sku"),
+            # BCDR Planning intent (may be blank until classified in Planning)
+            "criticality":       m.get("criticality"),
+            "dr_tier":           m.get("dr_tier"),
+            "rto_target":        m.get("rto_target"),
+            "rpo_target":        m.get("rpo_target"),
+            "environment":       m.get("environment"),
+            # Tags for filtering (Azure resource tags + our custom tags)
+            "azure_tags":        (rd.get("tags") or {}),
+            "custom_tags":       custom_lower.get(rl, {}),
+        })
+
+    subs = sorted({(r["subscription_id"], r["subscription_name"]) for r in rows if r["subscription_id"]})
+    return {
+        "generated_at":  datetime.now(timezone.utc).isoformat(),
+        "total":         len(rows),
+        "rows":          rows,
+        "subscriptions": [{"id": s[0], "name": s[1]} for s in subs],
+    }
+
+
+class ResilienceExportBody(BaseModel):
+    payload: Dict[str, Any]
+
+
+@app.post("/api/bcdr/resilience/export.xlsx")
+async def bcdr_resilience_export_xlsx(body: ResilienceExportBody):
+    """Export the Resiliency Explorer's current (filtered) view as a formatted multi-sheet workbook."""
+    p = body.payload or {}
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+    except ImportError:
+        raise HTTPException(status_code=500, detail="openpyxl is not installed on the server")
+    from io import BytesIO
+
+    HFILL = PatternFill("solid", fgColor="1E3A5F"); HFONT = Font(bold=True, color="FFFFFF", size=11)
+    TITLE = Font(bold=True, color="2D8CFF", size=15); SUBTLE = Font(color="64748B", italic=True, size=9)
+    BOLD = Font(bold=True); GREEN = Font(bold=True, color="16A34A"); RED = Font(bold=True, color="DC2626")
+
+    def hdr(ws, headers, row=1):
+        for c, h in enumerate(headers, 1):
+            cell = ws.cell(row=row, column=c, value=h); cell.fill = HFILL; cell.font = HFONT
+            cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    def widths(ws, w):
+        for col, val in w.items():
+            ws.column_dimensions[col].width = val
+
+    def band(ws, title, row, span=2):
+        cell = ws.cell(row=row, column=1, value=title); cell.font = HFONT; cell.fill = HFILL
+        for c in range(2, span + 1):
+            ws.cell(row=row, column=c).fill = HFILL
+        return row + 1
+
+    scope = p.get("scope", {}) or {}
+    kpis = p.get("kpis", {}) or {}
+    gen = p.get("generated_at", "")
+    zone_order = ["ZoneRedundant", "Zonal", "NotZoneAware", "LocallyRedundant", "Unknown"]
+
+    wb = openpyxl.Workbook()
+
+    # 1 — Summary
+    ws = wb.active; ws.title = "Summary"
+    try:
+        _xlsx_brand_logo(ws, "E1")
+    except Exception:
+        pass
+    ws["A1"] = "Azure Resiliency Explorer — Posture Summary"; ws["A1"].font = TITLE
+    ws["A2"] = f"Generated {gen}  ·  Microsoft Confidential"; ws["A2"].font = SUBTLE
+    r = 4
+    r = band(ws, "Scope / Filters", r)
+    for k, v in scope.items():
+        ws.cell(row=r, column=1, value=k).font = BOLD
+        ws.cell(row=r, column=2, value=v); r += 1
+    r += 1
+    r = band(ws, "Resiliency KPIs", r)
+    for k, v in [
+        ("Resiliency Score (/100)", kpis.get("score")),
+        ("Resources in scope", kpis.get("total")),
+        ("Zone-redundant", f"{kpis.get('zr', 0)} ({kpis.get('zonePct', 0)}%)"),
+        ("Backup coverage", f"{kpis.get('backed', 0)} ({kpis.get('backupPct', 0)}%)"),
+        ("Geo-redundant", f"{kpis.get('geo', 0)} ({kpis.get('geoPct', 0)}%)"),
+        ("Critical at risk", kpis.get("critAtRisk")),
+        ("Avg zone-risk score", kpis.get("avgRisk")),
+        ("Exposed monthly spend ($)", kpis.get("monthlyExposed")),
+    ]:
+        ws.cell(row=r, column=1, value=k).font = BOLD
+        ws.cell(row=r, column=2, value=v); r += 1
+    widths(ws, {"A": 30, "B": 42})
+
+    # 2 — Distributions
+    ws2 = wb.create_sheet("Distributions"); r = 1
+    for title, dist in [("Availability-zone resilience", p.get("zone_distribution", {})),
+                        ("Backup coverage", p.get("backup_distribution", {})),
+                        ("Cross-region redundancy", p.get("geo_distribution", {}))]:
+        r = band(ws2, title, r)
+        for k, v in (dist or {}).items():
+            ws2.cell(row=r, column=1, value=k); ws2.cell(row=r, column=2, value=v); r += 1
+        r += 1
+    widths(ws2, {"A": 32, "B": 14})
+
+    # 3 — Breakdown (group-by, stacked by zone)
+    ws3 = wb.create_sheet("Breakdown")
+    gb = p.get("group_by_label", "Group"); ms = p.get("measure_label", "Count")
+    hdr(ws3, [gb, f"Total ({ms})"] + zone_order)
+    r = 2
+    for g in (p.get("groups", []) or []):
+        ws3.cell(row=r, column=1, value=g.get("name"))
+        ws3.cell(row=r, column=2, value=g.get("total"))
+        bz = g.get("byZone", {}) or {}
+        for ci, z in enumerate(zone_order, 3):
+            ws3.cell(row=r, column=ci, value=bz.get(z, 0))
+        r += 1
+    widths(ws3, {"A": 34, "B": 16, "C": 15, "D": 13, "E": 15, "F": 17, "G": 12})
+
+    # 4 — Top Risks
+    ws4 = wb.create_sheet("Top Risks")
+    hdr(ws4, ["Resource", "Type", "Resource Group", "Region", "Criticality", "Zone Status", "Backup", "Risk"])
+    r = 2
+    for x in (p.get("at_risk", []) or []):
+        ws4.cell(row=r, column=1, value=x.get("resource_name"))
+        ws4.cell(row=r, column=2, value=x.get("resource_type"))
+        ws4.cell(row=r, column=3, value=x.get("resource_group"))
+        ws4.cell(row=r, column=4, value=x.get("location"))
+        ws4.cell(row=r, column=5, value=x.get("criticality"))
+        ws4.cell(row=r, column=6, value=x.get("zone_status"))
+        bcell = ws4.cell(row=r, column=7, value="Yes" if x.get("has_backup") else "No")
+        bcell.font = GREEN if x.get("has_backup") else RED
+        ws4.cell(row=r, column=8, value=x.get("risk"))
+        r += 1
+    widths(ws4, {"A": 32, "B": 26, "C": 24, "D": 14, "E": 14, "F": 16, "G": 8, "H": 8})
+
+    # 5 — Resource Inventory (full filtered set)
+    ws5 = wb.create_sheet("Resource Inventory")
+    hdr(ws5, ["Resource", "Type", "Resource Group", "Subscription", "Region",
+              "Zone Status", "Geo-Redundant", "Backup", "Criticality", "DR Tier",
+              "RTO", "RPO", "Zone Risk", "Monthly $"])
+    r = 2
+    for x in (p.get("rows", []) or []):
+        ws5.cell(row=r, column=1, value=x.get("resource_name"))
+        ws5.cell(row=r, column=2, value=x.get("resource_type"))
+        ws5.cell(row=r, column=3, value=x.get("resource_group"))
+        ws5.cell(row=r, column=4, value=x.get("subscription_name") or x.get("subscription_id"))
+        ws5.cell(row=r, column=5, value=x.get("location"))
+        ws5.cell(row=r, column=6, value=x.get("zone_status"))
+        ws5.cell(row=r, column=7, value="Yes" if x.get("geo_redundant") else "No")
+        ws5.cell(row=r, column=8, value="Yes" if x.get("has_backup") else "No")
+        ws5.cell(row=r, column=9, value=x.get("criticality"))
+        ws5.cell(row=r, column=10, value=x.get("dr_tier"))
+        ws5.cell(row=r, column=11, value=x.get("rto_target"))
+        ws5.cell(row=r, column=12, value=x.get("rpo_target"))
+        ws5.cell(row=r, column=13, value=x.get("zone_risk_score"))
+        ws5.cell(row=r, column=14, value=x.get("cost_current_month"))
+        r += 1
+    widths(ws5, {"A": 32, "B": 26, "C": 22, "D": 26, "E": 13, "F": 16,
+                 "G": 13, "H": 8, "I": 13, "J": 12, "K": 11, "L": 11, "M": 10, "N": 11})
+
+    buf = BytesIO(); wb.save(buf); buf.seek(0)
+    fname = "Resiliency-Explorer-" + datetime.now(timezone.utc).strftime("%Y%m%d") + ".xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 @app.get("/api/bcdr/assessments")
 async def bcdr_assessments(
     location: Optional[str] = None,
@@ -7531,13 +7776,36 @@ async def bcdr_refresh():
 
 @app.get("/api/bcdr/business-impact")
 async def bcdr_business_impact():
-    """Business Impact Analysis — criticality tiers, impact scores, downtime costs."""
+    """Business Impact Analysis — criticality tiers, impact scores, downtime costs.
+
+    Grounded in the customer's BCDR Planning tags (criticality / RTO / RPO /
+    financial loss per hour) where present, falling back to type/cost inference.
+    """
     data = _cache.get("data:*") or _cache.get("data")
     if not data:
         raise HTTPException(status_code=404, detail="No scan data available")
     resources = [r.model_dump() for r in (data.resources or [])]
     assessments = _get_bcdr_assessments()
-    return build_business_impact_analysis(resources, assessments)
+    meta = {}
+    try:
+        meta = bcdr_meta_svc.get_all_bcdr_metadata() if bcdr_meta_svc else {}
+    except Exception as exc:
+        logger.warning("BIA: BCDR metadata lookup failed: %s", exc)
+    custom = {}
+    try:
+        raw_custom = tagging_svc.get_all_custom_tags()
+        custom = {(k or "").lower(): (v or {}) for k, v in (raw_custom or {}).items()}
+    except Exception as exc:
+        logger.warning("BIA: custom tag lookup failed: %s", exc)
+    settings = settings_svc.get()
+    sub_names = {s.get("id", ""): s.get("name", "") for s in settings.get("subscriptions", [])}
+    try:
+        for _sid, _sname in (_sub_name_map() or {}).items():
+            if _sname:
+                sub_names[_sid] = _sname
+    except Exception:
+        pass
+    return build_business_impact_analysis(resources, assessments, metadata=meta, custom_tags=custom, sub_names=sub_names)
 
 
 @app.get("/api/bcdr/recovery-sequence")

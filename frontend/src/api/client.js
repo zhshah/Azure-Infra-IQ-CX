@@ -209,6 +209,22 @@ export const api = {
 
   // BCDR Assessment
   getBCDRDashboard:      ()          => request('/bcdr/dashboard'),
+  getBCDRResilience:     ()          => request('/bcdr/resilience'),
+  exportResiliencyXlsx: async (payload) => {
+    const res = await fetch(`${BASE}/bcdr/resilience/export.xlsx`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ payload }),
+    })
+    if (!res.ok) {
+      const t = await res.text().catch(() => ''); let detail; try { detail = JSON.parse(t).detail } catch {}
+      throw new Error(detail || `Excel export failed (HTTP ${res.status})`)
+    }
+    const blob = await res.blob()
+    const cd = res.headers.get('Content-Disposition') || ''
+    const fname = cd.match(/filename="?([^"]+)"?/)?.[1] || 'resiliency-explorer.xlsx'
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = fname
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+  },
   getBCDRAssessments:    (params)    => request(`/bcdr/assessments?${new URLSearchParams(params || {}).toString()}`),
   getBCDRQuickWins:      ()          => request('/bcdr/quick-wins'),
   getBCDRResource:       (id)        => request(`/bcdr/resource/${encodeURIComponent(id)}`),

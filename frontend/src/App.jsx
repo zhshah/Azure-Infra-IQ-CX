@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { RefreshCw, AlertCircle, AlertTriangle, Settings, FlaskConical, Brain, X, Lock, Loader, Clock, LayoutGrid, List, ChevronLeft, ChevronRight, ChevronDown, Shield, Zap, Rocket, DollarSign, Lightbulb, Globe, Target, Search, BarChart2, Monitor, Database, HardDrive, Microscope, Cloud, CloudSun, Hammer, TrendingUp, ClipboardList, Map as MapIcon, Bot, Network, Tag, Compass, Download } from 'lucide-react'
+import { RefreshCw, AlertCircle, AlertTriangle, Settings, FlaskConical, Brain, X, Lock, Loader, Clock, LayoutGrid, List, ChevronLeft, ChevronRight, ChevronDown, Shield, Zap, Rocket, DollarSign, Lightbulb, Globe, Target, Search, BarChart2, Monitor, Database, HardDrive, Cloud, CloudSun, Hammer, TrendingUp, ClipboardList, Map as MapIcon, Bot, Network, Tag, Compass, Download } from 'lucide-react'
 import clsx from 'clsx'
 import { DataTable, KPICard as SharedKPI, SeverityBadge } from './components/shared/ModuleWidgets'
 
@@ -402,12 +402,13 @@ import ProjectsPanel          from './components/ProjectsPanel'
 import ProjectsModule         from './components/ProjectsModule'
 import AssessmentModule       from './components/AssessmentModule'
 import BCDRDashboard          from './components/bcdr/BCDRDashboard'
+import ResiliencyExplorer     from './components/bcdr/ResiliencyExplorer'
 import BCDRAssessmentTable    from './components/bcdr/BCDRAssessmentTable'
 import BCDRPlanningPanel      from './components/BCDRPlanningPanel'
 import { asText }             from './utils/safeText'
 import NetworkingDashboard    from './components/networking/NetworkingDashboard'
 import NetworkingAIAnalysis   from './components/networking/NetworkingAIAnalysis'
-import { MaturityAIAnalysis, SecurityAIAnalysis, InnovationAIAnalysis, MigrationAIAnalysis, BackupAIAnalysis, ResilienceAIAnalysis, DeepBCDRAnalysis } from './components/AIModuleReports'
+import { MaturityAIAnalysis, SecurityAIAnalysis, InnovationAIAnalysis, MigrationAIAnalysis, BackupAIAnalysis, ResilienceAIAnalysis } from './components/AIModuleReports'
 import { buildSubNameMap, subNameRenderer, scoreBadgeRenderer, severityBadgeRenderer, costRenderer, boolBadgeRenderer } from './utils/subscriptionNames.jsx'
 import { ToastHost, notify } from './components/Toast'
 import { addToExistingProject } from './utils/projectActions'
@@ -1479,6 +1480,7 @@ function AppInner() {
   const [bootReconnecting, setBootReconnecting] = useState(false)  // true while retrying a failed /api/settings (keeps spinner, never the wizard)
   const [launched,       setLaunched]       = useState(false)
   const [view,           setView]           = useState('overview')
+  const [securityTab,    setSecurityTab]    = useState(null)   // deep-link a Security sub-tab on entry (one-shot)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [moduleListMode, setModuleListMode] = useState(false)  // toggle cards vs list view in module sections
   const [infraView,      setInfraView]      = useState('map')
@@ -2251,7 +2253,7 @@ function AppInner() {
 
         {/* ── Security view ── */}
         {view === 'security' && (<>
-          <SecurityView data={data} filteredResources={filteredResources} moduleListMode={moduleListMode} setModuleListMode={setModuleListMode} tableFilter={tableFilter} setTableFilter={setTableFilter} projects={projects} setProjects={setProjects} setSelectedResourceIds={setSelectedResourceIds} setSaveProjectModalOpen={setSaveProjectModalOpen} />
+          <SecurityView data={data} filteredResources={filteredResources} moduleListMode={moduleListMode} setModuleListMode={setModuleListMode} tableFilter={tableFilter} setTableFilter={setTableFilter} projects={projects} setProjects={setProjects} setSelectedResourceIds={setSelectedResourceIds} setSaveProjectModalOpen={setSaveProjectModalOpen} initialTab={securityTab} onInitialTabUsed={() => setSecurityTab(null)} />
           <CrossModuleLinks onNavigate={setView} links={[
             { key: 'backup', label: 'Review Backup Coverage', color: '#22c55e', icon: '/icons/storage/00017-icon-service-Recovery-Services-Vaults.svg' },
             { key: 'bcdr', label: 'BCDR Assessment', color: '#3b82f6', icon: '/icons/migrate/10351-icon-service-Azure-Migrate.svg' },
@@ -2575,7 +2577,7 @@ function AppInner() {
         <StrategicNav data={data} resources={filteredResources} onNavigate={setView} />
 
         {/* Microsoft 365 Security Operations — compact estate-wide security strip */}
-        <M365SecurityDashboard compact onOpen={() => setView('security')} />
+        <M365SecurityDashboard compact onOpen={() => { setSecurityTab('m365'); setView('security') }} />
 
         {/* AI Insights — estate-wide AI intelligence dashboard (per-category) */}
         <AIInsightsDashboard onNavigate={setView} />
@@ -2822,6 +2824,38 @@ function AIBCDRPanel() {
           </button>
         </div>
       </div>
+
+      {data && !error && (data._cached || data.analysis_latency_seconds || data.grounding_metrics) && (
+        <div className={clsx(
+          'rounded-lg border p-3 flex flex-wrap items-center justify-between gap-3 text-xs',
+          data._cached
+            ? 'border-amber-800/50 bg-amber-950/20 text-amber-200'
+            : 'border-green-800/50 bg-green-950/20 text-green-200'
+        )}>
+          <div className="flex items-center gap-2">
+            <span>{data._cached ? '🗂️' : '✨'}</span>
+            <span>
+              {data._cached
+                ? <>Cached analysis from <strong>{data.cache_age_minutes != null ? `${data.cache_age_minutes} min ago` : 'earlier'}</strong>. Click <em>Force re-run</em> to regenerate with fresh AI processing (typically 60–120 s).</>
+                : <>Fresh AI analysis generated in <strong>{data.analysis_latency_seconds}s</strong> by {data.model || 'Azure OpenAI'}. Cached for 24 h.</>}
+            </span>
+          </div>
+          {data.grounding_metrics && (
+            <div className="flex items-center gap-3 text-[11px] opacity-90">
+              <span>Sample: <strong>{data.grounding_metrics.sample_size}</strong> of {data.grounding_metrics.total_resources}</span>
+              <span>Phase-1 tagged: <strong>{data.grounding_metrics.tagged_resources}</strong></span>
+              <span>Stated $-loss: <strong>{data.grounding_metrics.stated_loss_resources}</strong></span>
+              {data.grounding_metrics.data_confidence && (
+                <span title="How grounded the exposure is. Higher stated% = higher fidelity.">
+                  Fidelity: stated <strong>{data.grounding_metrics.data_confidence.stated_pct}%</strong>
+                  {' '}/ cost-derived <strong>{data.grounding_metrics.data_confidence.cost_derived_pct}%</strong>
+                  {' '}/ floor <strong>{data.grounding_metrics.data_confidence.floor_derived_pct}%</strong>
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {error && (
         <div className="rounded-lg border border-red-700/50 bg-red-950/20 p-4 space-y-2">
@@ -3208,6 +3242,17 @@ function AIBCDRPanel() {
                   <p className="text-lg font-bold text-purple-400">{data.cost_benefit_analysis.risk_reduction_percentage}</p>
                 </div>
               </div>
+              <p className="text-[11px] text-gray-500 leading-relaxed">
+                {data.cost_benefit_analysis.basis
+                  ? data.cost_benefit_analysis.basis + ' '
+                  : ''}
+                Grounding:&nbsp;
+                {data.grounding_metrics?.tagged_resources ?? 0} of {data.grounding_metrics?.total_resources ?? 0} resources have Phase-1 BCDR tags;
+                {' '}{data.grounding_metrics?.stated_loss_resources ?? 0} have a stated <code className="text-gray-400">financial_loss_per_hour</code>.
+                The risk-exposure range is computed from <code className="text-gray-400">Σ (tier-count × avg downtime $/hr × estimated annual unmitigated downtime hours)</code>;
+                the recommended investment is 8–15% of the {data.grounding_metrics?.annual_run_rate_usd != null ? `$${Number(data.grounding_metrics.annual_run_rate_usd).toLocaleString(undefined,{maximumFractionDigits:0})}` : ''} annual Azure run-rate.
+                Tag more resources in <strong>BCDR Planning</strong> to tighten these figures.
+              </p>
             </div>
           )}
 
@@ -3369,8 +3414,10 @@ function MaturityView({ data, filteredResources, moduleListMode, setModuleListMo
   )
 }
 
-function SecurityView({ data, filteredResources, moduleListMode, setModuleListMode, tableFilter, setTableFilter, projects, setProjects, setSelectedResourceIds, setSaveProjectModalOpen }) {
-  const [tab, setTab] = React.useState('dashboard')
+function SecurityView({ data, filteredResources, moduleListMode, setModuleListMode, tableFilter, setTableFilter, projects, setProjects, setSelectedResourceIds, setSaveProjectModalOpen, initialTab, onInitialTabUsed }) {
+  const [tab, setTab] = React.useState(initialTab || 'dashboard')
+  // Consume the deep-link target tab once on mount so later (sidebar) visits default to Dashboard.
+  React.useEffect(() => { if (initialTab) onInitialTabUsed?.() }, [])
   // activeSecFilter: null = all, 'critical' | 'high' | 'medium' | 'low' = severity filter
   const [activeSecFilter, setActiveSecFilter] = React.useState(null)
   const gaps = data?.security_gaps ?? []
@@ -3857,11 +3904,10 @@ function BCDRView({ resources = [] }) {
       <div className="flex items-center gap-1 border-b border-gray-800 pb-3">
         {[
           { key: 'dashboard',  label: 'Dashboard', Icon: Shield },
+          { key: 'explorer',   label: 'Resiliency Explorer', Icon: Compass },
           { key: 'planning',   label: 'BCDR Planning', Icon: ClipboardList },
-          { key: 'assessment', label: 'Full Assessment (19-Column SA Analysis)', Icon: ClipboardList },
           { key: 'ai',         label: 'AI BCDR Analysis', Icon: Brain },
           { key: 'avs',        label: 'AVS DR', Icon: Cloud },
-          { key: 'deep',       label: 'Deep BCDR AI', Icon: Microscope },
         ].map(t => (
           <button
             key={t.key}
@@ -3876,12 +3922,11 @@ function BCDRView({ resources = [] }) {
           </button>
         ))}
       </div>
-      {tab === 'dashboard'   && <BCDRDashboard onViewAssessment={() => setTab('assessment')} />}
+      {tab === 'dashboard'   && <BCDRDashboard />}
+      {tab === 'explorer'    && <ResiliencyExplorer resources={resources} />}
       {tab === 'planning'    && <BCDRPlanningPanel resources={resources} />}
-      {tab === 'assessment'  && <BCDRAssessmentTable />}
       {tab === 'ai'          && <AIBCDRPanel />}
       {tab === 'avs'         && <AVSDRPanel />}
-      {tab === 'deep'        && <DeepBCDRAnalysis />}
     </div>
   )
 }

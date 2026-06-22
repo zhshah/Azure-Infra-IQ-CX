@@ -891,7 +891,9 @@ def analyze_environment_bcdr(
     - Implementation roadmap
     """
     import services.tagging_service as tag_svc
-    
+    import time as _time
+    from datetime import datetime as _dt, timezone as _tz
+
     # Load user-defined BCDR metadata (Phase 1)
     try:
         import services.bcdr_metadata_service as bcdr_meta_svc
@@ -900,11 +902,19 @@ def analyze_environment_bcdr(
     except Exception as e:
         logger.warning(f"Could not load BCDR metadata: {e}")
         metadata_map = {}
-    
+
     if not force_refresh:
         cached = tag_svc.get_latest_ai_analysis("bcdr_environment", None, max_age_hours=24)
         if cached:
-            return cached["result"]
+            result = cached["result"] or {}
+            result["_cached"] = True
+            result["analyzed_at"] = cached.get("analyzed_at") or result.get("analysis_timestamp")
+            try:
+                _ts = _dt.fromisoformat((cached.get("analyzed_at") or "").replace("Z", "+00:00"))
+                result["cache_age_minutes"] = round((_dt.now(tz=_tz.utc) - _ts).total_seconds() / 60.0, 1)
+            except Exception:
+                result["cache_age_minutes"] = None
+            return result
     
     client, model, provider = _get_ai_client_for_analysis()
     if not client:
@@ -946,14 +956,330 @@ def analyze_environment_bcdr(
         else:
             zone_support["regional_only"] += 1
     
-    # Sample critical resources for detailed analysis (limit tokens)
-    critical_resources = [r for r in resources if r.get("final_score", 100) < 60 or not r.get("has_backup")]
-    sample_resources = critical_resources[:50] if len(critical_resources) > 50 else critical_resources
-    
+    # Roll up the customer's Phase-1 BCDR classification (authoritative business intent)
+    for _r in resources:
+        _um = _r.get("user_bcdr_metadata") or {}
+        _crit = (_um.get("criticality") or "").strip()
+        if _crit:
+            user_categorized["by_criticality"][_crit] = user_categorized["by_criticality"].get(_crit, 0) + 1
+        _dtier = (_um.get("dr_tier") or "").strip()
+        if _dtier:
+            user_categorized["by_dr_tier"][_dtier] = user_categorized["by_dr_tier"].get(_dtier, 0) + 1
+
+    def _user_critical(res):
+        c = ((res.get("user_bcdr_metadata") or {}).get("criticality") or "").lower()
+        return any(k in c for k in ("critical", "high", "mission", "tier 0", "tier 1", "tier0", "tier1"))
+
+    # ── Build a stratified sample: every tagged-critical + a wide slice of at-risk ──
+    # The earlier 60-resource cap routinely missed entire service families; we now feed
+    # a much larger, deduplicated sample so the AI can see the actual spread.
+    SAMPLE_CAP = 150
+    seen_ids = set()
+    sample_resources: List[dict] = []
+
+    def _take(pool):
+        for r in pool:
+            rid = r.get("resource_id") or id(r)
+            if rid in seen_ids:
+                continue
+            seen_ids.add(rid)
+            sample_resources.append(r)
+            if len(sample_resources) >= SAMPLE_CAP:
+                return True
+        return False
+
+    # 1) ALL business-critical-by-tag (authoritative customer intent)
+    if _take([r for r in resources if _user_critical(r)]):
+        pass
+    # 2) Lowest-score (most at-risk) resources
+    if len(sample_resources) < SAMPLE_CAP:
+        _take(sorted(resources, key=lambda r: r.get("final_score", 100)))
+    # 3) Unprotected resources (no backup) — fill remainder
+    if len(sample_resources) < SAMPLE_CAP:
+        _take([r for r in resources if not r.get("has_backup")])
+    # 4) Highest-cost resources — fill remainder so the AI sees the financial weight
+    if len(sample_resources) < SAMPLE_CAP:
+        _take(sorted(resources, key=lambda r: r.get("cost_current_month", 0) or 0, reverse=True))
+
+    # Keep the original critical_resources count for messaging (parity with previous behaviour)
+    critical_resources = [r for r in resources
+                          if r.get("final_score", 100) < 60 or not r.get("has_backup") or _user_critical(r)]
+
     compressed_sample = [_compress_resource(r) for r in sample_resources]
     _enrich_with_custom_tags(compressed_sample)
+    # Re-attach each resource's Phase-1 BCDR classification so the AI grounds findings in the
+    # customer's stated criticality / DR tier / RTO / RPO / financial-loss targets.
+    for _cr, _orig in zip(compressed_sample, sample_resources):
+        _um = _orig.get("user_bcdr_metadata") or {}
+        _bc = {k: v for k, v in {
+            "criticality":             _um.get("criticality"),
+            "dr_tier":                 _um.get("dr_tier"),
+            "rto_target":              _um.get("rto_target"),
+            "rpo_target":              _um.get("rpo_target"),
+            "financial_loss_per_hour": _um.get("financial_loss_per_hour"),
+            "business_function":       _um.get("business_function"),
+            "data_classification":     _um.get("data_classification"),
+            "compliance":              _um.get("compliance"),
+            "environment":             _um.get("environment"),
+        }.items() if v}
+        if _bc:
+            _cr["bcdr_classification"] = _bc
     tag_context = _build_tag_summary(compressed_sample)
+
+    # ── GROUNDED FINANCIAL CONTEXT ──────────────────────────────────────────────
+    # Fully data-driven baseline that adapts to any customer size from $100/mo
+    # sandboxes to multi-million-$/yr enterprises. Inputs we actually use:
+    #   • per-resource monthly cost (real Azure spend)
+    #   • customer-stated financial_loss_per_hour (authoritative — used as-is)
+    #   • customer-stated criticality (drives tier multipliers + outage hours)
+    #   • actual backup + zone-redundancy posture (reduces expected outage hours)
+    # Per-resource hourly business loss:
+    #   stated_loss  → customer's tagged financial_loss_per_hour
+    #   else         → max(tier_floor_$/hr, hourly_Azure_spend × tier_multiplier)
+    # Per-resource annual exposure:
+    #   per_hr × tier_annual_outage_hours × posture_factor
+    # where posture_factor = 0.25 (backup + zone-redundant), 0.5 (backup only), 1.0 (neither).
+    financial_ground_truth: dict = {}
+    try:
+        from services.bcdr_enhanced_service import _parse_money
+
+        # tier_floor_$/hr: minimum hourly loss attributed to a resource at this tier,
+        # regardless of compute spend (covers data / SLA / engineering-time impact).
+        TIER_HOURLY_FLOOR = {
+            "Mission-Critical":     250.0,
+            "Business-Critical":     50.0,
+            "Business-Operational":   5.0,
+            "Low":                    0.0,
+        }
+        # Multiplier applied to per-resource hourly Azure spend (monthly_cost / 730h).
+        TIER_COST_MULTIPLIER = {
+            "Mission-Critical":     50.0,
+            "Business-Critical":    20.0,
+            "Business-Operational":  5.0,
+            "Low":                   2.0,
+        }
+        # Estimated annual unmitigated downtime hours per tier (current posture, before
+        # the posture_factor reduction below). These are conservative midpoints.
+        ANNUAL_DT_HRS = {
+            "Mission-Critical":      8.0,
+            "Business-Critical":     4.0,
+            "Business-Operational":  2.0,
+            "Low":                   1.0,
+        }
+        # Untagged resources are treated as Business-Operational — a defensible middle
+        # ground until the customer tags them in BCDR Planning.
+        TIER_HOURLY_FLOOR["Unknown"]   = TIER_HOURLY_FLOOR["Business-Operational"]
+        TIER_COST_MULTIPLIER["Unknown"] = TIER_COST_MULTIPLIER["Business-Operational"]
+        ANNUAL_DT_HRS["Unknown"]        = ANNUAL_DT_HRS["Business-Operational"]
+
+        # Posture multiplier — actual Azure configuration reduces expected outage hours.
+        POSTURE_FACTOR = {
+            "backup+zone": 0.25,   # backup AND zone-redundant
+            "backup":      0.50,   # backup only
+            "none":        1.00,   # no backup, no zone redundancy
+        }
+
+        def _tier_from_meta(crit: str) -> str:
+            c = (crit or "").lower()
+            if not c:
+                return "Unknown"
+            if any(k in c for k in ("mission", "tier 0", "tier0")):
+                return "Mission-Critical"
+            if any(k in c for k in ("critical", "high", "tier 1", "tier1")):
+                return "Business-Critical"
+            if any(k in c for k in ("medium", "tier 2", "operational")):
+                return "Business-Operational"
+            if any(k in c for k in ("low", "tier 3", "sandbox", "dev", "test")):
+                return "Low"
+            return "Unknown"
+
+        def _posture_key(r: dict) -> str:
+            backup = bool(r.get("has_backup"))
+            zone   = bool(r.get("zone_redundant"))
+            if backup and zone: return "backup+zone"
+            if backup:          return "backup"
+            return "none"
+
+        annual_run_rate    = round(sum((r.get("cost_current_month") or 0) for r in resources) * 12.0, 2)
+        total_hourly_loss  = 0.0
+        total_stated_hr    = 0.0
+        stated_count       = 0
+        tagged_count       = 0
+        expected_exposure  = 0.0
+        # Source breakdown: how much of the exposure comes from stated vs cost-derived vs floor-derived
+        exposure_by_source = {"stated": 0.0, "cost_derived": 0.0, "floor_derived": 0.0}
+        tier_breakdown: Dict[str, Dict[str, float]] = {}
+        posture_counts = {"backup+zone": 0, "backup": 0, "none": 0}
+
+        for r in resources:
+            monthly = float(r.get("cost_current_month") or 0)
+            hourly_az = monthly / 730.0
+            um = r.get("user_bcdr_metadata") or {}
+            crit = (um.get("criticality") or "").strip() if um else ""
+            tier = _tier_from_meta(crit)
+            if crit:
+                tagged_count += 1
+
+            posture = _posture_key(r)
+            posture_counts[posture] += 1
+            posture_factor = POSTURE_FACTOR[posture]
+
+            stated_loss = _parse_money((um or {}).get("financial_loss_per_hour"))
+            cost_based  = hourly_az * TIER_COST_MULTIPLIER[tier]
+            floor       = TIER_HOURLY_FLOOR[tier]
+
+            if stated_loss and stated_loss > 0:
+                per_hr = float(stated_loss)
+                source = "stated"
+                total_stated_hr += per_hr
+                stated_count += 1
+            elif cost_based >= floor:
+                per_hr = cost_based
+                source = "cost_derived"
+            else:
+                per_hr = floor
+                source = "floor_derived"
+
+            annual_loss_for_res = per_hr * ANNUAL_DT_HRS[tier] * posture_factor
+            total_hourly_loss   += per_hr
+            expected_exposure   += annual_loss_for_res
+            exposure_by_source[source] += annual_loss_for_res
+
+            tb = tier_breakdown.setdefault(tier, {
+                "count": 0, "hourly_loss": 0.0, "annual_exposure": 0.0,
+                "monthly_cost": 0.0,
+            })
+            tb["count"]            += 1
+            tb["hourly_loss"]      += per_hr
+            tb["annual_exposure"]  += annual_loss_for_res
+            tb["monthly_cost"]     += monthly
+
+        total_hourly_loss = round(total_hourly_loss, 2)
+        expected_exposure = round(expected_exposure, 2)
+        exposure_low  = round(expected_exposure * 0.70, 2)
+        exposure_high = round(expected_exposure * 1.50, 2)
+
+        # Recommended DR investment scales with the larger of:
+        #   • a percentage of annual Azure run-rate (industry-typical DR uplift)
+        #   • a percentage of computed annual exposure (responds to actual risk)
+        # No artificial floor — small estates get small numbers; high-exposure estates
+        # get investment driven by risk, not by compute spend.
+        invest_low  = round(max(annual_run_rate * 0.10, expected_exposure * 0.15), 2)
+        invest_high = round(max(annual_run_rate * 0.15, expected_exposure * 0.25), 2)
+
+        # Per-tier summary in the shape the prompt expects
+        tier_summary = [
+            {
+                "tier":                tier,
+                "count":               int(b["count"]),
+                "total_hourly_loss":   round(b["hourly_loss"], 2),
+                "annual_exposure_usd": round(b["annual_exposure"], 2),
+                "monthly_cost_usd":    round(b["monthly_cost"], 2),
+                "annual_outage_hours": ANNUAL_DT_HRS[tier],
+            }
+            for tier, b in sorted(tier_breakdown.items(),
+                                   key=lambda kv: -kv[1]["annual_exposure"])
+        ]
+
+        # Data confidence — how grounded the exposure is in customer-stated data
+        total_for_conf = max(expected_exposure, 1e-9)
+        data_confidence = {
+            "stated_pct":        round(exposure_by_source["stated"]        / total_for_conf * 100, 1),
+            "cost_derived_pct":  round(exposure_by_source["cost_derived"]  / total_for_conf * 100, 1),
+            "floor_derived_pct": round(exposure_by_source["floor_derived"] / total_for_conf * 100, 1),
+        }
+
+        financial_ground_truth = {
+            "annual_azure_run_rate_usd":         annual_run_rate,
+            "total_hourly_loss_usd":             total_hourly_loss,
+            "total_stated_hourly_loss_usd":      round(total_stated_hr, 2),
+            "stated_loss_resources":             stated_count,
+            "tagged_resources":                  tagged_count,
+            "total_resources_in_calc":           len(resources),
+            "tier_summary":                      tier_summary,
+            "posture_counts":                    posture_counts,
+            "posture_factor":                    POSTURE_FACTOR,
+            "annual_downtime_hrs_by_tier":       ANNUAL_DT_HRS,
+            "tier_hourly_floor_usd":             TIER_HOURLY_FLOOR,
+            "tier_cost_multiplier":              TIER_COST_MULTIPLIER,
+            "exposure_by_source_usd":            {k: round(v, 2) for k, v in exposure_by_source.items()},
+            "data_confidence":                   data_confidence,
+            "annual_risk_exposure_expected_usd": expected_exposure,
+            "annual_risk_exposure_low_usd":      exposure_low,
+            "annual_risk_exposure_high_usd":     exposure_high,
+            "recommended_investment_low_usd":    invest_low,
+            "recommended_investment_high_usd":   invest_high,
+        }
+        logger.info(
+            "BCDR ground-truth: run-rate=$%s/yr, hourly-loss=$%s/hr (stated %d / tagged %d / total %d), "
+            "exposure=$%s-$%s (stated %s%%, cost %s%%, floor %s%%), invest=$%s-$%s, "
+            "posture: backup+zone=%d backup=%d none=%d",
+            f"{annual_run_rate:,.0f}", f"{total_hourly_loss:,.0f}",
+            stated_count, tagged_count, len(resources),
+            f"{exposure_low:,.0f}", f"{exposure_high:,.0f}",
+            data_confidence["stated_pct"], data_confidence["cost_derived_pct"], data_confidence["floor_derived_pct"],
+            f"{invest_low:,.0f}", f"{invest_high:,.0f}",
+            posture_counts["backup+zone"], posture_counts["backup"], posture_counts["none"],
+        )
+    except Exception as _ge:
+        logger.warning("Could not compute BCDR financial ground truth: %s", _ge)
+        financial_ground_truth = {}
     
+    # Build a human-readable ground-truth block for the prompt
+    if financial_ground_truth:
+        _gt = financial_ground_truth
+        _est_count = _gt['total_resources_in_calc'] - _gt['stated_loss_resources']
+        _dc = _gt['data_confidence']
+        gt_block = f"""
+GROUNDED FINANCIAL CONTEXT (fully data-driven from THIS customer's estate — AUTHORITATIVE, DO NOT INVENT):
+
+ESTATE FACTS:
+- Resources analysed: {_gt['total_resources_in_calc']}
+- Annual Azure run-rate (12 × current monthly cost across estate): ${_gt['annual_azure_run_rate_usd']:,.2f}
+- Resources with Phase-1 BCDR tags: {_gt['tagged_resources']} of {_gt['total_resources_in_calc']}
+- Resources with stated financial_loss_per_hour: {_gt['stated_loss_resources']}
+- Actual posture: backup+zone={_gt['posture_counts']['backup+zone']}, backup-only={_gt['posture_counts']['backup']}, neither={_gt['posture_counts']['none']}
+
+METHODOLOGY (per resource, fully scales with customer size and posture):
+  per_hr_loss = customer's stated financial_loss_per_hour, ELSE max(tier_floor_$/hr, hourly_Azure_spend × tier_multiplier)
+  annual_exposure = per_hr_loss × tier_annual_outage_hours × posture_factor
+  where:
+    hourly_Azure_spend  = monthly_cost / 730
+    tier_floor_$/hr     = {json.dumps(_gt['tier_hourly_floor_usd'])}
+    tier_multiplier     = {json.dumps(_gt['tier_cost_multiplier'])}
+    tier_outage_hours/yr = {json.dumps(_gt['annual_downtime_hrs_by_tier'])}
+    posture_factor      = {json.dumps(_gt['posture_factor'])}  (backup AND zone redundancy reduce expected outage hours)
+  Untagged resources are treated as Business-Operational (defensible middle ground).
+
+PER-TIER BREAKDOWN (count, monthly_cost, total_hourly_loss, annual_exposure):
+{json.dumps(_gt['tier_summary'], indent=2)}
+
+DATA CONFIDENCE (how grounded the exposure is):
+- Customer-stated portion:        {_dc['stated_pct']}% of annual exposure
+- Cost-derived portion:           {_dc['cost_derived_pct']}% of annual exposure
+- Tier-floor portion (fallback):  {_dc['floor_derived_pct']}% of annual exposure
+(Higher stated_pct → higher fidelity. Customer can raise this by tagging financial_loss_per_hour in BCDR Planning.)
+
+COMPUTED ANNUAL RISK EXPOSURE:
+  Expected: ${_gt['annual_risk_exposure_expected_usd']:,.2f}/yr
+  Range:    ${_gt['annual_risk_exposure_low_usd']:,.2f} – ${_gt['annual_risk_exposure_high_usd']:,.2f}/yr
+
+COMPUTED RECOMMENDED DR INVESTMENT:
+  ${_gt['recommended_investment_low_usd']:,.2f} – ${_gt['recommended_investment_high_usd']:,.2f}/year
+  Basis: max(10–15% of annual Azure run-rate, 15–25% of computed annual exposure). No artificial floor.
+
+USE THESE NUMBERS for cost_benefit_analysis.current_annual_risk_exposure and
+cost_benefit_analysis.recommended_investment. Format them as "$LOW - $HIGH" / "$LOW - $HIGH/year"
+using the COMPUTED ranges above EXACTLY. Do NOT replace them with industry averages.
+
+In the `basis` field, write ONE short sentence that:
+  • States the figures are derived from this customer's actual run-rate, posture, and tags.
+  • Mentions the data_confidence breakdown (stated/cost-derived/floor) so the customer knows the fidelity.
+  • If stated_pct is low, briefly recommends tagging financial_loss_per_hour on critical workloads to refine.
+"""
+    else:
+        gt_block = "\nGROUNDED FINANCIAL CONTEXT: unavailable (calculation failed).\n"
+
     prompt_content = f"""You are an Azure Solutions Architect conducting a comprehensive BCDR (Business Continuity and Disaster Recovery) assessment.
 
 ENVIRONMENT OVERVIEW:
@@ -964,8 +1290,18 @@ ENVIRONMENT OVERVIEW:
 - Zone Redundancy: {zone_support['zone_redundant']} zone-redundant, {zone_support['regional_only']} regional-only
 
 {tag_context}
+{gt_block}
+CUSTOMER BCDR CLASSIFICATION (Phase-1 Planning — AUTHORITATIVE business intent set by the customer):
+- Classified resources: {user_categorized['total']} of {total_resources}
+- By criticality: {json.dumps(user_categorized['by_criticality']) if user_categorized['by_criticality'] else 'none tagged yet'}
+- By DR tier: {json.dumps(user_categorized['by_dr_tier']) if user_categorized['by_dr_tier'] else 'none tagged yet'}
+Treat each resource's stated criticality, DR tier, RTO and RPO targets as AUTHORITATIVE. Align every gap,
+recommendation and the roadmap to them, prioritise by the customer's stated criticality, and explicitly flag
+any resource whose current protection (backup / zone / region) does not meet its stated target.
 
-CRITICAL RESOURCES SAMPLE ({len(compressed_sample)} of {len(critical_resources)} high-risk):
+CRITICAL RESOURCES SAMPLE ({len(compressed_sample)} of {len(critical_resources)} high-risk or business-critical-by-tag):
+Each item may include a "bcdr_classification" block — the customer's stated criticality / DR tier / RTO / RPO /
+financial loss for that resource. Ground your findings in it and honour those targets.
 {_serialize_for_ai(compressed_sample, indent=2)}
 
 Perform a comprehensive BCDR analysis and return a JSON report with this EXACT structure:
@@ -1045,10 +1381,11 @@ Perform a comprehensive BCDR analysis and return a JSON report with this EXACT s
   }},
   
   "cost_benefit_analysis": {{
-    "current_annual_risk_exposure": "$X - $Y",
-    "recommended_investment": "$X/year",
+    "current_annual_risk_exposure": "$LOW - $HIGH (use the COMPUTED ANNUAL RISK EXPOSURE BASELINE range above verbatim)",
+    "recommended_investment": "$LOW - $HIGH/year (use the COMPUTED RECOMMENDED DR INVESTMENT RANGE above verbatim)",
     "roi_timeframe": "X months",
-    "risk_reduction_percentage": "X%"
+    "risk_reduction_percentage": "X%",
+    "basis": "one short sentence stating these numbers come from grounded customer data (run-rate, stated/estimated hourly loss, tier counts) — not industry averages"
   }},
   
   "compliance_considerations": [
@@ -1087,7 +1424,9 @@ Focus on:
 9. Qatar PDPPL compliance - cross-border data transfer requires DPO review"""
 
     try:
-        logger.info("Starting comprehensive BCDR analysis with %s (%s resources)", provider, total_resources)
+        logger.info("Starting comprehensive BCDR analysis with %s (%s resources, sample %d)",
+                    provider, total_resources, len(compressed_sample))
+        _t0 = _time.perf_counter()
         
         if provider == "anthropic":
             response = client.messages.create(
@@ -1109,6 +1448,7 @@ Focus on:
                 response_format={"type": "json_object"}
             )
             raw = response.choices[0].message.content.strip()
+        _latency_s = round(_time.perf_counter() - _t0, 2)
         
         # Strip markdown fences
         if raw.startswith("```"):
@@ -1121,6 +1461,21 @@ Focus on:
         result["provider"] = provider
         result["analysis_timestamp"] = datetime.now(timezone.utc).isoformat()
         result["available"] = True
+        result["_cached"] = False
+        result["analysis_latency_seconds"] = _latency_s
+        # Surface grounding so the UI can show the user EXACTLY what fed the AI
+        result["grounding_metrics"] = {
+            "total_resources":           total_resources,
+            "sample_size":               len(compressed_sample),
+            "critical_candidates":       len(critical_resources),
+            "tagged_resources":          int((financial_ground_truth or {}).get("tagged_resources") or 0),
+            "stated_loss_resources":     int((financial_ground_truth or {}).get("stated_loss_resources") or 0),
+            "annual_run_rate_usd":       (financial_ground_truth or {}).get("annual_azure_run_rate_usd"),
+            "annual_risk_exposure_usd":  (financial_ground_truth or {}).get("annual_risk_exposure_expected_usd"),
+            "data_confidence":           (financial_ground_truth or {}).get("data_confidence"),
+            "posture_counts":            (financial_ground_truth or {}).get("posture_counts"),
+            "ai_latency_seconds":        _latency_s,
+        }
         
         # POST-PROCESS: Inject actual resource lists into gaps and recommendations
         result = _enrich_with_resource_details(result, resources, subscriptions)

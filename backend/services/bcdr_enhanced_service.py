@@ -91,6 +91,79 @@ def _tier_label(score: int) -> str:
     return "Low"
 
 
+# ── User-tagged BCDR criticality → authoritative BIA tier ────────────────────
+# Maps a BCDR Planning "criticality" value (as the customer tagged it on the
+# resource) to the canonical BIA tier plus an anchor impact score. A tagged value
+# is AUTHORITATIVE business intent and overrides the type/cost inference — up OR
+# down (a resource the customer marks "Low" is demoted even if it is an expensive
+# database, and one marked "Critical" is promoted even if its type looks minor).
+_CRIT_TIER: dict[str, tuple[str, int]] = {
+    "mission critical": ("Mission-Critical", 95), "mission-critical": ("Mission-Critical", 95),
+    "missioncritical": ("Mission-Critical", 95), "critical": ("Mission-Critical", 92),
+    "tier 0": ("Mission-Critical", 96), "tier0": ("Mission-Critical", 96), "tier 1": ("Mission-Critical", 90),
+    "business critical": ("Business-Critical", 78), "business-critical": ("Business-Critical", 78),
+    "high": ("Business-Critical", 75), "important": ("Business-Critical", 72), "tier 2": ("Business-Critical", 72),
+    "medium": ("Business-Operational", 52), "moderate": ("Business-Operational", 52),
+    "business operational": ("Business-Operational", 52), "business-operational": ("Business-Operational", 52),
+    "standard": ("Business-Operational", 50), "normal": ("Business-Operational", 50), "tier 3": ("Business-Operational", 50),
+    "low": ("Low", 28), "tier 4": ("Low", 25), "best effort": ("Low", 22), "non-critical": ("Low", 22),
+    "noncritical": ("Low", 22), "dev/test": ("Low", 20), "dev": ("Low", 20),
+}
+_TIER_BAND: dict[str, tuple[int, int]] = {
+    "Mission-Critical": (85, 100), "Business-Critical": (65, 84),
+    "Business-Operational": (40, 64), "Low": (0, 39),
+}
+
+# RTO/RPO label → hours (matches the BCDR Planning dropdown options)
+_RTO_LABEL_HOURS: dict[str, float] = {
+    "< 15 min": 0.25, "<15 min": 0.25, "< 1 hr": 1.0, "<1 hr": 1.0, "< 4 hrs": 4.0, "<4 hrs": 4.0,
+    "< 8 hrs": 8.0, "<8 hrs": 8.0, "< 24 hrs": 24.0, "<24 hrs": 24.0, "< 48 hrs": 48.0, "best effort": 72.0,
+}
+
+
+def _parse_rto_hours(label: str):
+    """Parse an RTO/RPO label ('< 4 hrs', '30 min', '2 hours') to a float of hours, or None."""
+    if not label:
+        return None
+    key = str(label).strip().lower()
+    if key in _RTO_LABEL_HOURS:
+        return _RTO_LABEL_HOURS[key]
+    import re as _re
+    m = _re.search(r"(\d+(?:\.\d+)?)\s*(min|hour|hr|day)", key)
+    if m:
+        n = float(m.group(1)); unit = m.group(2)
+        if unit.startswith("min"):
+            return round(n / 60, 3)
+        if unit.startswith("day"):
+            return n * 24
+        return n
+    return None
+
+
+def _parse_money(val):
+    """Parse a stated financial-loss value ('$5,000', '5000/hr', '12k') to a float, or None."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip().lower().replace(",", "").replace("$", "").replace("usd", "").strip()
+    if not s:
+        return None
+    import re as _re
+    mult = 1.0
+    if s.endswith("k"):
+        mult = 1_000.0; s = s[:-1]
+    elif s.endswith("m"):
+        mult = 1_000_000.0; s = s[:-1]
+    m = _re.search(r"\d+(?:\.\d+)?", s)
+    if not m:
+        return None
+    try:
+        return float(m.group(0)) * mult
+    except ValueError:
+        return None
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 1. Business Impact Analysis
 # ═════════════════════════════════════════════════════════════════════════════
@@ -98,18 +171,18 @@ def _tier_label(score: int) -> str:
 def build_business_impact_analysis(
     resources: list[dict],
     bcdr_assessments: list | None = None,
+    metadata: dict | None = None,
+    custom_tags: dict | None = None,
+    sub_names: dict | None = None,
 ) -> dict[str, Any]:
     """
     Produce a Business Impact Analysis for every resource.
 
-    Returns:
-        {
-          "total_resources": int,
-          "tier_summary": [ {tier, count, pct, avg_impact, est_downtime_cost_hr} ],
-          "impact_matrix": [ {resource_id, resource_name, resource_type, ..., impact_score, bia_tier, ...} ],
-          "top_critical": [...top 10...],
-          "dependency_count": int,
-        }
+    When BCDR Planning ``metadata`` is supplied, the customer-tagged values
+    (criticality, RTO/RPO target, financial loss per hour) are treated as
+    AUTHORITATIVE and drive the BIA tier, target RTO and downtime cost — so the
+    analysis reflects the business's stated intent rather than a type/cost guess.
+    Resources without tags fall back to the inferred score.
     """
     if not resources:
         return {
@@ -125,6 +198,20 @@ def build_business_impact_analysis(
     for a in (bcdr_assessments or []):
         rid = a.resource_id if hasattr(a, "resource_id") else a.get("resource_id", "")
         bcdr_map[rid] = a if isinstance(a, dict) else (a.to_dict() if hasattr(a, "to_dict") else {})
+
+    # BCDR Planning metadata (criticality / DR tier / RTO / RPO / financial loss) —
+    # AUTHORITATIVE business intent the customer tagged in Phase-1. Keyed by id with
+    # a lowercase fallback to survive any id case drift.
+    meta_map: dict[str, dict] = {}
+    for k, v in (metadata or {}).items():
+        if not isinstance(v, dict):
+            continue
+        meta_map[k] = v
+        meta_map.setdefault((k or "").lower(), v)
+
+    tagged_count = 0
+    stated_downtime_count = 0
+    total_stated_downtime = 0.0
 
     matrix: list[dict] = []
 
@@ -151,31 +238,75 @@ def build_business_impact_analysis(
         zone_risk = bcdr.get("zone_risk_score", 0)
         risk_penalty = min(int(zone_risk / 10), 10)  # up to 10 extra pts
 
-        # Compute impact score (clamped 0-100)
-        raw_score = type_weight + cost_weight + tier_boost + risk_penalty
-        impact_score = max(0, min(100, raw_score))
+        # Inferred score from type + cost + workload tier + zone risk
+        inferred_score = max(0, min(100, type_weight + cost_weight + tier_boost + risk_penalty))
 
-        bia_tier = _tier_label(impact_score)
-        target_rto = _TIER_RTO_HOURS.get(bia_tier, 24.0)
-        downtime_cost_hr = round(impact_score * _DOWNTIME_COST_PER_POINT, 2)
+        # ── Authoritative override from the customer's BCDR Planning tags ──────
+        meta = meta_map.get(rid) or meta_map.get((rid or "").lower()) or {}
+        crit_tag = (meta.get("criticality") or "").strip()
+        mapped = _CRIT_TIER.get(crit_tag.lower()) if crit_tag else None
+        if mapped:
+            bia_tier, anchor = mapped
+            lo, hi = _TIER_BAND[bia_tier]
+            # Keep the score inside the tagged tier's band; cost/risk give intra-band ordering.
+            impact_score = int(max(lo, min(hi, anchor + cost_weight * 0.3 + risk_penalty * 0.4)))
+            criticality_source = "Tagged"
+            tagged_count += 1
+        else:
+            impact_score = inferred_score
+            bia_tier = _tier_label(impact_score)
+            criticality_source = "Inferred"
+
+        # Target RTO — prefer the tagged value, else the tier default
+        rto_tag = (meta.get("rto_target") or "").strip()
+        rpo_tag = (meta.get("rpo_target") or "").strip()
+        parsed_rto = _parse_rto_hours(rto_tag) if rto_tag else None
+        target_rto = parsed_rto if parsed_rto is not None else _TIER_RTO_HOURS.get(bia_tier, 24.0)
+        rto_source = "Tagged" if parsed_rto is not None else "Tier default"
+
+        # Downtime cost — prefer the customer's stated financial loss per hour, else estimate
+        stated_loss = _parse_money(meta.get("financial_loss_per_hour"))
+        if stated_loss is not None and stated_loss > 0:
+            downtime_cost_hr = round(stated_loss, 2)
+            downtime_cost_source = "Stated"
+            stated_downtime_count += 1
+            total_stated_downtime += stated_loss
+        else:
+            downtime_cost_hr = round(impact_score * _DOWNTIME_COST_PER_POINT, 2)
+            downtime_cost_source = "Estimated"
 
         matrix.append({
-            "resource_id":      rid,
-            "resource_name":    rname,
-            "resource_type":    rtype,
-            "resource_group":   rg,
-            "location":         loc,
-            "monthly_cost":     round(cost, 2),
-            "workload_tier":    tier_str,
-            "zone_status":      bcdr.get("zone_status", "Unknown"),
-            "impact_score":     impact_score,
-            "bia_tier":         bia_tier,
-            "target_rto_hours": target_rto,
-            "downtime_cost_hr": downtime_cost_hr,
-            "type_weight":      type_weight,
-            "cost_weight":      cost_weight,
-            "tier_boost":       tier_boost,
-            "risk_penalty":     risk_penalty,
+            "resource_id":          rid,
+            "resource_name":        rname,
+            "resource_type":        rtype,
+            "resource_group":       rg,
+            "location":             loc,
+            "subscription_id":      _attr(r, "subscription_id"),
+            "subscription_name":    (sub_names or {}).get(_attr(r, "subscription_id"), ""),
+            "azure_tags":           (r.get("tags") or {}),
+            "custom_tags":          (custom_tags or {}).get((rid or "").lower(), {}),
+            "monthly_cost":         round(cost, 2),
+            "workload_tier":        tier_str,
+            "zone_status":          bcdr.get("zone_status", "Unknown"),
+            "impact_score":         impact_score,
+            "bia_tier":             bia_tier,
+            "criticality_source":   criticality_source,
+            "criticality_tag":      crit_tag or None,
+            "dr_tier":              (meta.get("dr_tier") or None),
+            "rto_target":           rto_tag or None,
+            "rpo_target":           rpo_tag or None,
+            "rto_source":           rto_source,
+            "data_classification":  (meta.get("data_classification") or None),
+            "compliance":           (meta.get("compliance") or None),
+            "business_owner":       (meta.get("business_owner") or None),
+            "target_rto_hours":     target_rto,
+            "downtime_cost_hr":     downtime_cost_hr,
+            "downtime_cost_source": downtime_cost_source,
+            "inferred_score":       inferred_score,
+            "type_weight":          type_weight,
+            "cost_weight":          cost_weight,
+            "tier_boost":           tier_boost,
+            "risk_penalty":         risk_penalty,
         })
 
     # Sort by impact score descending
@@ -204,11 +335,16 @@ def build_business_impact_analysis(
         })
 
     return {
-        "total_resources": len(matrix),
-        "tier_summary":    tier_summary,
-        "impact_matrix":   matrix[:200],  # cap for API response size
-        "top_critical":    matrix[:10],
+        "total_resources":  len(matrix),
+        "tier_summary":     tier_summary,
+        "impact_matrix":    matrix[:5000],  # full set (client filters + recomputes the BIA per selection)
+        "top_critical":     matrix[:10],
         "dependency_count": 0,
+        # Grounding signals — how much of the BIA is driven by the customer's tags
+        "tagged_count":                  tagged_count,
+        "tagged_pct":                    round(tagged_count / len(matrix) * 100, 1) if matrix else 0,
+        "stated_downtime_count":         stated_downtime_count,
+        "total_stated_downtime_cost_hr": round(total_stated_downtime, 2),
     }
 
 

@@ -4,9 +4,10 @@ import ResourceDetailDrawer from '../ResourceDetailDrawer'
 import {
   Shield, AlertTriangle, CheckCircle, Clock, Zap, TrendingUp,
   Globe, MapPin, RefreshCw, ChevronRight, Info, Target, Layers,
-  Activity, BarChart2, Building2,
+  Activity, BarChart2, Building2, Filter, X,
 } from 'lucide-react'
 import { api } from '../../api/client'
+import { prettyResourceType } from '../../utils/resourceTypes'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -256,7 +257,7 @@ function HighRiskRow({ item, onClick }) {
 
 // ── Main BCDRDashboard ──────────────────────────────────────────────────────
 
-export default function BCDRDashboard({ onSelectResource, onViewAssessment }) {
+export default function BCDRDashboard({ onSelectResource }) {
   const [summary, setSummary]   = useState(null)
   const [loading, setLoading]   = useState(true)
   const [selectedResource, setSelectedResource] = useState(null)
@@ -401,12 +402,6 @@ export default function BCDRDashboard({ onSelectResource, onViewAssessment }) {
           >
             <RefreshCw size={12} /> Refresh
           </button>
-          <button
-            onClick={() => onViewAssessment && onViewAssessment()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs text-white font-medium transition-colors"
-          >
-            View Full Assessment <ChevronRight size={12} />
-          </button>
         </div>
       </div>
 
@@ -428,24 +423,23 @@ export default function BCDRDashboard({ onSelectResource, onViewAssessment }) {
 
       {activeTab === 'overview' && (<>
 
-      {/* Qatar Central Warning Banner */}
-      {summary.qatar_central_count > 0 && (
-        <div className="rounded-xl border border-orange-700/50 bg-orange-950/30 p-4">
-          <div className="flex items-start gap-3">
-            <AlertTriangle size={18} className="text-orange-400 shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-semibold text-orange-300">Qatar Central — Zone Redundancy Disabled</p>
-              <p className="text-xs text-orange-400/80 mt-1">
-                Zone Redundancy is <strong>not available</strong> in Qatar Central (capacity restricted).
-                Qatar Central has <strong>no Azure paired region</strong>. All DR planning must target
-                <strong> UAE North</strong> or <strong>West Europe / North Europe</strong> (both NIA-certified).
-                GRS storage is unavailable — use Object Replication. AKS Backup is unavailable — use Velero.
-                Key Vault requires custom cross-region sync (Azure Function / Event Grid).
-              </p>
-            </div>
+      {/* Qatar Central — BCDR Best Practices (region-level resilience guidance) */}
+      <div className="rounded-xl border border-sky-800/50 bg-sky-950/30 p-4">
+        <div className="flex items-start gap-3">
+          <Globe size={18} className="text-sky-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-sky-300">Qatar Central — BCDR Best Practices</p>
+            <p className="text-xs text-sky-200/80 mt-1 leading-relaxed">
+              Zone redundancy protects against a datacenter or availability-zone failure <strong>within</strong> a
+              region — it does <strong>not</strong> protect against a full regional outage. Business continuity and
+              disaster recovery for line-of-business applications critical to business function must be designed
+              <strong> cross-region</strong> to provide redundancy and high availability across regional failures.
+              It is recommended that, even before deploying cross-region DR capabilities for a workload, customers
+              first establish <strong>cross-region backup</strong> using the <strong>Region-of-Choice (RoC)</strong> capability.
+            </p>
           </div>
         </div>
-      )}
+      </div>
 
       {/* KPI Row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -693,12 +687,6 @@ export default function BCDRDashboard({ onSelectResource, onViewAssessment }) {
               High-Risk Resources
               <span className="text-xs text-gray-600 font-normal">risk score ≥ 70</span>
             </h3>
-            <button
-              onClick={() => onViewAssessment && onViewAssessment()}
-              className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
-            >
-              View all →
-            </button>
           </div>
           <div className="divide-y divide-gray-800/50">
             {highRisk.slice(0, 10).map((item, i) => (
@@ -741,7 +729,111 @@ const BIA_TIER_COLORS = {
   'Low':                  '#22c55e',
 }
 
+function BIASourceBadge({ source }) {
+  const tagged = source === 'Tagged'
+  return (
+    <span
+      title={tagged ? 'Classified from your BCDR Planning tags (authoritative)' : 'Inferred from resource type, cost & zone risk'}
+      className={clsx('px-1.5 py-0.5 rounded text-[10px] font-medium border whitespace-nowrap',
+        tagged ? 'bg-emerald-900/30 text-emerald-300 border-emerald-700/50' : 'bg-gray-800 text-gray-500 border-gray-700')}>
+      {tagged ? 'Tagged' : 'Inferred'}
+    </span>
+  )
+}
+
+// ── BIA filtering + client-side recompute ───────────────────────────────────
+const BIA_TIER_ORDER = ['Mission-Critical', 'Business-Critical', 'Business-Operational', 'Low']
+const BIA_TIER_RTO = { 'Mission-Critical': 0.25, 'Business-Critical': 1.0, 'Business-Operational': 4.0, 'Low': 24.0 }
+const BIA_ALL = '__all__'
+const biaTagPairs = (obj) => Object.entries(obj || {})
+  .filter(([k, v]) => k && v != null && String(v).trim() !== '')
+  .map(([k, v]) => `${k}=${v}`)
+
+// Recompute tiers / top list / grounding for an arbitrary (filtered) subset of rows,
+// so the whole BIA reflects exactly the resources the user selected.
+function recomputeBIA(rows) {
+  const byTier = {}
+  rows.forEach((r) => { (byTier[r.bia_tier] = byTier[r.bia_tier] || []).push(r) })
+  const total = rows.length
+  const tier_summary = BIA_TIER_ORDER.filter((t) => (byTier[t] || []).length).map((t) => {
+    const items = byTier[t]
+    return {
+      tier: t,
+      count: items.length,
+      pct: total ? Math.round((items.length / total) * 1000) / 10 : 0,
+      avg_impact_score: Math.round((items.reduce((a, i) => a + (i.impact_score || 0), 0) / items.length) * 10) / 10,
+      est_downtime_cost_hr: Math.round((items.reduce((a, i) => a + (i.downtime_cost_hr || 0), 0) / items.length) * 100) / 100,
+      target_rto_hours: BIA_TIER_RTO[t] ?? 24,
+    }
+  })
+  const sorted = [...rows].sort((a, b) => (b.impact_score || 0) - (a.impact_score || 0))
+  return {
+    total_resources: total,
+    tier_summary,
+    impact_matrix: sorted,
+    top_critical: sorted.slice(0, 10),
+    tagged_count: rows.filter((r) => r.criticality_source === 'Tagged').length,
+    stated_downtime_count: rows.filter((r) => r.downtime_cost_source === 'Stated').length,
+  }
+}
+
+function BIAFilter({ label, value, onChange, options }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[10px] uppercase tracking-wide text-gray-500">{label}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)}
+        className="bg-gray-900 border border-gray-700/70 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 min-w-[140px] focus:border-blue-500 outline-none">
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </label>
+  )
+}
+
 function BIATab({ data, loading }) {
+  const allRows = React.useMemo(() => (data && data.impact_matrix) || [], [data])
+
+  // ── Context filters (subscription / RG / type / Azure tag / custom tag) ─────
+  const [fSub, setFSub] = React.useState(BIA_ALL)
+  const [fRg, setFRg] = React.useState(BIA_ALL)
+  const [fType, setFType] = React.useState(BIA_ALL)
+  const [fAz, setFAz] = React.useState(BIA_ALL)
+  const [fCt, setFCt] = React.useState(BIA_ALL)
+
+  const opts = React.useMemo(() => {
+    const uniq = (key) => Array.from(new Set(allRows.map((r) => r[key]).filter(Boolean))).sort()
+    const mk = (vals, allLabel, labelFn) => [{ value: BIA_ALL, label: allLabel },
+      ...vals.map((v) => ({ value: v, label: labelFn ? labelFn(v) : v }))]
+    const subMap = new Map()
+    allRows.forEach((r) => { if (r.subscription_id) subMap.set(r.subscription_id, r.subscription_name || (r.subscription_id.slice(0, 8) + '\u2026')) })
+    const az = new Set(), ct = new Set()
+    allRows.forEach((r) => { biaTagPairs(r.azure_tags).forEach((p) => az.add(p)); biaTagPairs(r.custom_tags).forEach((p) => ct.add(p)) })
+    const mkPairs = (set, allLabel) => [{ value: BIA_ALL, label: allLabel },
+      ...Array.from(set).sort().map((p) => ({ value: p, label: p.replace('=', ': ') }))]
+    return {
+      sub: [{ value: BIA_ALL, label: 'All subscriptions' }, ...Array.from(subMap.entries()).sort((a, b) => String(a[1]).localeCompare(String(b[1]))).map(([id, name]) => ({ value: id, label: name }))],
+      rg: mk(uniq('resource_group'), 'All resource groups'),
+      type: mk(uniq('resource_type'), 'All types', (t) => prettyResourceType(t) || t.split('/').pop()),
+      az: mkPairs(az, 'All Azure tags'),
+      ct: mkPairs(ct, 'All custom tags'),
+    }
+  }, [allRows])
+
+  const rows = React.useMemo(() => allRows.filter((r) =>
+    (fSub === BIA_ALL || r.subscription_id === fSub) &&
+    (fRg === BIA_ALL || r.resource_group === fRg) &&
+    (fType === BIA_ALL || r.resource_type === fType) &&
+    (fAz === BIA_ALL || biaTagPairs(r.azure_tags).includes(fAz)) &&
+    (fCt === BIA_ALL || biaTagPairs(r.custom_tags).includes(fCt)),
+  ), [allRows, fSub, fRg, fType, fAz, fCt])
+
+  const view = React.useMemo(() => recomputeBIA(rows), [rows])
+  const { tier_summary, impact_matrix, top_critical } = view
+  const taggedCount = view.tagged_count
+  const totalRes = view.total_resources
+  const statedCount = view.stated_downtime_count
+  const anyFilter = [fSub, fRg, fType, fAz, fCt].some((v) => v !== BIA_ALL)
+  const clearFilters = () => { setFSub(BIA_ALL); setFRg(BIA_ALL); setFType(BIA_ALL); setFAz(BIA_ALL); setFCt(BIA_ALL) }
+
   if (loading) return (
     <div className="flex items-center justify-center h-48 gap-3">
       <RefreshCw size={20} className="text-blue-400 animate-spin" />
@@ -755,10 +847,53 @@ function BIATab({ data, loading }) {
     </div>
   )
 
-  const { tier_summary, impact_matrix, top_critical } = data
-
   return (
     <div className="space-y-6">
+      {/* Context filter bar — scope the BIA to selected resources */}
+      <div className="flex flex-wrap items-end gap-2.5 rounded-xl border border-gray-800 bg-gray-900/40 p-3">
+        <BIAFilter label="Subscription" value={fSub} onChange={setFSub} options={opts.sub} />
+        <BIAFilter label="Resource Group" value={fRg} onChange={setFRg} options={opts.rg} />
+        <BIAFilter label="Resource Type" value={fType} onChange={setFType} options={opts.type} />
+        {opts.az.length > 1 && <BIAFilter label="Azure Tag" value={fAz} onChange={setFAz} options={opts.az} />}
+        {opts.ct.length > 1 && <BIAFilter label="Custom Tag" value={fCt} onChange={setFCt} options={opts.ct} />}
+        {anyFilter && (
+          <button onClick={clearFilters} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-200 border border-gray-700/60">
+            <X size={12} /> Clear
+          </button>
+        )}
+        <span className="ml-auto text-xs text-gray-500 self-center">
+          <span className="text-gray-300 font-semibold tabular-nums">{rows.length}</span> of {allRows.length} resources
+        </span>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="card text-center text-gray-500 py-12">
+          <Filter size={28} className="mx-auto mb-2 opacity-30" />
+          <p>No resources match these filters.</p>
+        </div>
+      ) : (<>
+      {/* Grounding banner — how much of the BIA is driven by the customer's BCDR tags */}
+      <div className={clsx('rounded-xl border p-3 flex items-start gap-2.5',
+        taggedCount > 0 ? 'border-emerald-800/50 bg-emerald-950/20' : 'border-gray-700/50 bg-gray-800/30')}>
+        <Info size={15} className={clsx('shrink-0 mt-0.5', taggedCount > 0 ? 'text-emerald-400' : 'text-gray-500')} />
+        <div className="text-xs leading-relaxed">
+          {taggedCount > 0 ? (
+            <p className="text-emerald-200/90">
+              <strong>{taggedCount} of {totalRes}</strong> resources are classified directly from your BCDR Planning
+              tags (criticality{statedCount > 0 ? ', financial loss/hr' : ''}, RTO/RPO) — these drive the tiers below
+              as authoritative business intent. The remaining <strong>{totalRes - taggedCount}</strong> are inferred
+              from resource type, cost &amp; zone risk.
+            </p>
+          ) : (
+            <p className="text-gray-400">
+              No BCDR Planning tags found yet — tiers below are <strong>inferred</strong> from resource type, cost &amp;
+              zone risk. Classify resources in <strong>BCDR Planning</strong> (criticality, RTO/RPO, financial loss per
+              hour) to ground this analysis in your business intent.
+            </p>
+          )}
+        </div>
+      </div>
+
       {/* Tier Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {tier_summary.map(t => {
@@ -820,7 +955,7 @@ function BIATab({ data, loading }) {
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-gray-800">
-                  {['Resource', 'Type', 'Location', 'Impact', 'BIA Tier', 'Workload Tier', 'Zone', 'RTO', 'Downtime $/hr'].map(h => (
+                  {['Resource', 'Type', 'Location', 'Impact', 'BIA Tier', 'Source', 'Workload Tier', 'Zone', 'RTO', 'Downtime $/hr'].map(h => (
                     <th key={h} className="text-left px-3 py-2 text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                   ))}
                 </tr>
@@ -849,9 +984,10 @@ function BIATab({ data, loading }) {
                           {r.bia_tier}
                         </span>
                       </td>
+                      <td className="px-3 py-2"><BIASourceBadge source={r.criticality_source} /></td>
                       <td className="px-3 py-2 text-gray-400">{r.workload_tier}</td>
                       <td className="px-3 py-2"><ZoneStatusBadge status={r.zone_status} /></td>
-                      <td className="px-3 py-2 text-gray-300">{r.target_rto_hours}h</td>
+                      <td className="px-3 py-2 text-gray-300">{r.rto_target || `${r.target_rto_hours}h`}</td>
                       <td className="px-3 py-2 text-gray-300">${Math.round(r.downtime_cost_hr).toLocaleString()}</td>
                     </tr>
                   )
@@ -867,13 +1003,13 @@ function BIATab({ data, loading }) {
         <div className="card">
           <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
             <Layers size={14} className="text-blue-400" />
-            Full BIA Matrix ({data.total_resources} resources)
+            Full BIA Matrix ({totalRes} resources)
           </h3>
           <div className="overflow-x-auto max-h-96">
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-gray-900">
                 <tr className="border-b border-gray-800">
-                  {['Resource', 'Impact', 'BIA Tier', 'Cost/mo', 'Type Wt', 'Cost Wt', 'Tier Boost', 'Risk Pen.'].map(h => (
+                  {['Resource', 'Impact', 'BIA Tier', 'Source', 'Cost/mo', 'Type Wt', 'Cost Wt', 'Tier Boost', 'Risk Pen.'].map(h => (
                     <th key={h} className="text-left px-2 py-2 text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                   ))}
                 </tr>
@@ -886,6 +1022,7 @@ function BIATab({ data, loading }) {
                       <td className="px-2 py-1.5 text-gray-300 truncate max-w-[180px]">{r.resource_name}</td>
                       <td className="px-2 py-1.5 font-bold tabular-nums" style={{ color: tierColor }}>{r.impact_score}</td>
                       <td className="px-2 py-1.5" style={{ color: tierColor }}>{r.bia_tier}</td>
+                      <td className="px-2 py-1.5"><BIASourceBadge source={r.criticality_source} /></td>
                       <td className="px-2 py-1.5 text-gray-400">${Math.round(r.monthly_cost)}</td>
                       <td className="px-2 py-1.5 text-gray-500">{r.type_weight}</td>
                       <td className="px-2 py-1.5 text-gray-500">{r.cost_weight}</td>
@@ -899,6 +1036,7 @@ function BIATab({ data, loading }) {
           </div>
         </div>
       )}
+      </>)}
     </div>
   )
 }
