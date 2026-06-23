@@ -491,3 +491,45 @@ def get_latest_ai_analysis(analysis_type: str, subject_id: Optional[str] = None,
     except Exception as exc:
         logger.warning("AI analysis load failed: %s", exc)
         return None
+
+
+def get_latest_ai_analysis_any_scope(analysis_type_base: str,
+                                     max_age_hours: int = 24) -> Optional[dict]:
+    """Return the most recent cached AI analysis for a module regardless of its
+    scope suffix.
+
+    Per-module analyses are persisted under a scope-fingerprinted analysis_type
+    (e.g. ``ai_security_posture:d77bfc7eed7d``) so each subscription/scope slice
+    caches independently. The home-page AI insights summary, however, only knows
+    the bare module key (``ai_security_posture``). Without this scope-tolerant
+    lookup every card reverts to "Not analyzed yet" after a process restart even
+    though a full analysis is persisted. Matches the bare key OR any
+    ``base:<scope>`` variant and returns the freshest one.
+    """
+    try:
+        from datetime import timedelta
+        cutoff = (datetime.now(tz=timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+        db = _conn()
+        if not is_azure_sql():
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS ai_analyses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, analysis_type TEXT NOT NULL,
+                    subject_id TEXT, analyzed_at TEXT NOT NULL, model TEXT NOT NULL,
+                    prompt_tokens INTEGER DEFAULT 0, result TEXT NOT NULL
+                )
+            """)
+        row = db.execute(
+            limit_sql(
+                "SELECT result, analyzed_at, model FROM ai_analyses "
+                "WHERE (analysis_type = ? OR analysis_type LIKE ?) "
+                "AND (subject_id IS NULL OR subject_id = '') AND analyzed_at > ? "
+                "ORDER BY analyzed_at DESC, id DESC", 1),
+            (analysis_type_base, analysis_type_base + ":%", cutoff),
+        ).fetchone()
+        db.close()
+        if row:
+            return {"result": json.loads(row[0]), "analyzed_at": row[1], "model": row[2]}
+        return None
+    except Exception as exc:
+        logger.warning("AI analysis (any-scope) load failed: %s", exc)
+        return None

@@ -2356,11 +2356,20 @@ async def get_dashboard(refresh: bool = False):
         return DashboardData(**{k: v for k, v in raw.items() if k in DashboardData.model_fields})
 
     # If refresh is explicitly requested, bypass cache
-    if not refresh and "data" in _cache:
+    if not refresh:
         # Always serve cached/persisted data immediately — never auto-scan
         # on a GET. Staleness is shown via data.last_refreshed; the user or
         # auto-refresh scheduler can trigger a rescan explicitly.
-        return _cache["data"]
+        #
+        # Use the unified cache accessor (not just the legacy _cache["data"]
+        # slot): it also rehydrates from the durable snapshot when the legacy
+        # slot is cold — e.g. after a process restart, or when a prior
+        # refresh=true request was cancelled by a client timeout before it
+        # could populate the in-memory cache. Without this, a cold legacy slot
+        # forced a slow live Azure rebuild on every GET and the portal hung.
+        cached = _ensure_dashboard_in_cache()
+        if cached is not None and (getattr(cached, "resources", None) or []):
+            return cached
     try:
         # Live model: metrics are loaded on demand per resource, so the legacy
         # REST fallback also skips the bulk metrics pull to stay responsive.
@@ -8756,6 +8765,13 @@ def _ensure_dashboard_in_cache() -> Optional[DashboardData]:
     # assessments, health score) 404 "No resource data" even though the durable snapshot holds the
     # full resource list. When resources are missing, fall through and rehydrate from the snapshot.
     if data and (getattr(data, "resources", None) or []):
+        # Keep the legacy in-memory slot in sync so endpoints that read
+        # _cache["data"] directly (get_dashboard fast path, /api/resources,
+        # resource detail) see the same populated dashboard the unified
+        # accessor already holds in _cache["data:*"]. Without this sync the
+        # two slots drift apart and those endpoints fall through to a slow
+        # live rebuild even though a full dashboard is cached.
+        _cache["data"] = data
         return data
     try:
         # L2 (Redis) cache-aside in front of the durable SQL snapshot: a cold

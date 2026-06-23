@@ -482,6 +482,34 @@ def _get_cached(analysis_type: str, max_age_hours: int = 12) -> Optional[dict]:
         return None
 
 
+def _get_cached_any_scope(base: str, max_age_hours: int = 12) -> Optional[dict]:
+    """Scope-tolerant cache read for the home-page summary: returns the freshest
+    persisted analysis for a module whether it was saved under the bare module
+    key or a scope-fingerprinted variant ("base:<hash>"). Only used where any
+    scope is acceptable (the home dashboard) — the per-module analyze functions
+    keep using exact-key _get_cached so each scope stays isolated."""
+    entry = _MEM_CACHE.get(base)
+    if entry:
+        ts, cached_result = entry
+        if (time.time() - ts) < max_age_hours * 3600:
+            return cached_result
+    try:
+        from services.tagging_service import get_latest_ai_analysis_any_scope
+        cached = get_latest_ai_analysis_any_scope(base, max_age_hours=max_age_hours)
+        if cached and isinstance(cached, dict):
+            result = cached.get("result") if "result" in cached else cached
+            if isinstance(result, dict):
+                _MEM_CACHE[base] = (time.time(), result)
+                try:
+                    _register_ai_summary(base, None, result)
+                except Exception:
+                    pass
+                return result
+        return None
+    except Exception:
+        return None
+
+
 def _save_cache(analysis_type: str, model: str, result: dict):
     """Cache the analysis result. Writes the in-memory cache immediately (so the
     next request is instant even when the database is down) and persists to the
@@ -648,6 +676,12 @@ def get_ai_insights_summary() -> dict:
         if not s:
             try:
                 cached = _get_cached(base, max_age_hours=24 * 30)
+                if not cached:
+                    # Per-module analyses are persisted under a scope-fingerprinted
+                    # key (e.g. "ai_security_posture:<hash>"); the bare-key lookup
+                    # above misses them after a restart. Fall back to the freshest
+                    # scoped variant so the home cards survive a process restart.
+                    cached = _get_cached_any_scope(base, max_age_hours=24 * 30)
                 if cached:
                     s = _summarize_result(cached)
             except Exception:
