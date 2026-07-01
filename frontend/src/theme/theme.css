@@ -248,6 +248,25 @@ html.theme-light [class*="border-cyan-8"] { border-color: #cfe0f8 !important; }
 html.theme-light [class*="border-purple-9"], html.theme-light [class*="border-purple-8"],
 html.theme-light [class*="border-violet-8"] { border-color: #e3d4f7 !important; }
 
+/* ── White-alpha overlays/borders (dark-design pages e.g. Login) → light ──── */
+html.theme-light [class*="border-white"] { border-color: #e4e9f2 !important; }
+html.theme-light [class*="ring-white"] { --tw-ring-color: #dde4ee !important; }
+html.theme-light [class*="bg-white/"] { background-color: #eef2f8 !important; }
+
+/* Keep WHITE text on solid accent buttons/badges (don't let .text-white darken them) */
+html.theme-light [class*="bg-sky-5"].text-white, html.theme-light [class*="bg-sky-6"].text-white,
+html.theme-light [class*="bg-sky-7"].text-white, html.theme-light [class*="bg-blue-5"].text-white,
+html.theme-light [class*="bg-blue-6"].text-white, html.theme-light [class*="bg-blue-7"].text-white,
+html.theme-light [class*="bg-indigo-6"].text-white, html.theme-light [class*="bg-indigo-7"].text-white,
+html.theme-light [class*="bg-green-6"].text-white, html.theme-light [class*="bg-green-7"].text-white,
+html.theme-light [class*="bg-emerald-6"].text-white, html.theme-light [class*="bg-emerald-7"].text-white,
+html.theme-light [class*="bg-red-5"].text-white, html.theme-light [class*="bg-red-6"].text-white,
+html.theme-light [class*="bg-orange-5"].text-white, html.theme-light [class*="bg-amber-5"].text-white,
+html.theme-light [class*="bg-purple-6"].text-white, html.theme-light [class*="bg-violet-6"].text-white,
+html.theme-light [class*="bg-teal-6"].text-white, html.theme-light [class*="bg-cyan-6"].text-white {
+  color: #ffffff !important;
+}
+
 /* index.css component classes */
 html.theme-light .card {
   background: #ffffff !important; border-color: #e2e8f1 !important;
