@@ -85,7 +85,7 @@ export function fmtPct(v) {
 }
 
 export function severityColor(s) {
-  return { critical: '#ef4444', high: '#f97316', medium: '#f59e0b', low: '#22c55e' }[s] || '#64748b'
+  return { critical: '#ef4444', high: '#f97316', medium: '#f59e0b', low: '#22c55e' }[s] || 'var(--c-64748b)'
 }
 
 export function ageLabel(hours) {
@@ -114,7 +114,7 @@ export const SERVICE_COLORS = {
   'Integration': '#ec4899',
   'Identity': '#14b8a6',
   'IoT': '#34d399',
-  'Other': '#64748b',
+  'Other': 'var(--c-64748b)',
 }
 
 export function serviceColor(name) {

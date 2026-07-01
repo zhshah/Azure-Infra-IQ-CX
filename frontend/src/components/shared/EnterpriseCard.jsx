@@ -44,8 +44,8 @@ export default function EnterpriseCard({
     <div
       className={className}
       style={{
-        background: '#111827',
-        border: '1px solid rgba(30, 41, 59, 0.7)',
+        background: 'var(--c-111827)',
+        border: '1px solid rgba(var(--rgb-slate), 0.7)',
         borderRadius: 10,
         overflow: 'hidden',
         boxShadow: '0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.15)',
@@ -63,7 +63,7 @@ export default function EnterpriseCard({
             justifyContent: 'space-between',
             gap: 12,
             padding: '14px 20px',
-            borderBottom: expanded && children ? '1px solid rgba(30, 41, 59, 0.5)' : 'none',
+            borderBottom: expanded && children ? '1px solid rgba(var(--rgb-slate), 0.5)' : 'none',
             cursor: collapsible ? 'pointer' : 'default',
             userSelect: collapsible ? 'none' : 'auto',
           }}
@@ -89,7 +89,7 @@ export default function EnterpriseCard({
               {title && (
                 <div
                   style={{
-                    color: '#f1f5f9',
+                    color: 'var(--c-f1f5f9)',
                     fontSize: 14,
                     fontWeight: 600,
                     lineHeight: 1.3,
@@ -104,7 +104,7 @@ export default function EnterpriseCard({
               {subtitle && (
                 <div
                   style={{
-                    color: '#64748b',
+                    color: 'var(--c-64748b)',
                     fontSize: 11,
                     marginTop: 1,
                     overflow: 'hidden',
@@ -141,7 +141,7 @@ export default function EnterpriseCard({
               <ChevronDown
                 size={16}
                 style={{
-                  color: '#475569',
+                  color: 'var(--c-475569)',
                   transition: 'transform 0.2s',
                   transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)',
                 }}

@@ -158,9 +158,20 @@ def save_bcdr_metadata(resource_id: str, metadata: dict) -> dict:
 
         logger.info("Saved BCDR metadata for %s: %s / %s", resource_id,
                     metadata.get("criticality"), metadata.get("dr_tier"))
-        return get_bcdr_metadata(resource_id)
+        result = get_bcdr_metadata(resource_id)
     finally:
         db.close()
+
+    # Mirror BCDR fields to custom tags so the same values are visible in the Home
+    # "Tag Resource" modal (TagEditorModal reads only resource_custom_tags). Without
+    # this, criticality/dr_tier/rto/rpo set via BCDR Planning Phase-1 show as empty
+    # on the Resources page. Lazy import to avoid circular dependency.
+    try:
+        _mirror_metadata_to_tags(resource_id, metadata)
+    except Exception as exc:
+        logger.warning("BCDR metadata tag-mirror failed for %s: %s", resource_id, exc)
+
+    return result
 
 
 def bulk_save_bcdr_metadata(updates: List[Dict[str, Any]]) -> int:
@@ -273,6 +284,36 @@ def metadata_to_tags(meta: Optional[dict]) -> Dict[str, str]:
         if val is not None and str(val).strip() != "":
             out[tag] = str(val).strip()
     return out
+
+
+def _mirror_metadata_to_tags(resource_id: str, metadata: dict) -> None:
+    """Write a BCDR metadata row's fields onto the matching custom-tag keys so the
+    Home page Tag Resource modal sees the same values that the BCDR Planning Phase-1
+    utility just saved. Non-empty values upsert the tag; empty / None / cleared values
+    DELETE the corresponding tag (so unsetting in BCDR Planning also clears the Home view).
+    Lazy-import the tagging service to avoid a circular import at module load."""
+    if not resource_id or not isinstance(metadata, dict):
+        return
+    try:
+        from services import tagging_service  # noqa: WPS433 — lazy to avoid circular import
+    except Exception as exc:
+        logger.debug("tag mirror: tagging_service unavailable: %s", exc)
+        return
+    for field, tag_key in BCDR_TAG_MAP.items():
+        if field not in metadata:
+            # Field was not part of this save — leave the existing tag value alone.
+            continue
+        val = metadata.get(field)
+        if val is None or str(val).strip() == "":
+            try:
+                tagging_service.delete_custom_tag(resource_id, tag_key)
+            except Exception as exc:
+                logger.debug("tag mirror: delete failed for %s/%s: %s", resource_id, tag_key, exc)
+        else:
+            try:
+                tagging_service.set_custom_tag(resource_id, tag_key, str(val).strip())
+            except Exception as exc:
+                logger.debug("tag mirror: set failed for %s/%s: %s", resource_id, tag_key, exc)
 
 
 # ── Phase 1 supporting documents / inputs (stored in Azure SQL) ────────────────

@@ -16,18 +16,41 @@ import { PublicClientApplication, InteractionRequiredAuthError } from '@azure/ms
 let _msal = null
 let _account = null
 let _scopes = ['User.Read']
+// True when the deployment requires sign-in. Drives STRICT, continuous enforcement:
+// a lost/expired session (or any gated 401) bounces straight back to the Entra
+// sign-in page — the app is never usable without a live signed-in account.
+let _authRequired = false
+let _authFailureHandled = false
+let _watchdogStarted = false
+const _AUTH_CFG_CACHE = 'auth_cfg_v1'
 
 /** Fetch the runtime auth config from the backend. Never throws. */
 export async function loadAuthConfig() {
-  try {
-    const res = await fetch('/api/auth/config', { headers: { 'Content-Type': 'application/json' } })
-    if (!res.ok) return { authRequired: false }
-    return await res.json()
-  } catch {
-    // If the backend is unreachable we fail open to the app, which will surface
-    // its own "backend unavailable" message rather than a blank login screen.
-    return { authRequired: false }
+  // Retry a few times so a transient blip fetching the gate config never silently
+  // drops a gated deployment into open mode. /api/auth/config is public (no token).
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch('/api/auth/config', { headers: { 'Content-Type': 'application/json' } })
+      if (res.ok) {
+        const cfg = await res.json()
+        try { localStorage.setItem(_AUTH_CFG_CACHE, JSON.stringify(cfg)) } catch { /* ignore */ }
+        return cfg
+      }
+    } catch {
+      /* retry */
+    }
+    await new Promise((r) => setTimeout(r, 400 * (attempt + 1)))
   }
+  // Could not reach the gate config. Fall back to the LAST-KNOWN config so a
+  // previously-gated app stays gated (fail CLOSED) through a transient blip. The
+  // backend also enforces auth on every /api call, so nothing is served signed-out.
+  try {
+    const cached = JSON.parse(localStorage.getItem(_AUTH_CFG_CACHE) || 'null')
+    if (cached && cached.authRequired && cached.clientId) return cached
+  } catch {
+    /* ignore */
+  }
+  return { authRequired: false }
 }
 
 /**
@@ -35,6 +58,7 @@ export async function loadAuthConfig() {
  * Returns true when a user is signed in, false otherwise.
  */
 export async function initAuth(config) {
+  _authRequired = !!(config && config.authRequired)
   if (Array.isArray(config.scopes) && config.scopes.length) _scopes = config.scopes
   _msal = new PublicClientApplication({
     auth: {
@@ -59,7 +83,13 @@ export async function initAuth(config) {
 
   if (_account) {
     _msal.setActiveAccount(_account)
+  }
+  // Install the fetch interceptor + session watchdog whenever the deployment is
+  // gated (not only once an account exists) so a session that dies mid-use is
+  // caught on the next /api call and bounced to sign-in.
+  if (_authRequired) {
     installFetchInterceptor()
+    startAuthWatchdog()
   }
   return !!_account
 }
@@ -92,6 +122,47 @@ export async function login() {
 export async function logout() {
   if (!_msal) return
   await _msal.logoutRedirect({ account: _account, postLogoutRedirectUri: window.location.origin })
+}
+
+/**
+ * Strict enforcement entry point: the session is no longer valid (no account, an
+ * expired/again-required token, or a gated /api call returned 401). Bounce the user
+ * to the Entra sign-in page — the app must never run without a live signed-in user.
+ * Debounced so a burst of concurrent 401s can't trigger a redirect loop.
+ */
+export async function handleAuthFailure() {
+  if (!_authRequired || _authFailureHandled) return
+  _authFailureHandled = true
+  _account = null
+  try {
+    if (!_msal) {
+      const cfg = await loadAuthConfig()
+      if (cfg && cfg.authRequired && cfg.clientId) await initAuth(cfg)
+    }
+    if (_msal) {
+      await _msal.loginRedirect({ scopes: _scopes })
+      return
+    }
+  } catch {
+    /* fall through to a hard reload, which re-gates via main.jsx → Login */
+  }
+  window.location.reload()
+}
+
+/**
+ * Re-validate the session when the tab regains focus / becomes visible. The 401
+ * interceptor is the primary guard; this catches an account that was cleared while
+ * the tab was backgrounded so the user is sent to sign-in the moment they return.
+ */
+export function startAuthWatchdog() {
+  if (_watchdogStarted || !_authRequired) return
+  _watchdogStarted = true
+  const check = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+    if (_authRequired && !_account) handleAuthFailure()
+  }
+  window.addEventListener('focus', check)
+  document.addEventListener('visibilitychange', check)
 }
 
 /** Acquire a fresh token (ID token, aud == client id) for the backend. */
@@ -148,9 +219,9 @@ export function installFetchInterceptor() {
   const original = window.fetch.bind(window)
   window.fetch = async (input, init) => {
     const opts = init ? { ...init } : {}
+    const url = typeof input === 'string' ? input : (input && input.url) || ''
+    const isApi = url.startsWith('/api') || url.startsWith(`${window.location.origin}/api`)
     try {
-      const url = typeof input === 'string' ? input : (input && input.url) || ''
-      const isApi = url.startsWith('/api') || url.startsWith(`${window.location.origin}/api`)
       if (isApi && _msal && _account) {
         // Defense-in-depth: never let token plumbing wedge a request. If silent
         // token acquisition stalls (e.g. a slow renewal iframe), proceed without it
@@ -171,7 +242,14 @@ export function installFetchInterceptor() {
     } catch {
       // never block a request because token plumbing hiccupped
     }
-    return original(input, opts)
+    const res = await original(input, opts)
+    // STRICT ENFORCEMENT: a 401 on a gated /api call means the session is gone —
+    // bounce to interactive sign-in instead of letting the app run signed-out.
+    if (_authRequired && isApi && res && res.status === 401) {
+      const publicish = url.includes('/api/auth/config') || url.includes('/api/version')
+      if (!publicish) handleAuthFailure()
+    }
+    return res
   }
 }
 

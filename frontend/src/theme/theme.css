@@ -1,0 +1,340 @@
+/* ===========================================================================
+   Colour theming — token system (auto-generated var map + hand-tuned statics)
+   Dark = default (vars resolve to the original literals in :root, unchanged).
+   Light = html.theme-light remaps every surface/text token to a designed
+   Azure-portal palette (white surfaces, silver canvas, navy text, blue accents).
+   Accent hues (blue/green/red/amber chart+status) stay literals so charts and
+   PDF/canvas exports keep their colours.
+   ========================================================================= */
+
+:root {
+  --c-0c1220: #0c1220;
+  --c-0b1220: #0b1220;
+  --c-0f172a: #0f172a;
+  --c-111827: #111827;
+  --c-0d1117: #0d1117;
+  --c-1f2937: #1f2937;
+  --c-111a2e: #111a2e;
+  --c-131a2b: #131a2b;
+  --c-131c33: #131c33;
+  --c-131c2e: #131c2e;
+  --c-0c1322: #0c1322;
+  --c-0d1424: #0d1424;
+  --c-15233b: #15233b;
+  --c-16233b: #16233b;
+  --c-1a2332: #1a2332;
+  --c-243044: #243044;
+  --c-0c1929: #0c1929;
+  --c-0a1a2e: #0a1a2e;
+  --c-0c1a2e: #0c1a2e;
+  --c-0c1f33: #0c1f33;
+  --c-0d2b3f: #0d2b3f;
+  --c-0c2a4d: #0c2a4d;
+  --c-0c4a6e: #0c4a6e;
+  --c-080c14: #080c14;
+  --c-020617: #020617;
+  --c-0a0f1a: #0a0f1a;
+  --c-0a0f1e: #0a0f1e;
+  --c-0a1018: #0a1018;
+  --c-0b1018: #0b1018;
+  --c-1e293b: #1e293b;
+  --c-374151: #374151;
+  --c-334155: #334155;
+  --c-1e3a5f: #1e3a5f;
+  --c-0e3f73: #0e3f73;
+  --c-3b0000: #3b0000;
+  --c-1a0a0a: #1a0a0a;
+  --c-1e0a0a: #1e0a0a;
+  --c-2a0a0a: #2a0a0a;
+  --c-450a0a: #450a0a;
+  --c-7f1d1d: #7f1d1d;
+  --c-991b1b: #991b1b;
+  --c-b91c1c: #b91c1c;
+  --c-1c1003: #1c1003;
+  --c-1c100a: #1c100a;
+  --c-1c1a05: #1c1a05;
+  --c-1c1a0a: #1c1a0a;
+  --c-431407: #431407;
+  --c-451a03: #451a03;
+  --c-422006: #422006;
+  --c-3a2c08: #3a2c08;
+  --c-3b2b10: #3b2b10;
+  --c-78350f: #78350f;
+  --c-7c3a00: #7c3a00;
+  --c-5c4700: #5c4700;
+  --c-9a3412: #9a3412;
+  --c-92400e: #92400e;
+  --c-0a1a0e: #0a1a0e;
+  --c-05280f: #05280f;
+  --c-052e16: #052e16;
+  --c-0f2a1f: #0f2a1f;
+  --c-0d2b1f: #0d2b1f;
+  --c-06351f: #06351f;
+  --c-064e3b: #064e3b;
+  --c-14532d: #14532d;
+  --c-065f46: #065f46;
+  --c-166534: #166534;
+  --c-1e1b2e: #1e1b2e;
+  --c-1e1b4b: #1e1b4b;
+  --c-312e81: #312e81;
+  --c-3730a3: #3730a3;
+  --c-4c1d95: #4c1d95;
+  --c-e5e7eb: #e5e7eb;
+  --c-d1d5db: #d1d5db;
+  --c-f8fafc: #f8fafc;
+  --c-f1f5f9: #f1f5f9;
+  --c-e2e8f0: #e2e8f0;
+  --c-cbd5e1: #cbd5e1;
+  --c-94a3b8: #94a3b8;
+  --c-64748b: #64748b;
+  --c-475569: #475569;
+  --rgb-slate: 30, 41, 59;
+}
+
+html.theme-light {
+  --c-0c1220: #ffffff;
+  --c-0b1220: #ffffff;
+  --c-0f172a: #ffffff;
+  --c-111827: #ffffff;
+  --c-0d1117: #ffffff;
+  --c-1f2937: #ffffff;
+  --c-111a2e: #ffffff;
+  --c-131a2b: #ffffff;
+  --c-131c33: #ffffff;
+  --c-131c2e: #ffffff;
+  --c-0c1322: #ffffff;
+  --c-0d1424: #ffffff;
+  --c-15233b: #ffffff;
+  --c-16233b: #ffffff;
+  --c-1a2332: #ffffff;
+  --c-243044: #ffffff;
+  --c-0c1929: #ffffff;
+  --c-0a1a2e: #ffffff;
+  --c-0c1a2e: #ffffff;
+  --c-0c1f33: #ffffff;
+  --c-0d2b3f: #ffffff;
+  --c-0c2a4d: #ffffff;
+  --c-0c4a6e: #ffffff;
+  --c-080c14: #eef1f6;
+  --c-020617: #eef1f6;
+  --c-0a0f1a: #eef1f6;
+  --c-0a0f1e: #eef1f6;
+  --c-0a1018: #eef1f6;
+  --c-0b1018: #eef1f6;
+  --c-1e293b: #dde4ee;
+  --c-374151: #dde4ee;
+  --c-334155: #c3ccda;
+  --c-1e3a5f: #e6eefb;
+  --c-0e3f73: #e6eefb;
+  --c-3b0000: #fdecec;
+  --c-1a0a0a: #fdecec;
+  --c-1e0a0a: #fdecec;
+  --c-2a0a0a: #fdecec;
+  --c-450a0a: #fdecec;
+  --c-7f1d1d: #fbe3e3;
+  --c-991b1b: #fbe3e3;
+  --c-b91c1c: #fbe3e3;
+  --c-1c1003: #fdf3e2;
+  --c-1c100a: #fdf3e2;
+  --c-1c1a05: #fdf6e0;
+  --c-1c1a0a: #fdf6e0;
+  --c-431407: #fdf3e2;
+  --c-451a03: #fdf3e2;
+  --c-422006: #fdf3e2;
+  --c-3a2c08: #fdf6e0;
+  --c-3b2b10: #fdf6e0;
+  --c-78350f: #fbecd6;
+  --c-7c3a00: #fbecd6;
+  --c-5c4700: #fbf3d6;
+  --c-9a3412: #fbe6d6;
+  --c-92400e: #fbecd6;
+  --c-0a1a0e: #e7f8ee;
+  --c-05280f: #e7f8ee;
+  --c-052e16: #e7f8ee;
+  --c-0f2a1f: #e7f8ee;
+  --c-0d2b1f: #e7f8ee;
+  --c-06351f: #e7f8ee;
+  --c-064e3b: #dcf4e6;
+  --c-14532d: #dcf4e6;
+  --c-065f46: #dcf4e6;
+  --c-166534: #dcf4e6;
+  --c-1e1b2e: #eeeffb;
+  --c-1e1b4b: #eeeffb;
+  --c-312e81: #e7e8fb;
+  --c-3730a3: #e7e8fb;
+  --c-4c1d95: #f1e8fb;
+  --c-e5e7eb: #2a3a4f;
+  --c-d1d5db: #3a4a5e;
+  --c-f8fafc: #0e1a2b;
+  --c-f1f5f9: #16273e;
+  --c-e2e8f0: #2a3a4f;
+  --c-cbd5e1: #45566b;
+  --c-94a3b8: #64758b;
+  --c-64748b: #5b6b7e;
+  --c-475569: #566274;
+  --rgb-slate: 205, 213, 224;
+  background: var(--c-080c14);
+  color-scheme: light;
+}
+html.theme-light body { background: var(--c-080c14); }
+/* ── Tailwind dark utilities → light (covers opacity variants e.g. bg-slate-800/60) ── */
+html.theme-light [class*="bg-gray-9"], html.theme-light [class*="bg-gray-8"],
+html.theme-light [class*="bg-slate-9"], html.theme-light [class*="bg-slate-8"],
+html.theme-light [class*="bg-neutral-9"], html.theme-light [class*="bg-zinc-9"] {
+  background-color: #ffffff !important;
+}
+html.theme-light [class*="bg-gray-7"], html.theme-light [class*="bg-slate-7"] {
+  background-color: #eef1f6 !important;
+}
+
+html.theme-light [class*="border-gray-9"], html.theme-light [class*="border-gray-8"],
+html.theme-light [class*="border-gray-7"], html.theme-light [class*="border-slate-9"],
+html.theme-light [class*="border-slate-8"], html.theme-light [class*="border-slate-7"] {
+  border-color: #e2e8f1 !important;
+}
+html.theme-light .divide-slate-800 > *, html.theme-light .divide-gray-800 > *,
+html.theme-light .divide-slate-700 > *, html.theme-light .divide-gray-700 > * {
+  border-color: #e2e8f1 !important;
+}
+
+html.theme-light .text-white,
+html.theme-light [class*="text-gray-1"], html.theme-light [class*="text-gray-2"], html.theme-light [class*="text-gray-3"],
+html.theme-light [class*="text-slate-1"], html.theme-light [class*="text-slate-2"], html.theme-light [class*="text-slate-3"] {
+  color: #16273e !important;
+}
+html.theme-light [class*="text-gray-4"], html.theme-light [class*="text-gray-5"],
+html.theme-light [class*="text-slate-4"], html.theme-light [class*="text-slate-5"] {
+  color: #5b6b7e !important;
+}
+
+/* ── Accent-tinted Tailwind surfaces → soft light tints (readable in light) ── */
+html.theme-light [class*="bg-green-9"], html.theme-light [class*="bg-green-8"],
+html.theme-light [class*="bg-emerald-9"], html.theme-light [class*="bg-emerald-8"],
+html.theme-light [class*="bg-teal-9"], html.theme-light [class*="bg-lime-9"] { background-color: #e6f6ed !important; }
+html.theme-light [class*="bg-red-9"], html.theme-light [class*="bg-red-8"],
+html.theme-light [class*="bg-rose-9"], html.theme-light [class*="bg-rose-8"] { background-color: #fdecec !important; }
+html.theme-light [class*="bg-amber-9"], html.theme-light [class*="bg-amber-8"],
+html.theme-light [class*="bg-yellow-9"], html.theme-light [class*="bg-orange-9"],
+html.theme-light [class*="bg-orange-8"] { background-color: #fdf3e2 !important; }
+html.theme-light [class*="bg-blue-9"], html.theme-light [class*="bg-blue-8"],
+html.theme-light [class*="bg-indigo-9"], html.theme-light [class*="bg-indigo-8"],
+html.theme-light [class*="bg-sky-9"], html.theme-light [class*="bg-cyan-9"] { background-color: #e9f1fd !important; }
+html.theme-light [class*="bg-purple-9"], html.theme-light [class*="bg-purple-8"],
+html.theme-light [class*="bg-violet-9"], html.theme-light [class*="bg-fuchsia-9"],
+html.theme-light [class*="bg-pink-9"] { background-color: #f3ecfc !important; }
+
+/* Accent text → readable darker accent on light surfaces */
+html.theme-light [class*="text-green-"], html.theme-light [class*="text-emerald-"],
+html.theme-light [class*="text-teal-"], html.theme-light [class*="text-lime-"] { color: #15803d !important; }
+html.theme-light [class*="text-red-"], html.theme-light [class*="text-rose-"] { color: #c02626 !important; }
+html.theme-light [class*="text-amber-"], html.theme-light [class*="text-yellow-"],
+html.theme-light [class*="text-orange-"] { color: #b45309 !important; }
+html.theme-light [class*="text-blue-"], html.theme-light [class*="text-indigo-"] { color: #1d4ed8 !important; }
+html.theme-light [class*="text-sky-"], html.theme-light [class*="text-cyan-"] { color: #0369a1 !important; }
+html.theme-light [class*="text-purple-"], html.theme-light [class*="text-violet-"],
+html.theme-light [class*="text-fuchsia-"] { color: #7c3aed !important; }
+html.theme-light [class*="text-pink-"] { color: #be185d !important; }
+
+/* Accent borders → soft tinted (keep the colour cue, light in tone) */
+html.theme-light [class*="border-green-9"], html.theme-light [class*="border-green-8"],
+html.theme-light [class*="border-emerald-8"], html.theme-light [class*="border-emerald-9"] { border-color: #c7ebd5 !important; }
+html.theme-light [class*="border-red-9"], html.theme-light [class*="border-red-8"],
+html.theme-light [class*="border-rose-8"] { border-color: #f6d4d4 !important; }
+html.theme-light [class*="border-amber-9"], html.theme-light [class*="border-amber-8"],
+html.theme-light [class*="border-yellow-8"], html.theme-light [class*="border-orange-8"] { border-color: #f6e4bf !important; }
+html.theme-light [class*="border-blue-9"], html.theme-light [class*="border-blue-8"],
+html.theme-light [class*="border-indigo-8"], html.theme-light [class*="border-sky-8"],
+html.theme-light [class*="border-cyan-8"] { border-color: #cfe0f8 !important; }
+html.theme-light [class*="border-purple-9"], html.theme-light [class*="border-purple-8"],
+html.theme-light [class*="border-violet-8"] { border-color: #e3d4f7 !important; }
+
+/* index.css component classes */
+html.theme-light .card {
+  background: #ffffff !important; border-color: #e2e8f1 !important;
+  box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06) !important;
+}
+html.theme-light .btn-ghost { background: #eef1f6 !important; color: #2a3a4f !important; }
+html.theme-light .th { color: #5b6b7e !important; }
+html.theme-light .td { color: #2a3a4f !important; }
+
+/* ── Chrome bands (modern Azure light) ──────────────────────────────────── */
+html.theme-light [data-app-shell] {
+  background: linear-gradient(180deg, #f5f8fd 0%, #eaeff7 55%, #e7edf6 100%) !important;
+}
+html.theme-light [data-scope-bar] {
+  background: #ffffff !important;
+  border-bottom: 1px solid #e4e9f2 !important;
+}
+html.theme-light [data-app-header] {
+  background: #ffffff !important;
+  border-bottom: 1px solid #e4e9f2 !important;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, .05) !important;
+}
+html.theme-light [data-app-header] > div { background: transparent !important; }
+html.theme-light [data-app-sidebar] {
+  background: linear-gradient(180deg, #ffffff 0%, #f5f8fe 100%) !important;
+  border-right: 1px solid #e4e9f2 !important;
+  box-shadow: 1px 0 6px rgba(15, 23, 42, .03) !important;
+}
+
+/* ── Card depth — make white surfaces float on the canvas ────────────────── */
+html.theme-light [style*="var(--c-0f172a)"],
+html.theme-light [style*="var(--c-111827)"],
+html.theme-light .card {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 12px 28px -12px rgba(15, 23, 42, .16) !important;
+}
+/* Nested/inner panels: lighter, no double-heavy shadow */
+html.theme-light [style*="var(--c-0b1220)"] {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04) !important;
+}
+
+/* ── Feature banners: convert dark Tailwind gradients to soft brand tints ─── */
+html.theme-light [class*="from-sky-9"], html.theme-light [class*="from-indigo-9"],
+html.theme-light [class*="from-blue-9"], html.theme-light [class*="from-slate-9"],
+html.theme-light [class*="from-gray-9"], html.theme-light [class*="from-cyan-9"],
+html.theme-light [class*="from-violet-9"], html.theme-light [class*="from-purple-9"] {
+  background-image: linear-gradient(135deg, #eff5ff 0%, #eef1fc 100%) !important;
+}
+html.theme-light [class*="from-emerald-9"], html.theme-light [class*="from-green-9"],
+html.theme-light [class*="from-teal-9"] {
+  background-image: linear-gradient(135deg, #edfaf1 0%, #eafaf4 100%) !important;
+}
+html.theme-light [class*="from-amber-9"], html.theme-light [class*="from-orange-9"],
+html.theme-light [class*="from-yellow-9"] {
+  background-image: linear-gradient(135deg, #fdf6e8 0%, #fdf2e3 100%) !important;
+}
+html.theme-light [class*="from-red-9"], html.theme-light [class*="from-rose-9"] {
+  background-image: linear-gradient(135deg, #fdeeee 0%, #fdecec 100%) !important;
+}
+/* Soften dark accent borders used on those banners */
+html.theme-light [class*="border-sky-9"], html.theme-light [class*="border-indigo-9"],
+html.theme-light [class*="border-blue-9"], html.theme-light [class*="border-emerald-9"],
+html.theme-light [class*="border-green-9"], html.theme-light [class*="border-amber-9"],
+html.theme-light [class*="border-purple-9"], html.theme-light [class*="border-violet-9"],
+html.theme-light [class*="border-red-9"], html.theme-light [class*="border-cyan-9"] {
+  border-color: #e4e9f2 !important;
+}
+
+/* Scrollbars */
+html.theme-light ::-webkit-scrollbar-thumb { background: #c3ccd9; }
+html.theme-light ::-webkit-scrollbar-thumb:hover { background: #aab6c7; }
+
+/* ── Accent TEXT colours — darkened for light mode. These tokens are applied
+      ONLY where a light accent was used as text (`color:`), never on chart
+      fill/stroke or colour arrays, so charts keep their vivid literals. ──────*/
+:root {
+  --c-60a5fa:#60a5fa; --c-93c5fd:#93c5fd; --c-86efac:#86efac; --c-34d399:#34d399;
+  --c-4ade80:#4ade80; --c-6ee7b7:#6ee7b7; --c-5eead4:#5eead4; --c-fbbf24:#fbbf24;
+  --c-fcd34d:#fcd34d; --c-fde047:#fde047; --c-facc15:#facc15; --c-7dd3fc:#7dd3fc;
+  --c-67e8f9:#67e8f9; --c-38bdf8:#38bdf8; --c-a78bfa:#a78bfa; --c-c4b5fd:#c4b5fd;
+  --c-c7d2fe:#c7d2fe; --c-fca5a5:#fca5a5; --c-f87171:#f87171; --c-fdba74:#fdba74;
+  --c-fed7aa:#fed7aa; --c-9ca3af:#9ca3af; --c-6b7280:#6b7280;
+}
+html.theme-light {
+  --c-60a5fa:#2563eb; --c-93c5fd:#2563eb; --c-86efac:#15803d; --c-34d399:#15803d;
+  --c-4ade80:#15803d; --c-6ee7b7:#15803d; --c-5eead4:#0d9488; --c-fbbf24:#b45309;
+  --c-fcd34d:#b45309; --c-fde047:#a16207; --c-facc15:#a16207; --c-7dd3fc:#0369a1;
+  --c-67e8f9:#0e7490; --c-38bdf8:#0369a1; --c-a78bfa:#7c3aed; --c-c4b5fd:#7c3aed;
+  --c-c7d2fe:#4f46e5; --c-fca5a5:#dc2626; --c-f87171:#dc2626; --c-fdba74:#c2410c;
+  --c-fed7aa:#c2410c; --c-9ca3af:#5b6b7e; --c-6b7280:#5b6b7e;
+}

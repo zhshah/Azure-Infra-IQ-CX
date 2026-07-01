@@ -25,16 +25,16 @@ import SearchableSelect from '../components/shared/SearchableSelect'
 function KPICard({ label, value, sub, icon: Icon, color = '#3b82f6', accent }) {
   return (
     <div style={{
-      background: '#111827', border: `1px solid ${accent || '#1e293b'}`, borderRadius: 10,
+      background: 'var(--c-111827)', border: `1px solid ${accent || 'var(--c-1e293b)'}`, borderRadius: 10,
       padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 6,
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ color: '#64748b', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</span>
+        <span style={{ color: 'var(--c-64748b)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</span>
         {Icon && <Icon size={16} style={{ color }} />}
       </div>
-      <div style={{ color: '#f1f5f9', fontSize: 22, fontWeight: 700 }}>{value}</div>
+      <div style={{ color: 'var(--c-f1f5f9)', fontSize: 22, fontWeight: 700 }}>{value}</div>
       {sub != null && (
-        <div style={{ fontSize: 11, color: '#64748b' }}>{sub}</div>
+        <div style={{ fontSize: 11, color: 'var(--c-64748b)' }}>{sub}</div>
       )}
     </div>
   )
@@ -46,10 +46,10 @@ function HealthBar({ label, pct, color }) {
   return (
     <div style={{ marginBottom: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-        <span style={{ color: '#94a3b8', fontSize: 11 }}>{label}</span>
+        <span style={{ color: 'var(--c-94a3b8)', fontSize: 11 }}>{label}</span>
         <span style={{ color: c, fontSize: 11, fontWeight: 700 }}>{fmtPct(pct)}</span>
       </div>
-      <div style={{ height: 5, background: '#1e293b', borderRadius: 4, overflow: 'hidden' }}>
+      <div style={{ height: 5, background: 'var(--c-1e293b)', borderRadius: 4, overflow: 'hidden' }}>
         <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: c, borderRadius: 4, transition: 'width 0.6s ease' }} />
       </div>
     </div>
@@ -59,7 +59,7 @@ function HealthBar({ label, pct, color }) {
 /* ── Date X-axis tick ──────────────────────────────────────────────── */
 function DateTick({ x, y, payload }) {
   const label = payload?.value ? payload.value.slice(5) : ''  // "MM-DD"
-  return <text x={x} y={y + 12} fill="#475569" fontSize={9} textAnchor="middle">{label}</text>
+  return <text x={x} y={y + 12} style={{ fill: 'var(--c-475569)' }} fontSize={9} textAnchor="middle">{label}</text>
 }
 
 /* ── Pie chart label ──────────────────────────────────────────────── */
@@ -70,7 +70,7 @@ function PieLabel({ cx, cy, midAngle, innerRadius, outerRadius, pct, label }) {
   const x = cx + radius * Math.cos(-midAngle * RADIAN)
   const y = cy + radius * Math.sin(-midAngle * RADIAN)
   return (
-    <text x={x} y={y} fill="#e2e8f0" textAnchor="middle" dominantBaseline="central" fontSize={10} fontWeight={600}>
+    <text x={x} y={y} style={{ fill: 'var(--c-e2e8f0)' }} textAnchor="middle" dominantBaseline="central" fontSize={10} fontWeight={600}>
       {pct.toFixed(0)}%
     </text>
   )
@@ -81,11 +81,11 @@ function FilterPill({ label, onClear }) {
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 4,
-      background: '#1e3a5f', border: '1px solid #1d4ed8', borderRadius: 12,
-      padding: '2px 10px 2px 8px', fontSize: 11, color: '#93c5fd',
+      background: 'var(--c-1e3a5f)', border: '1px solid #1d4ed8', borderRadius: 12,
+      padding: '2px 10px 2px 8px', fontSize: 11, color: 'var(--c-93c5fd)',
     }}>
       {label}
-      <button onClick={onClear} style={{ background: 'none', border: 'none', color: '#93c5fd', cursor: 'pointer', padding: 0, display: 'flex' }}>
+      <button onClick={onClear} style={{ background: 'none', border: 'none', color: 'var(--c-93c5fd)', cursor: 'pointer', padding: 0, display: 'flex' }}>
         <X size={10} />
       </button>
     </span>
@@ -242,7 +242,7 @@ export default function FinOpsDashboard() {
 
   if (loading) return <KPISkeleton count={6} />
   if (error) return (
-    <div style={{ background: '#1a0e0e', border: '1px solid #7f1d1d', borderRadius: 10, padding: 20, color: '#fca5a5', display: 'flex', gap: 10 }}>
+    <div style={{ background: '#1a0e0e', border: '1px solid var(--c-7f1d1d)', borderRadius: 10, padding: 20, color: 'var(--c-fca5a5)', display: 'flex', gap: 10 }}>
       <AlertCircle size={18} style={{ flexShrink: 0, marginTop: 1 }} />
       <div>
         <div style={{ fontWeight: 600, marginBottom: 4 }}>Failed to load FinOps summary</div>
@@ -272,8 +272,8 @@ export default function FinOpsDashboard() {
       {/* ── Header ── */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <div>
-          <h2 style={{ color: '#f1f5f9', fontSize: 18, fontWeight: 700, margin: 0 }}>FinOps Dashboard</h2>
-          <p style={{ color: '#64748b', fontSize: 12, margin: 0 }}>
+          <h2 style={{ color: 'var(--c-f1f5f9)', fontSize: 18, fontWeight: 700, margin: 0 }}>FinOps Dashboard</h2>
+          <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: 0 }}>
             Azure Cost Management · {kpi.subscription_count} subscriptions · {kpi.total_resource_count} resources
           </p>
         </div>
@@ -282,28 +282,28 @@ export default function FinOpsDashboard() {
             onCsv={() => finopsApi.downloadCsv(breakdownDim, timeRange)}
             onXlsx={() => finopsApi.downloadReport()} />
           {chartData?.date_from && (
-            <span style={{ fontSize: 10, color: '#475569' }}>
+            <span style={{ fontSize: 10, color: 'var(--c-475569)' }}>
               {chartData.date_from} → {chartData.date_to}
             </span>
           )}
-          <span style={{ fontSize: 10, color: '#334155' }}>
+          <span style={{ fontSize: 10, color: 'var(--c-334155)' }}>
             {kpi.generated_at ? new Date(kpi.generated_at).toLocaleString() : ''}
           </span>
-          <span style={{ fontSize: 10, color: '#475569', background: '#0f172a', border: '1px solid #1e293b', borderRadius: 4, padding: '2px 6px' }}>
+          <span style={{ fontSize: 10, color: 'var(--c-475569)', background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 4, padding: '2px 6px' }}>
             {kpi.data_source === 'dashboard_cache' ? '⚡ cached' : '☁ live'}
           </span>
           <button onClick={() => setShowFilters(f => !f)} style={{
-            background: filtersActive ? '#1e3a5f' : '#1e293b',
-            border: `1px solid ${filtersActive ? '#1d4ed8' : '#334155'}`,
+            background: filtersActive ? 'var(--c-1e3a5f)' : 'var(--c-1e293b)',
+            border: `1px solid ${filtersActive ? '#1d4ed8' : 'var(--c-334155)'}`,
             borderRadius: 6, padding: '5px 10px', cursor: 'pointer',
-            color: filtersActive ? '#93c5fd' : '#94a3b8', fontSize: 11,
+            color: filtersActive ? '#93c5fd' : 'var(--c-94a3b8)', fontSize: 11,
             display: 'flex', alignItems: 'center', gap: 5,
           }}>
             <Filter size={12} /> Filters {filtersActive && '●'}
           </button>
           <button onClick={() => { loadInitial(); }} style={{
-            background: '#1e293b', border: '1px solid #334155', borderRadius: 6,
-            padding: '5px 10px', cursor: 'pointer', color: '#94a3b8', fontSize: 11,
+            background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6,
+            padding: '5px 10px', cursor: 'pointer', color: 'var(--c-94a3b8)', fontSize: 11,
             display: 'flex', alignItems: 'center', gap: 5,
           }}>
             <RefreshCw size={12} /> Refresh
@@ -317,7 +317,7 @@ export default function FinOpsDashboard() {
       {/* ── Filter Bar ── */}
       {showFilters && (
         <div style={{
-          background: '#0f172a', border: '1px solid #1e293b', borderRadius: 10, padding: '14px 18px',
+          background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: '14px 18px',
           display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'flex-end',
         }}>
           <SearchableSelect
@@ -357,8 +357,8 @@ export default function FinOpsDashboard() {
 
           {filtersActive && (
             <button onClick={clearAllFilters} style={{
-              background: '#1e293b', border: '1px solid #334155', borderRadius: 6,
-              padding: '6px 12px', cursor: 'pointer', color: '#94a3b8', fontSize: 11,
+              background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6,
+              padding: '6px 12px', cursor: 'pointer', color: 'var(--c-94a3b8)', fontSize: 11,
               display: 'flex', alignItems: 'center', gap: 4, alignSelf: 'flex-end',
             }}>
               <X size={10} /> Clear All
@@ -368,7 +368,7 @@ export default function FinOpsDashboard() {
           {chartLoading && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, alignSelf: 'flex-end', paddingBottom: 4 }}>
               <RefreshCw size={12} className="animate-spin" style={{ color: '#3b82f6' }} />
-              <span style={{ color: '#64748b', fontSize: 11 }}>Updating…</span>
+              <span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Updating…</span>
             </div>
           )}
         </div>
@@ -393,14 +393,14 @@ export default function FinOpsDashboard() {
       {/* ── Anomaly banner ── */}
       {kpi.anomaly_count > 0 && (
         <div style={{
-          background: '#1a0e0e', border: '1px solid #7f1d1d', borderRadius: 8,
+          background: '#1a0e0e', border: '1px solid var(--c-7f1d1d)', borderRadius: 8,
           padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13,
         }}>
-          <AlertTriangle size={16} style={{ color: '#f87171', flexShrink: 0 }} />
-          <span style={{ color: '#fca5a5', fontWeight: 600 }}>
+          <AlertTriangle size={16} style={{ color: 'var(--c-f87171)', flexShrink: 0 }} />
+          <span style={{ color: 'var(--c-fca5a5)', fontWeight: 600 }}>
             {kpi.anomaly_count} cost anomal{kpi.anomaly_count === 1 ? 'y' : 'ies'} detected
           </span>
-          <span style={{ color: '#64748b', fontSize: 12 }}>— check Alerts tab for details</span>
+          <span style={{ color: 'var(--c-64748b)', fontSize: 12 }}>— check Alerts tab for details</span>
         </div>
       )}
 
@@ -412,10 +412,10 @@ export default function FinOpsDashboard() {
           value={fmtUsd(filtersActive && chartData ? totalCost : kpi.total_spend_mtd)}
           sub={
             filtersActive && chartData
-              ? <span style={{ color: '#64748b' }}>{TIME_LABELS[timeRange] || timeRange}</span>
+              ? <span style={{ color: 'var(--c-64748b)' }}>{TIME_LABELS[timeRange] || timeRange}</span>
               : <span style={{ color: momColor }}>{momArrow} {Math.abs(kpi.mom_delta_pct).toFixed(1)}% vs last month</span>
           }
-          accent={kpi.mom_delta_pct > 20 ? '#7f1d1d' : undefined}
+          accent={kpi.mom_delta_pct > 20 ? 'var(--c-7f1d1d)' : undefined}
         />
         <KPICard
           label="EOM Forecast" icon={TrendingUp} color="#8b5cf6"
@@ -456,25 +456,25 @@ export default function FinOpsDashboard() {
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
 
         {/* Spend trend with real dates */}
-        <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16, position: 'relative' }}>
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16, position: 'relative' }}>
           {chartLoading && (
             <div style={{ position: 'absolute', top: 8, right: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
               <RefreshCw size={10} className="animate-spin" style={{ color: '#3b82f6' }} />
             </div>
           )}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <span style={{ color: '#94a3b8', fontSize: 12, fontWeight: 600 }}>
+            <span style={{ color: 'var(--c-94a3b8)', fontSize: 12, fontWeight: 600 }}>
               Spend Trend — {TIME_LABELS[timeRange] || timeRange} (USD)
             </span>
             <div style={{ display: 'flex', gap: 6 }}>
-              <span style={{ color: '#475569', fontSize: 10, alignSelf: 'center' }}>
+              <span style={{ color: 'var(--c-475569)', fontSize: 10, alignSelf: 'center' }}>
                 Total: {fmtUsd(trendTotal, 0)}
               </span>
               <button onClick={() => setAccumulated(a => !a)} style={{
-                background: accumulated ? '#1e3a5f' : '#1e293b',
-                border: `1px solid ${accumulated ? '#1d4ed8' : '#334155'}`,
+                background: accumulated ? 'var(--c-1e3a5f)' : 'var(--c-1e293b)',
+                border: `1px solid ${accumulated ? '#1d4ed8' : 'var(--c-334155)'}`,
                 borderRadius: 6, padding: '3px 10px', cursor: 'pointer',
-                color: accumulated ? '#93c5fd' : '#64748b', fontSize: 11,
+                color: accumulated ? '#93c5fd' : 'var(--c-64748b)', fontSize: 11,
               }}>∑ Cumulative</button>
             </div>
           </div>
@@ -491,7 +491,7 @@ export default function FinOpsDashboard() {
                 <XAxis dataKey="date" tick={<DateTick />} interval={Math.max(1, Math.floor(trendData.length / 6))} />
                 <YAxis tick={{ fill: '#475569', fontSize: 10 }} tickFormatter={v => '$' + (v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toFixed(0))} width={52} />
                 <Tooltip
-                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 11 }}
+                  contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }}
                   formatter={v => [fmtUsd(v, 2), accumulated ? 'Cumulative' : 'Daily Spend']}
                   labelFormatter={d => `Date: ${d}`}
                 />
@@ -499,20 +499,20 @@ export default function FinOpsDashboard() {
               </AreaChart>
             </ResponsiveContainer>
           ) : (
-            <div style={{ height: 210, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#334155', fontSize: 12 }}>
+            <div style={{ height: 210, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--c-334155)', fontSize: 12 }}>
               No trend data available for selected filters
             </div>
           )}
         </div>
 
         {/* Breakdown bar chart */}
-        <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16, position: 'relative' }}>
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16, position: 'relative' }}>
           {chartLoading && (
             <div style={{ position: 'absolute', top: 8, right: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
               <RefreshCw size={10} className="animate-spin" style={{ color: '#3b82f6' }} />
             </div>
           )}
-          <div style={{ color: '#94a3b8', fontSize: 12, fontWeight: 600, marginBottom: 12 }}>
+          <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, fontWeight: 600, marginBottom: 12 }}>
             Cost by {dimLabel}
           </div>
           {breakdownData.length > 0 ? (
@@ -521,14 +521,14 @@ export default function FinOpsDashboard() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
                 <XAxis type="number" tick={{ fill: '#475569', fontSize: 9 }} tickFormatter={v => '$' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v.toFixed(0))} />
                 <YAxis type="category" dataKey="name" tick={{ fill: '#94a3b8', fontSize: 9 }} width={100} />
-                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 11 }} formatter={v => [fmtUsd(v, 2), 'Cost']} />
+                <Tooltip contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }} formatter={v => [fmtUsd(v, 2), 'Cost']} />
                 <Bar dataKey="cost" radius={[0, 4, 4, 0]} maxBarSize={22}>
                   {breakdownData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div style={{ height: 210, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#334155', fontSize: 12 }}>
+            <div style={{ height: 210, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--c-334155)', fontSize: 12 }}>
               No breakdown data available
             </div>
           )}
@@ -539,8 +539,8 @@ export default function FinOpsDashboard() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
 
         {/* Pie / donut chart for cost distribution */}
-        <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
-          <div style={{ color: '#94a3b8', fontSize: 12, fontWeight: 600, marginBottom: 12 }}>
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
+          <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, fontWeight: 600, marginBottom: 12 }}>
             Cost Distribution — {dimLabel}
           </div>
           {breakdownData.length > 0 ? (
@@ -564,32 +564,32 @@ export default function FinOpsDashboard() {
                   >
                     {breakdownData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
                   </Pie>
-                  <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 11 }} formatter={v => fmtUsd(v, 2)} />
+                  <Tooltip contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }} formatter={v => fmtUsd(v, 2)} />
                 </PieChart>
               </ResponsiveContainer>
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, overflow: 'hidden' }}>
                 {breakdownData.slice(0, 6).map((d, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
                     <div style={{ width: 8, height: 8, borderRadius: 2, background: CHART_COLORS[i % CHART_COLORS.length], flexShrink: 0 }} />
-                    <span style={{ color: '#94a3b8', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
-                    <span style={{ color: '#e2e8f0', fontWeight: 600, flexShrink: 0 }}>{fmtUsd(d.cost)}</span>
+                    <span style={{ color: 'var(--c-94a3b8)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
+                    <span style={{ color: 'var(--c-e2e8f0)', fontWeight: 600, flexShrink: 0 }}>{fmtUsd(d.cost)}</span>
                   </div>
                 ))}
                 {breakdownData.length > 6 && (
-                  <span style={{ color: '#475569', fontSize: 10 }}>+{breakdownData.length - 6} more</span>
+                  <span style={{ color: 'var(--c-475569)', fontSize: 10 }}>+{breakdownData.length - 6} more</span>
                 )}
               </div>
             </div>
           ) : (
-            <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#334155', fontSize: 12 }}>
+            <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--c-334155)', fontSize: 12 }}>
               No data available
             </div>
           )}
         </div>
 
         {/* Health metrics */}
-        <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
-          <div style={{ color: '#94a3b8', fontSize: 12, fontWeight: 600, marginBottom: 14 }}>FinOps Health Metrics</div>
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
+          <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, fontWeight: 600, marginBottom: 14 }}>FinOps Health Metrics</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <HealthBar label="Budget Utilization"
               pct={kpi.budget_utilization_pct}
@@ -608,7 +608,7 @@ export default function FinOpsDashboard() {
       </div>
 
       {/* ── Footer ── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#334155' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--c-334155)' }}>
         <span>Source: {kpi.data_source} · All figures in USD</span>
         <span>
           MoM: {kpi.mom_delta_usd >= 0 ? '+' : ''}{fmtUsd(kpi.mom_delta_usd, 2)} ({kpi.mom_delta_pct >= 0 ? '+' : ''}{kpi.mom_delta_pct}%)

@@ -95,7 +95,7 @@ export default function WasteQuadrant({ resources = [], onResourceClick }) {
             <Label value="Cost/mo" angle={-90} position="insideLeft" offset={15} fill="#4b5563" fontSize={11} />
           </YAxis>
 
-          <Tooltip content={<CustomTooltip />} cursor={{ strokeDasharray: '3 3', stroke: '#374151' }} />
+          <Tooltip content={<CustomTooltip />} cursor={{ strokeDasharray: '3 3', stroke: 'var(--c-374151)' }} />
 
           {/* Quadrant lines */}
           <ReferenceLine x={MID_UTIL} stroke="#374151" strokeDasharray="4 4" />

@@ -8,10 +8,10 @@ import React, { useState, useEffect } from 'react'
 import { getAccount, logout, getProfilePhoto } from './auth.js'
 
 const COLORS = {
-  nameText: '#f1f5f9',
-  emailText: '#94a3b8',
+  nameText: 'var(--c-f1f5f9)',
+  emailText: 'var(--c-94a3b8)',
   avatarBorder: 'rgba(255,255,255,0.25)',
-  btnText: '#e2e8f0',
+  btnText: 'var(--c-e2e8f0)',
   btnBorder: 'rgba(255,255,255,0.28)',
   btnHover: 'rgba(255,255,255,0.12)',
   primary: '#0078d4',

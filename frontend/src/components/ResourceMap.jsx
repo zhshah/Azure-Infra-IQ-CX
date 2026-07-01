@@ -186,7 +186,7 @@ const EDGE_STYLE = {
   private:    { stroke: '#facc15', dasharray: '1 3',  particleColor: '#fde047', label: 'Private link' },
   monitor:    { stroke: '#38bdf8', dasharray: '2 3',  particleColor: '#7dd3fc', label: 'Monitoring' },
   dependency: { stroke: '#a78bfa', dasharray: '2 3',  particleColor: '#c4b5fd', label: 'Dependency' },
-  app:        { stroke: '#94a3b8', dasharray: '3 3',  particleColor: '#cbd5e1', label: 'App grouping' },
+  app:        { stroke: 'var(--c-94a3b8)', dasharray: '3 3',  particleColor: 'var(--c-cbd5e1)', label: 'App grouping' },
 }
 
 // ── Animated flow particle ─────────────────────────────────────────────────────
@@ -644,7 +644,7 @@ export default function ResourceMap({ resources = [], onNavigate }) {
           <defs>
             {/* Dot grid background */}
             <pattern id="dot-grid" x="0" y="0" width="28" height="28" patternUnits="userSpaceOnUse">
-              <circle cx="1.5" cy="1.5" r="1" fill="#1e293b"/>
+              <circle cx="1.5" cy="1.5" r="1" style={{ fill: 'var(--c-1e293b)' }}/>
             </pattern>
 
             {/* Node gradients */}
@@ -798,7 +798,7 @@ export default function ResourceMap({ resources = [], onNavigate }) {
 
                   {/* Type icon */}
                   <text textAnchor="middle" dominantBaseline="central"
-                    fontSize={iconSize} fontWeight="700" fill="#0f172a"
+                    fontSize={iconSize} fontWeight="700" style={{ fill: 'var(--c-0f172a)' }}
                     fontFamily="ui-sans-serif, system-ui, sans-serif"
                     opacity={dim ? 0 : 0.88}
                     style={{ pointerEvents: 'none', userSelect: 'none' }}>
@@ -808,7 +808,7 @@ export default function ResourceMap({ resources = [], onNavigate }) {
                   {/* Orphan indicator */}
                   {n.data.is_orphan && (
                     <circle r={4.5} cx={n.r-3} cy={-(n.r-3)}
-                      fill="#f97316" stroke="#0f172a" strokeWidth={1} />
+                      fill="#f97316" style={{ stroke: 'var(--c-0f172a)' }} strokeWidth={1} />
                   )}
                 </g>
               )

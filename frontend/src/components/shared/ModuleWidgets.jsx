@@ -135,7 +135,7 @@ export function DataTable({ columns, data, title, emptyMsg, exportFilename, page
     const logo = await _getBrandLogo()
     const brandRow = `<tr><td colspan="${ncol}" style="background:#0A66C2;padding:8px 12px;font-family:Segoe UI,Arial,sans-serif">${logo ? `<img src="${logo}" width="26" height="26" style="vertical-align:middle"/>&nbsp;&nbsp;` : ''}<span style="color:#ffffff;font-size:15pt;font-weight:bold">Azure Infra IQ</span></td></tr>`
     const subRow = `<tr><td colspan="${ncol}" style="background:#0A66C2;color:#cfe3fa;padding:0 12px 8px;font-family:Segoe UI,Arial,sans-serif;font-size:9pt">${esc(title || 'Report')} &middot; Exported ${esc(new Date().toLocaleString())}</td></tr>`
-    const head = `<tr>${columns.map(c => `<th style="background:#1f2937;color:#fff;text-align:left">${esc(c.label)}</th>`).join('')}</tr>`
+    const head = `<tr>${columns.map(c => `<th style="background:var(--c-1f2937);color:#fff;text-align:left">${esc(c.label)}</th>`).join('')}</tr>`
     const body = sorted.map(row => `<tr>${columns.map(c => `<td>${esc(cellText(c, row))}</td>`).join('')}</tr>`).join('')
     const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1" cellspacing="0">${brandRow}${subRow}${head}${body}</table></body></html>`
     _download(`${exportFilename || 'report'}-${_stamp()}.xls`, 'application/vnd.ms-excel', html)
@@ -275,7 +275,7 @@ export function DonutChart({ value, max = 100, label, color }) {
   return (
     <div className="flex flex-col items-center gap-2">
       <svg width="90" height="90" viewBox="0 0 100 100">
-        <circle cx="50" cy="50" r={radius} fill="none" stroke="#1e293b" strokeWidth="8" />
+        <circle cx="50" cy="50" r={radius} fill="none" style={{ stroke: 'var(--c-1e293b)' }} strokeWidth="8" />
         <circle cx="50" cy="50" r={radius} fill="none" stroke={fillColor} strokeWidth="8"
           strokeDasharray={circumference} strokeDashoffset={offset}
           strokeLinecap="round" transform="rotate(-90 50 50)" style={{ transition: 'stroke-dashoffset 0.5s ease' }} />

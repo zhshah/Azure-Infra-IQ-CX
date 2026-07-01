@@ -108,7 +108,7 @@ function TagRow({ tag, index, tagKeys, onUpdate, onRemove }) {
         {index === 0 && (
           <label
             style={{
-              color: '#64748b',
+              color: 'var(--c-64748b)',
               fontSize: 10,
               fontWeight: 600,
               textTransform: 'uppercase',
@@ -131,7 +131,7 @@ function TagRow({ tag, index, tagKeys, onUpdate, onRemove }) {
       </div>
       <span
         style={{
-          color: '#475569',
+          color: 'var(--c-475569)',
           fontSize: 14,
           fontWeight: 600,
           paddingBottom: 8,
@@ -144,7 +144,7 @@ function TagRow({ tag, index, tagKeys, onUpdate, onRemove }) {
         {index === 0 && (
           <label
             style={{
-              color: '#64748b',
+              color: 'var(--c-64748b)',
               fontSize: 10,
               fontWeight: 600,
               textTransform: 'uppercase',
@@ -163,11 +163,11 @@ function TagRow({ tag, index, tagKeys, onUpdate, onRemove }) {
               alignItems: 'center',
               gap: 6,
               padding: '7px 10px',
-              background: '#0f172a',
-              border: '1px solid #1e293b',
+              background: 'var(--c-0f172a)',
+              border: '1px solid var(--c-1e293b)',
               borderRadius: 7,
               fontSize: 12,
-              color: '#475569',
+              color: 'var(--c-475569)',
             }}
           >
             <Loader size={12} style={{ animation: 'spin 1s linear infinite' }} />
@@ -197,7 +197,7 @@ function TagRow({ tag, index, tagKeys, onUpdate, onRemove }) {
           background: 'transparent',
           border: '1px solid transparent',
           borderRadius: 6,
-          color: '#475569',
+          color: 'var(--c-475569)',
           cursor: 'pointer',
           flexShrink: 0,
           transition: 'all 0.15s',
@@ -210,7 +210,7 @@ function TagRow({ tag, index, tagKeys, onUpdate, onRemove }) {
         onMouseLeave={e => {
           e.currentTarget.style.background = 'transparent'
           e.currentTarget.style.borderColor = 'transparent'
-          e.currentTarget.style.color = '#475569'
+          e.currentTarget.style.color = 'var(--c-475569)'
         }}
         title="Remove tag filter"
       >
@@ -274,7 +274,7 @@ export default function TagPicker({
           <Tag size={13} style={{ color: '#a855f7' }} />
           <span
             style={{
-              color: '#64748b',
+              color: 'var(--c-64748b)',
               fontSize: 10,
               fontWeight: 600,
               textTransform: 'uppercase',
@@ -286,7 +286,7 @@ export default function TagPicker({
           {loading && (
             <Loader
               size={10}
-              style={{ color: '#475569', animation: 'spin 1s linear infinite' }}
+              style={{ color: 'var(--c-475569)', animation: 'spin 1s linear infinite' }}
             />
           )}
         </div>
@@ -298,7 +298,7 @@ export default function TagPicker({
             gap: 4,
             padding: '3px 10px',
             background: 'transparent',
-            border: '1px solid #334155',
+            border: '1px solid var(--c-334155)',
             borderRadius: 6,
             color: '#0078d4',
             cursor: 'pointer',
@@ -312,7 +312,7 @@ export default function TagPicker({
           }}
           onMouseLeave={e => {
             e.currentTarget.style.background = 'transparent'
-            e.currentTarget.style.borderColor = '#334155'
+            e.currentTarget.style.borderColor = 'var(--c-334155)'
           }}
         >
           <Plus size={11} /> Add Tag
@@ -333,7 +333,7 @@ export default function TagPicker({
 
       {/* No tags message */}
       {tags.length === 0 && (
-        <div style={{ color: '#475569', fontSize: 12, fontStyle: 'italic', paddingTop: 4 }}>
+        <div style={{ color: 'var(--c-475569)', fontSize: 12, fontStyle: 'italic', paddingTop: 4 }}>
           No tag filters active — click "Add Tag" to filter by Azure resource tags
         </div>
       )}
@@ -347,7 +347,7 @@ export default function TagPicker({
             gap: 6,
             marginTop: 8,
             paddingTop: 8,
-            borderTop: '1px solid #1e293b',
+            borderTop: '1px solid var(--c-1e293b)',
           }}
         >
           {activeTags.map((t, i) =>

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { api } from '../../api/client'
 import { prettyResourceType } from '../../utils/resourceTypes'
+import BIAGenerator from '../BIAGenerator'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -85,8 +86,8 @@ function DonutChart({ data, size = 120 }) {
     <div className="relative inline-flex items-center justify-center">
       <svg width={size} height={size}>
         {slices.map(s => <path key={s.label} d={s.d} fill={s.color} opacity={0.85} />)}
-        <circle cx={cx} cy={cy} r={r * 0.55} fill="#111827" />
-        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fill="#e5e7eb" fontSize="14" fontWeight="bold">{total}</text>
+        <circle cx={cx} cy={cy} r={r * 0.55} style={{ fill: 'var(--c-111827)' }} />
+        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" style={{ fill: 'var(--c-e5e7eb)' }} fontSize="14" fontWeight="bold">{total}</text>
       </svg>
     </div>
   )
@@ -111,8 +112,8 @@ function ColoredDonut({ data, colorMap, size = 120 }) {
     <div className="relative inline-flex items-center justify-center">
       <svg width={size} height={size}>
         {slices.map(s => <path key={s.label} d={s.d} fill={s.color} opacity={0.85} />)}
-        <circle cx={cx} cy={cy} r={r * 0.55} fill="#111827" />
-        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fill="#e5e7eb" fontSize="14" fontWeight="bold">{total}</text>
+        <circle cx={cx} cy={cy} r={r * 0.55} style={{ fill: 'var(--c-111827)' }} />
+        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" style={{ fill: 'var(--c-e5e7eb)' }} fontSize="14" fontWeight="bold">{total}</text>
       </svg>
     </div>
   )
@@ -273,6 +274,12 @@ export default function BCDRDashboard({ onSelectResource }) {
   const [biaLoading, setBiaLoading] = useState(false)
   const [seqData, setSeqData]     = useState(null)
   const [seqLoading, setSeqLoading] = useState(false)
+  // Recovery Sequence scope filters. The server applies them BEFORE computing dependency
+  // edges and waves so the result reflects the chosen scope honestly (a 'Foundation' wave
+  // is only labelled that way if it actually contains foundation resources).
+  const [seqFilters, setSeqFilters] = useState({
+    subscription_id: '', resource_group: '', resource_type: '', azure_tag: '', custom_tag: '',
+  })
 
   function load() {
     setLoading(true)
@@ -295,16 +302,17 @@ export default function BCDRDashboard({ onSelectResource }) {
     }
   }, [activeTab, biaData, biaLoading])
 
-  // Lazy-load Recovery Sequence data
+  // Lazy-load Recovery Sequence data — re-fetches whenever the user changes a filter so
+  // wave membership + RTO totals stay grounded on the current scope. The previous result is
+  // kept on screen while the new one loads so the UI doesn't flash empty.
   useEffect(() => {
-    if (activeTab === 'recovery' && !seqData && !seqLoading) {
-      setSeqLoading(true)
-      api.getBCDRRecoverySeq()
-        .then(d => setSeqData(d))
-        .catch(() => {})
-        .finally(() => setSeqLoading(false))
-    }
-  }, [activeTab, seqData, seqLoading])
+    if (activeTab !== 'recovery') return
+    setSeqLoading(true)
+    api.getBCDRRecoverySeq(seqFilters)
+      .then(d => setSeqData(d))
+      .catch(() => {})
+      .finally(() => setSeqLoading(false))
+  }, [activeTab, seqFilters])
 
   if (loading) return (
     <div className="flex flex-col items-center justify-center h-64 gap-4">
@@ -704,7 +712,12 @@ export default function BCDRDashboard({ onSelectResource }) {
 
       {/* ── Recovery Sequence Tab ── */}
       {activeTab === 'recovery' && (
-        <RecoverySequenceTab data={seqData} loading={seqLoading} />
+        <RecoverySequenceTab
+          data={seqData}
+          loading={seqLoading}
+          filters={seqFilters}
+          onChangeFilters={setSeqFilters}
+        />
       )}
 
     </div>
@@ -872,6 +885,12 @@ function BIATab({ data, loading }) {
           <p>No resources match these filters.</p>
         </div>
       ) : (<>
+      {/* Advanced AI BIA — consultant-grade, framework-based, over the filtered resources */}
+      <BIAGenerator
+        resourceIds={rows.map((r) => r.resource_id).filter(Boolean)}
+        resourceCount={rows.length}
+      />
+
       {/* Grounding banner — how much of the BIA is driven by the customer's BCDR tags */}
       <div className={clsx('rounded-xl border p-3 flex items-start gap-2.5',
         taggedCount > 0 ? 'border-emerald-800/50 bg-emerald-950/20' : 'border-gray-700/50 bg-gray-800/30')}>
@@ -1045,17 +1064,102 @@ function BIATab({ data, loading }) {
 
 const WAVE_COLORS = ['#3b82f6', '#8b5cf6', '#06b6d4', '#22c55e', '#f97316', '#ec4899', '#eab308', '#64748b']
 
-function RecoverySequenceTab({ data, loading }) {
-  if (loading) return (
-    <div className="flex items-center justify-center h-48 gap-3">
-      <RefreshCw size={20} className="text-blue-400 animate-spin" />
-      <span className="text-gray-400 text-sm">Building Recovery Sequence Plan…</span>
+// Server-driven filter options. We derive them from the SAME resource list that drove the
+// BIA tab (data.impact_matrix) so the dropdowns are consistent across tabs.
+function useSeqFilterOptions() {
+  const [opts, setOpts] = React.useState({ sub: [], rg: [], type: [], az: [], ct: [] })
+  React.useEffect(() => {
+    let alive = true
+    api.getBCDRBusinessImpact()
+      .then(d => {
+        if (!alive) return
+        const rows = (d && d.impact_matrix) || []
+        const uniq = (key) => Array.from(new Set(rows.map(r => r[key]).filter(Boolean))).sort()
+        const subMap = new Map()
+        rows.forEach(r => { if (r.subscription_id) subMap.set(r.subscription_id, r.subscription_name || (r.subscription_id.slice(0, 8) + '\u2026')) })
+        const az = new Set(), ct = new Set()
+        rows.forEach(r => { biaTagPairs(r.azure_tags).forEach(p => az.add(p)); biaTagPairs(r.custom_tags).forEach(p => ct.add(p)) })
+        setOpts({
+          sub:  Array.from(subMap.entries()).sort((a, b) => String(a[1]).localeCompare(String(b[1]))).map(([id, name]) => ({ value: id, label: name })),
+          rg:   uniq('resource_group').map(v => ({ value: v, label: v })),
+          type: uniq('resource_type').map(v => ({ value: v, label: prettyResourceType(v) || v.split('/').pop() })),
+          az:   Array.from(az).sort().map(p => ({ value: p, label: p.replace('=', ': ') })),
+          ct:   Array.from(ct).sort().map(p => ({ value: p, label: p.replace('=', ': ') })),
+        })
+      })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
+  return opts
+}
+
+function RecoverySequenceTab({ data, loading, filters, onChangeFilters }) {
+  const opts = useSeqFilterOptions()
+  const setF = (k, v) => onChangeFilters({ ...filters, [k]: v })
+  const clearF = () => onChangeFilters({ subscription_id: '', resource_group: '', resource_type: '', azure_tag: '', custom_tag: '' })
+  const anyFilter = Object.values(filters || {}).some(v => v)
+  const scope = data?.scope || {}
+
+  const filterBar = (
+    <div className="flex flex-wrap items-end gap-2.5 rounded-xl border border-gray-800 bg-gray-900/40 p-3">
+      <BIAFilter label="Subscription"    value={filters.subscription_id} onChange={v => setF('subscription_id', v)} options={[{ value: '', label: 'All subscriptions' }, ...opts.sub]} />
+      <BIAFilter label="Resource Group"  value={filters.resource_group}  onChange={v => setF('resource_group',  v)} options={[{ value: '', label: 'All resource groups' }, ...opts.rg]} />
+      <BIAFilter label="Resource Type"   value={filters.resource_type}   onChange={v => setF('resource_type',   v)} options={[{ value: '', label: 'All types' }, ...opts.type]} />
+      {opts.az.length > 0 && <BIAFilter label="Azure Tag"  value={filters.azure_tag}  onChange={v => setF('azure_tag',  v)} options={[{ value: '', label: 'All Azure tags' }, ...opts.az]} />}
+      {opts.ct.length > 0 && <BIAFilter label="Custom Tag" value={filters.custom_tag} onChange={v => setF('custom_tag', v)} options={[{ value: '', label: 'All custom tags' }, ...opts.ct]} />}
+      {anyFilter && (
+        <button onClick={clearF} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-200 border border-gray-700/60">
+          <X size={12} /> Clear
+        </button>
+      )}
+      <span className="ml-auto text-xs text-gray-500 self-center">
+        {scope.scoped_resources != null ? (
+          <><span className="text-gray-300 font-semibold tabular-nums">{scope.scoped_resources}</span> of {scope.total_resources} resources</>
+        ) : (loading ? 'Computing…' : '')}
+      </span>
+    </div>
+  )
+
+  const ctxBanner = (
+    <div className={clsx('rounded-xl border p-3 flex items-start gap-2.5',
+      anyFilter ? 'border-emerald-800/50 bg-emerald-950/20' : 'border-amber-700/40 bg-amber-900/15')}>
+      <Info size={15} className={clsx('shrink-0 mt-0.5', anyFilter ? 'text-emerald-400' : 'text-amber-400')} />
+      <div className="text-xs leading-relaxed">
+        {anyFilter ? (
+          <p className="text-emerald-200/90">
+            Recovery sequence is <strong>scoped</strong> to your filter — dependency edges, waves and the cumulative
+            RTO below only consider in-scope resources. Wave labels are derived from the actual content of each wave.
+          </p>
+        ) : (
+          <p className="text-amber-200/90">
+            <strong>No scope applied — viewing the entire estate.</strong> With resources spanning multiple
+            subscriptions / regions, the sequence collapses most resources into Wave 1 because cross-subscription
+            dependency edges are rare. Pick a <strong>Subscription</strong>, <strong>Resource Group</strong> or
+            <strong> Custom Tag</strong> (e.g. <code className="px-1 py-0.5 rounded bg-gray-900/60">Application=Orders</code>)
+            for a sequence that maps to one workload.
+          </p>
+        )}
+      </div>
+    </div>
+  )
+
+  if (loading && !data) return (
+    <div className="space-y-4">
+      {filterBar}
+      <div className="flex items-center justify-center h-48 gap-3">
+        <RefreshCw size={20} className="text-blue-400 animate-spin" />
+        <span className="text-gray-400 text-sm">Building Recovery Sequence Plan…</span>
+      </div>
     </div>
   )
   if (!data || !data.total_resources) return (
-    <div className="card text-center text-gray-500 py-12">
-      <Zap size={32} className="mx-auto mb-3 opacity-30" />
-      <p>No recovery sequence data available. Run a scan first.</p>
+    <div className="space-y-4">
+      {filterBar}
+      {ctxBanner}
+      <div className="card text-center text-gray-500 py-12">
+        <Zap size={32} className="mx-auto mb-3 opacity-30" />
+        <p>{anyFilter ? 'No resources match these filters.' : 'No recovery sequence data available. Run a scan first.'}</p>
+      </div>
     </div>
   )
 
@@ -1063,6 +1167,8 @@ function RecoverySequenceTab({ data, loading }) {
 
   return (
     <div className="space-y-6">
+      {filterBar}
+      {ctxBanner}
       {/* Summary KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <KPICard icon={Layers} label="Recovery Waves" value={waves.length} sub="Parallel recovery groups" color="text-blue-400" />
@@ -1087,7 +1193,7 @@ function RecoverySequenceTab({ data, loading }) {
               <div key={i} className="relative pl-12 pb-6">
                 {/* Timeline dot */}
                 <div className="absolute left-3 top-1 w-5 h-5 rounded-full border-2 flex items-center justify-center text-xs font-bold"
-                  style={{ borderColor: waveColor, color: waveColor, background: '#0f172a' }}>
+                  style={{ borderColor: waveColor, color: waveColor, background: 'var(--c-0f172a)' }}>
                   {w.wave}
                 </div>
 

@@ -16,9 +16,13 @@ export default function BulkTagEditorModal({ resources = [], onClose, onSaved })
   const [loading,  setLoading]  = useState(true)
   const [saving,   setSaving]   = useState(false)
   const [saved,    setSaved]    = useState(false)
-  const [mode,     setMode]     = useState('overwrite')  // 'overwrite' or 'merge'
+  // Default is MERGE — overwrite wipes every existing tag (including BCDR mirror tags like
+  // Criticality/DR_Tier/RTO/RPO) which is almost never what the user wants.
+  const [mode,     setMode]     = useState('merge')      // 'overwrite' or 'merge'
   const [newKey,   setNewKey]   = useState('')
   const [newVal,   setNewVal]   = useState('')
+  const [progress, setProgress] = useState({ done: 0, failed: 0 })
+  const [saveError, setSaveError] = useState('')
 
   useEffect(() => {
     setLoading(true)
@@ -50,32 +54,58 @@ export default function BulkTagEditorModal({ resources = [], onClose, onSaved })
 
   async function handleSave() {
     setSaving(true)
-    try {
-      // Apply tags to all selected resources
-      const promises = resources.map(r => {
-        const rid = r.resource_id || r.id
-        return fetch(`/api/tags/resource/${encodeURIComponent(rid)}`, {
+    setSaveError('')
+    setProgress({ done: 0, failed: 0 })
+    // Drop empty values so we never store blank tag values (and so merge mode doesn't
+    // overwrite real values with "").
+    const payloadTags = Object.fromEntries(
+      Object.entries(tags).filter(([, v]) => v !== '' && v != null)
+    )
+    if (Object.keys(payloadTags).length === 0) {
+      setSaving(false)
+      setSaveError('No tag values to apply.')
+      return
+    }
+    let done = 0, failed = 0
+    const failures = []
+    // Sequential so we can surface progress and the first real error message.
+    for (const r of resources) {
+      const rid = r.resource_id || r.id
+      try {
+        const resp = await fetch(`/api/tags/resource/${encodeURIComponent(rid)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            tags,
-            merge: mode === 'merge'  // If merge, keeps existing tags; if overwrite, replaces all
-          }),
+          body: JSON.stringify({ tags: payloadTags, merge: mode === 'merge' }),
         })
-      })
-      
-      await Promise.all(promises)
+        if (!resp.ok) {
+          failed += 1
+          const text = await resp.text().catch(() => '')
+          failures.push(`${r.resource_name || rid}: HTTP ${resp.status} ${text.slice(0, 120)}`)
+        } else {
+          done += 1
+        }
+      } catch (e) {
+        failed += 1
+        failures.push(`${r.resource_name || rid}: ${e.message || 'network error'}`)
+      }
+      setProgress({ done, failed })
+    }
+    setSaving(false)
+    if (failed === 0) {
       setSaved(true)
       setTimeout(() => {
         setSaved(false)
         onClose()
         onSaved?.()
-      }, 1000)
-    } catch (e) {
-      console.error('Bulk tag save error:', e)
-      alert('Failed to save tags: ' + e.message)
-    } finally {
-      setSaving(false)
+      }, 900)
+    } else {
+      setSaveError(
+        `Saved ${done}/${resources.length}. ${failed} failed:\n` +
+        failures.slice(0, 5).join('\n') +
+        (failures.length > 5 ? `\n…and ${failures.length - 5} more` : '')
+      )
+      // Still tell the parent so it can refresh — partial successes did persist.
+      if (done > 0) onSaved?.()
     }
   }
 
@@ -169,7 +199,17 @@ export default function BulkTagEditorModal({ resources = [], onClose, onSaved })
           </div>
           {mode === 'overwrite' && (
             <p className="text-xs text-orange-400 mt-2">
-              Warning: This will clear all existing custom tags on selected resources
+              Warning: Overwrite will DELETE every existing custom tag on each selected resource
+              (including BCDR Planning tags such as Criticality, DR_Tier, RTO, RPO) and insert only
+              the values you set below. Use Merge unless you explicitly want a clean slate.
+            </p>
+          )}
+          {saveError && (
+            <pre className="text-xs text-red-300 mt-2 whitespace-pre-wrap bg-red-950/30 border border-red-900/50 rounded-lg p-2">{saveError}</pre>
+          )}
+          {saving && (
+            <p className="text-xs text-gray-400 mt-2">
+              Saved {progress.done}/{resources.length}{progress.failed > 0 ? ` — ${progress.failed} failed` : ''}
             </p>
           )}
         </div>

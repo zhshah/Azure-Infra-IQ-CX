@@ -157,7 +157,24 @@ def get_subscription_ids() -> list[str]:
     """
     multi = _settings.get("AZURE_SUBSCRIPTION_IDS", "").strip()
     if multi and multi.lower() not in _AUTO_SUB_TOKENS:
-        return [s.strip() for s in multi.split(",") if s.strip()]
+        pinned = [s.strip() for s in multi.split(",") if s.strip()]
+        # DYNAMIC RESILIENCE: even when an operator pins an explicit list, drop any
+        # subscription that is currently DISABLED / inaccessible so a single disabled
+        # sub can never block dashboard loading. (Per-sub Cost Management / monitoring
+        # calls against a disabled subscription error or hang, which leaves widgets
+        # stuck on their loading skeleton.) A disabled sub auto-disappears here and
+        # auto-returns the moment it is re-enabled — no static wiring, no restart.
+        # FAIL-OPEN: if we cannot determine enabled state (transient/credential issue)
+        # or none of the pinned ids match the discovered set, keep the full pinned list
+        # so we never accidentally end up scanning nothing.
+        try:
+            enabled = {x.lower() for x in _discover_all_subscription_ids()}
+            if enabled:
+                live = [s for s in pinned if s.lower() in enabled]
+                return live or pinned
+        except Exception:
+            pass
+        return pinned
     discovered = _discover_all_subscription_ids()
     if discovered:
         return discovered

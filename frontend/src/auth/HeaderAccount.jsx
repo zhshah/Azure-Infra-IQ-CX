@@ -62,7 +62,7 @@ export default function HeaderAccount() {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: '"Segoe UI", system-ui, -apple-system, sans-serif' }}>
         {note && (
-          <span style={{ fontSize: 11, color: '#94a3b8', maxWidth: 230, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={note}>{note}</span>
+          <span style={{ fontSize: 11, color: 'var(--c-94a3b8)', maxWidth: 230, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={note}>{note}</span>
         )}
         <button
           type="button"
@@ -73,13 +73,13 @@ export default function HeaderAccount() {
             display: 'flex', alignItems: 'center', gap: 6,
             padding: '6px 12px', borderRadius: 8,
             border: '1px solid rgba(148, 163, 184, 0.25)',
-            background: 'rgba(30, 41, 59, 0.4)',
-            color: '#e2e8f0', fontSize: 12, fontWeight: 600,
+            background: 'rgba(var(--rgb-slate), 0.4)',
+            color: 'var(--c-e2e8f0)', fontSize: 12, fontWeight: 600,
             cursor: busy ? 'default' : 'pointer',
             fontFamily: 'inherit',
           }}
-          onMouseEnter={(e) => { if (!busy) e.currentTarget.style.background = 'rgba(30, 41, 59, 0.7)' }}
-          onMouseLeave={(e) => { if (!busy) e.currentTarget.style.background = 'rgba(30, 41, 59, 0.4)' }}
+          onMouseEnter={(e) => { if (!busy) e.currentTarget.style.background = 'rgba(var(--rgb-slate), 0.7)' }}
+          onMouseLeave={(e) => { if (!busy) e.currentTarget.style.background = 'rgba(var(--rgb-slate), 0.4)' }}
         >
           <LogIn size={14} />
           {busy ? 'Opening\u2026' : 'Sign in'}
@@ -95,8 +95,8 @@ export default function HeaderAccount() {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontFamily: '"Segoe UI", system-ui, -apple-system, sans-serif' }}>
       <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15, textAlign: 'right', maxWidth: 190 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: '#f1f5f9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-        <span style={{ fontSize: 10.5, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{email}</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-f1f5f9)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+        <span style={{ fontSize: 10.5, color: 'var(--c-94a3b8)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{email}</span>
       </div>
       {photo ? (
         <img src={photo} alt="" style={{ width: 30, height: 30, borderRadius: '50%', objectFit: 'cover', border: '1px solid rgba(255,255,255,0.2)' }} />
@@ -117,13 +117,13 @@ export default function HeaderAccount() {
           display: 'flex', alignItems: 'center', gap: 6,
           padding: '6px 12px', borderRadius: 8,
           border: '1px solid rgba(148, 163, 184, 0.25)',
-          background: 'rgba(30, 41, 59, 0.4)',
-          color: '#e2e8f0', fontSize: 12, fontWeight: 600,
+          background: 'rgba(var(--rgb-slate), 0.4)',
+          color: 'var(--c-e2e8f0)', fontSize: 12, fontWeight: 600,
           cursor: busy ? 'default' : 'pointer',
           fontFamily: 'inherit',
         }}
-        onMouseEnter={(e) => { if (!busy) e.currentTarget.style.background = 'rgba(30, 41, 59, 0.7)' }}
-        onMouseLeave={(e) => { if (!busy) e.currentTarget.style.background = 'rgba(30, 41, 59, 0.4)' }}
+        onMouseEnter={(e) => { if (!busy) e.currentTarget.style.background = 'rgba(var(--rgb-slate), 0.7)' }}
+        onMouseLeave={(e) => { if (!busy) e.currentTarget.style.background = 'rgba(var(--rgb-slate), 0.4)' }}
       >
         <LogOut size={14} />
         {busy ? 'Signing out…' : 'Logout'}

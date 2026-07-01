@@ -20,7 +20,7 @@
  */
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import clsx from 'clsx'
-import { FileText, FileSpreadsheet, X, Loader2, SlidersHorizontal, Paperclip, ChevronLeft, ChevronRight, Columns3, Check } from 'lucide-react'
+import { FileText, FileSpreadsheet, X, Loader2, SlidersHorizontal, Paperclip, ChevronLeft, ChevronRight, Columns3, Check, RefreshCw } from 'lucide-react'
 import { api } from '../api/client'
 import { BCDRBadge, BulkBCDREditor, ResourceBCDREditor, CRITICALITY_OPTIONS, DR_TIER_OPTIONS, RTO_OPTIONS, RPO_OPTIONS, AZURE_REGIONS, ENVIRONMENTS, DATA_CLASSES, BCDR_INTAKE_FIELDS } from './BCDRMetadataEditor'
 
@@ -191,6 +191,21 @@ export default function BCDRPlanningPanel({ resources }) {
         setSubNameMap(m)
       }
     }).catch(() => {})
+  }, [])
+
+  // Re-fetch tags whenever the window/tab regains focus or becomes visible again. This catches
+  // the common case of the user editing tags on the home page (Tag Resource modal or bulk tag),
+  // then coming back to this panel — without it, tagsByResource stays stuck on its mount-time
+  // snapshot and the new tag values silently appear blank.
+  useEffect(() => {
+    const refresh = () => { loadTagsAndSchema() }
+    const onVis = () => { if (document.visibilityState === 'visible') refresh() }
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', onVis)
+    }
   }, [])
 
   // Load the custom-tag schema + every resource's tag values so tags are fillable inline.
@@ -513,6 +528,13 @@ export default function BCDRPlanningPanel({ resources }) {
               Bulk Edit ({selectedIds.size})
             </button>
           )}
+          <button
+            onClick={() => { loadMetadata(); loadTagsAndSchema(); loadAttachmentCounts() }}
+            title="Reload metadata, custom tags, and attachments"
+            className="px-3 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 text-xs font-medium rounded flex items-center gap-1.5 whitespace-nowrap"
+          >
+            <RefreshCw size={13} /> Reload
+          </button>
         </div>
         
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -841,9 +863,12 @@ function IntakeField({ label, children }) {
   )
 }
 
-export function CustomerIntakeModal({ customerInfo, onChange, onClose, onGenerate, busy, error, coverage }) {
+export function CustomerIntakeModal({ customerInfo, onChange, onClose, onGenerate, busy, error, coverage, missing }) {
   const [ci, setCi] = useState(customerInfo || {})
+  const [includeBia, setIncludeBia] = useState(true)
   const set = (k, v) => setCi(prev => { const next = { ...prev, [k]: v }; onChange(next); return next })
+  const missingList = Array.isArray(missing) ? missing : []
+  const blocked = missingList.length > 0
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={busy ? undefined : onClose} />
@@ -851,18 +876,27 @@ export function CustomerIntakeModal({ customerInfo, onChange, onClose, onGenerat
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800 shrink-0">
           <div>
             <h3 className="text-sm font-semibold text-white flex items-center gap-2"><FileText size={16} className="text-blue-400" /> Generate Consultant BCDR Report</h3>
-            <p className="text-xs text-gray-500 mt-0.5">A full 13-section assessment, grounded on your Azure estate + Phase 1 classification + AI.</p>
+            <p className="text-xs text-gray-500 mt-0.5">A full assessment, grounded on your Azure estate + Phase 1 classification + AI{includeBia ? ' — with an integrated Business Impact Analysis (collective continuity report)' : ''}.</p>
           </div>
           <button onClick={onClose} disabled={!!busy} className="text-gray-500 hover:text-gray-300 disabled:opacity-40"><X size={18} /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {blocked && (
+            <div className="text-xs text-amber-200 bg-amber-900/15 border border-amber-700/40 rounded-lg px-3 py-2.5">
+              <div className="font-semibold mb-1">Required continuity inputs missing — {missingList.length}:</div>
+              <ul className="space-y-0.5 ml-1">
+                {missingList.map((m, i) => <li key={i}>• {m}</li>)}
+              </ul>
+              <div className="text-amber-300/70 mt-1.5">Fill these in the &quot;Customer continuity requirements&quot; section above before generating — without them the AI fabricates an architecture and downstream RTO/RPO cells will read &quot;Not supplied&quot;.</div>
+            </div>
+          )}
           {coverage && coverage.categorized === 0 && (
             <div className="text-xs text-amber-300 bg-amber-900/20 border border-amber-700/40 rounded-lg px-3 py-2">
               No resources are categorized yet. The report will be grounded on Azure posture only — categorize key workloads (criticality, RTO/RPO, target region, financial loss) below in the table for a richer, customer-specific report.
             </div>
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <IntakeField label="Customer name"><input className={intakeInput} value={ci.customer_name || ''} onChange={e => set('customer_name', e.target.value)} placeholder="e.g. Contoso Ltd" /></IntakeField>
+            <IntakeField label="Customer name *"><input className={intakeInput} value={ci.customer_name || ''} onChange={e => set('customer_name', e.target.value)} placeholder="e.g. Contoso Ltd" /></IntakeField>
             <IntakeField label="Prepared by"><input className={intakeInput} value={ci.prepared_by || ''} onChange={e => set('prepared_by', e.target.value)} placeholder="e.g. your name / partner" /></IntakeField>
             <IntakeField label="Assessment period"><input className={intakeInput} value={ci.assessment_period || ''} onChange={e => set('assessment_period', e.target.value)} placeholder="e.g. June 2026" /></IntakeField>
             <IntakeField label="Report version"><input className={intakeInput} value={ci.report_version || ''} onChange={e => set('report_version', e.target.value)} placeholder="1.0" /></IntakeField>
@@ -870,15 +904,28 @@ export function CustomerIntakeModal({ customerInfo, onChange, onClose, onGenerat
           <IntakeField label="Business drivers"><textarea rows={2} className={intakeInput} value={ci.business_drivers || ''} onChange={e => set('business_drivers', e.target.value)} placeholder="e.g. Meet 1-hour RTO for ERP, pass ISO 27001 audit, reduce downtime and data-loss risk" /></IntakeField>
           <IntakeField label="Region strategy (primary / secondary)"><input className={intakeInput} value={ci.region_strategy || ''} onChange={e => set('region_strategy', e.target.value)} placeholder="e.g. Primary West Europe, secondary North Europe (paired-region failover)" /></IntakeField>
           <IntakeField label="Regulatory / compliance & data residency"><input className={intakeInput} value={ci.compliance || ''} onChange={e => set('compliance', e.target.value)} placeholder="e.g. ISO 27001, GDPR, PCI-DSS; data must stay in EU" /></IntakeField>
-          {busy && <div className="text-xs text-blue-300 flex items-center gap-2"><Loader2 size={13} className="animate-spin" /> Generating the consultant report with AI… this can take 30–60 seconds.</div>}
+          {/* Collective report: run the Business Impact Analysis first and ground the BCDR
+              strategy on it (ISO 22301 — BIA is the foundation of the BC plan). */}
+          <label className="flex items-start gap-2.5 p-3 rounded-lg bg-sky-900/15 border border-sky-800/40 cursor-pointer">
+            <input type="checkbox" checked={includeBia} onChange={e => setIncludeBia(e.target.checked)} className="mt-0.5 accent-sky-500" />
+            <span className="text-xs text-gray-300">
+              <span className="font-semibold text-sky-300">Include Business Impact Analysis (collective report)</span>
+              <br />Runs a standards-based BIA (ISO 22301 / NIST SP 800-34) first and builds the BCDR strategy on it — one deliverable covering impact, criticality tiers, financial exposure, recovery objectives, then the full BCDR plan. Adds ~30–60s.
+            </span>
+          </label>
+          {busy && <div className="text-xs text-blue-300 flex items-center gap-2"><Loader2 size={13} className="animate-spin" /> Generating the {includeBia ? 'collective BCDR + BIA' : 'consultant'} report with AI… this can take {includeBia ? '60–120' : '30–60'} seconds.</div>}
           {error && <div className="text-xs text-red-400 bg-red-900/20 border border-red-700/40 rounded-lg px-3 py-2">{error}</div>}
         </div>
         <div className="px-5 py-3 border-t border-gray-800 flex items-center justify-end gap-2 shrink-0">
           <button onClick={onClose} disabled={!!busy} className="px-4 py-2 rounded-lg text-xs font-semibold bg-gray-800 hover:bg-gray-700 text-gray-200 disabled:opacity-40">Cancel</button>
-          <button onClick={() => onGenerate('xlsx')} disabled={!!busy} className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-emerald-700 hover:bg-emerald-600 text-white disabled:opacity-50">
+          <button onClick={() => onGenerate('xlsx', includeBia)} disabled={!!busy || blocked}
+            title={blocked ? 'Supply the required continuity inputs first' : ''}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-emerald-700 hover:bg-emerald-600 text-white disabled:opacity-50">
             {busy === 'xlsx' ? <Loader2 size={13} className="animate-spin" /> : <FileSpreadsheet size={13} />} Generate Excel
           </button>
-          <button onClick={() => onGenerate('pdf')} disabled={!!busy} className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50">
+          <button onClick={() => onGenerate('pdf', includeBia)} disabled={!!busy || blocked}
+            title={blocked ? 'Supply the required continuity inputs first' : ''}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50">
             {busy === 'pdf' ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />} Generate PDF
           </button>
         </div>

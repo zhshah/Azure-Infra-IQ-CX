@@ -46,7 +46,7 @@ function ComplianceDonut({ compliance }) {
   return (
     <div className="flex flex-col items-center gap-2">
       <svg width="100" height="100" viewBox="0 0 100 100">
-        <circle cx="50" cy="50" r={radius} fill="none" stroke="#1e293b" strokeWidth="8" />
+        <circle cx="50" cy="50" r={radius} fill="none" style={{ stroke: 'var(--c-1e293b)' }} strokeWidth="8" />
         <circle cx="50" cy="50" r={radius} fill="none" stroke={color} strokeWidth="8"
           strokeDasharray={circumference} strokeDashoffset={offset}
           strokeLinecap="round" transform="rotate(-90 50 50)" style={{ transition: 'stroke-dashoffset 0.5s ease' }}
@@ -288,8 +288,8 @@ function ComplianceTrendChart({ data }) {
           const y = padding.top + chartH - (pct / maxPct) * chartH
           return (
             <g key={pct}>
-              <line x1={padding.left} y1={y} x2={width - padding.right} y2={y} stroke="#1e293b" strokeWidth="0.5" />
-              <text x={padding.left - 4} y={y + 3} textAnchor="end" fill="#475569" fontSize="8">{pct}%</text>
+              <line x1={padding.left} y1={y} x2={width - padding.right} y2={y} style={{ stroke: 'var(--c-1e293b)' }} strokeWidth="0.5" />
+              <text x={padding.left - 4} y={y + 3} textAnchor="end" style={{ fill: 'var(--c-475569)' }} fontSize="8">{pct}%</text>
             </g>
           )
         })}
@@ -306,7 +306,7 @@ function ComplianceTrendChart({ data }) {
         </defs>
         {/* X-axis labels */}
         {points.filter((_, i) => i % 7 === 0 || i === points.length - 1).map((p, i) => (
-          <text key={i} x={p.x} y={height - 4} textAnchor="middle" fill="#475569" fontSize="7">
+          <text key={i} x={p.x} y={height - 4} textAnchor="middle" style={{ fill: 'var(--c-475569)' }} fontSize="7">
             {p.date?.substring(5)}
           </text>
         ))}

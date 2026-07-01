@@ -184,7 +184,7 @@ export default function WasteByCategory({ resources = [], onBarClick }) {
               tickLine={false}
               width={96}
             />
-            <Tooltip content={<CatTooltip />} cursor={{ fill: '#1f2937', opacity: 0.6 }} />
+            <Tooltip content={<CatTooltip />} cursor={{ fill: 'var(--c-1f2937)', opacity: 0.6 }} />
 
             <Bar dataKey="confirmed" stackId="a" name="Confirmed Waste" fill="#ef4444" radius={[0, 0, 0, 0]}
               fillOpacity={activeCategory ? (d => activeCategory === d.cat ? 0.9 : 0.25) : 0.85}

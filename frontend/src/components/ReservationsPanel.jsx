@@ -5,6 +5,7 @@ import {
   CheckCircle, TrendingDown, Zap, BarChart2,
 } from 'lucide-react'
 import { SCORE_HEX, SCORE_HEX_DEFAULT } from '../scoreColors'
+import { useDrill } from '../drill/DrillContext'
 
 // ── Formatters ─────────────────────────────────────────────────────────────────
 
@@ -114,7 +115,7 @@ function Tooltip({ text }) {
 
 // ── KPI card ───────────────────────────────────────────────────────────────────
 
-function KpiCard({ label, value, sub, accent, icon: Icon, tooltip }) {
+function KpiCard({ label, value, sub, accent, icon: Icon, tooltip, onClick }) {
   const border = {
     blue:   'border-l-2 border-l-blue-500/60',
     green:  'border-l-2 border-l-green-500/60',
@@ -122,7 +123,11 @@ function KpiCard({ label, value, sub, accent, icon: Icon, tooltip }) {
     amber:  'border-l-2 border-l-amber-500/60',
   }[accent] || ''
   return (
-    <div className={clsx('card flex flex-col gap-1 overflow-hidden', border)}>
+    <div
+      onClick={onClick}
+      title={onClick ? 'Click to view the underlying resources' : undefined}
+      className={clsx('card flex flex-col gap-1 overflow-hidden', border, onClick && 'cursor-pointer hover:border-blue-600/50 transition-colors')}
+    >
       <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">{label}</span>
@@ -849,6 +854,7 @@ function ExpiringSoonSection({ reservations }) {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function ReservationsPanel({ resources = [], activeReservations = [], overCommitmentUsd = 0, reservationRecommendations = [] }) {
+  const { openResourceDrill } = useDrill()
   const RI_TYPES = useMemo(() => new Set(Object.keys(RI_META)), [])
 
   // Detect Azure ML workspaces — they aren't directly reservable but are worth flagging
@@ -968,6 +974,7 @@ export default function ReservationsPanel({ resources = [], activeReservations =
               value={netNew.length}
               sub={`${confirmedEligible.length} confirmed · ${unconfirmedWithSavings.length} need verification`}
               accent="blue" icon={Zap}
+              onClick={() => openResourceDrill('RI candidates', netNew)}
               tooltip="Confirmed: Actively/Fully Used with ≥$50/mo. Unconfirmed: spend on an RI-eligible type but insufficient metrics — verify usage before committing."
             />
             <KpiCard

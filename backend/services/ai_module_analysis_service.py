@@ -120,8 +120,11 @@ def _compute_data_confidence(resources: list, arc_data: dict = None, extras: dic
         gaps.append("No Azure resources found")
     else:
         signals.append(f"{resource_count} resources")
-    # Cost data
-    has_cost = any(r.get("cost_mtd") or r.get("cost_30d") for r in resources) if resources else False
+    # Cost data — raw resources expose `cost_current_month`; compressed ones use `cost_mtd`.
+    # Accept either so the signal isn't a false "no cost data" on real estates.
+    has_cost = any(
+        r.get("cost_current_month") or r.get("cost_mtd") or r.get("cost_30d") for r in resources
+    ) if resources else False
     if has_cost:
         signals.append("Cost data available")
     else:

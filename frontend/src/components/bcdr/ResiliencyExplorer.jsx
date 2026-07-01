@@ -33,7 +33,7 @@ const ZONE_LABEL = {
   ZoneRedundant: 'Zone-redundant', Zonal: 'Single-zone (zonal)', NotZoneAware: 'Not zone-aware',
   LocallyRedundant: 'Locally redundant', Unknown: 'Unknown',
 }
-const CRIT_COLORS = { Critical: '#ef4444', High: '#f97316', Medium: '#eab308', Low: '#22c55e', Unclassified: '#64748b' }
+const CRIT_COLORS = { Critical: '#ef4444', High: '#f97316', Medium: '#eab308', Low: '#22c55e', Unclassified: 'var(--c-64748b)' }
 const CRIT_ORDER = ['Critical', 'High', 'Medium', 'Low', 'Unclassified']
 
 const GROUP_DIMS = [
@@ -85,9 +85,9 @@ function Donut({ data, colorMap, size = 132, unit = '' }) {
   return (
     <svg width={size} height={size} className="shrink-0">
       {slices.map((s) => <path key={s.label} d={s.d} fill={s.color} opacity={0.9} />)}
-      <circle cx={cx} cy={cy} r={r * 0.6} fill="#0b1220" />
-      <text x={cx} y={cy - 4} textAnchor="middle" fill="#e5e7eb" fontSize="20" fontWeight="700">{total}</text>
-      <text x={cx} y={cy + 14} textAnchor="middle" fill="#94a3b8" fontSize="9">{unit || 'resources'}</text>
+      <circle cx={cx} cy={cy} r={r * 0.6} style={{ fill: 'var(--c-0b1220)' }} />
+      <text x={cx} y={cy - 4} textAnchor="middle" style={{ fill: 'var(--c-e5e7eb)' }} fontSize="20" fontWeight="700">{total}</text>
+      <text x={cx} y={cy + 14} textAnchor="middle" style={{ fill: 'var(--c-94a3b8)' }} fontSize="9">{unit || 'resources'}</text>
     </svg>
   )
 }
@@ -126,10 +126,10 @@ function Gauge180({ score }) {
   return (
     <div className="relative">
       <svg width={w} height={h}>
-        <path d={`M ${sx} ${sy} A ${r} ${r} 0 0 1 ${fx} ${fy}`} fill="none" stroke="#1f2937" strokeWidth="12" strokeLinecap="round" />
+        <path d={`M ${sx} ${sy} A ${r} ${r} 0 0 1 ${fx} ${fy}`} fill="none" style={{ stroke: 'var(--c-1f2937)' }} strokeWidth="12" strokeLinecap="round" />
         <path d={`M ${sx} ${sy} A ${r} ${r} 0 ${large} 1 ${ex} ${ey}`} fill="none" stroke={color} strokeWidth="12" strokeLinecap="round" />
-        <text x={cx} y={cy - 26} textAnchor="middle" fill="#f8fafc" fontSize="34" fontWeight="800">{s}</text>
-        <text x={cx} y={cy - 6} textAnchor="middle" fill="#94a3b8" fontSize="10">/ 100 resiliency</text>
+        <text x={cx} y={cy - 26} textAnchor="middle" style={{ fill: 'var(--c-f8fafc)' }} fontSize="34" fontWeight="800">{s}</text>
+        <text x={cx} y={cy - 6} textAnchor="middle" style={{ fill: 'var(--c-94a3b8)' }} fontSize="10">/ 100 resiliency</text>
       </svg>
     </div>
   )
@@ -669,7 +669,7 @@ export default function ResiliencyExplorer({ resources = [] }) {
                       <span className="inline-flex items-center gap-1"><MapPin size={11} className="text-gray-600" />{r.location}</span>
                     </td>
                     <td className="py-2 pr-3">
-                      <span className="px-1.5 py-0.5 rounded text-[11px] font-medium" style={{ background: (CRIT_COLORS[r.criticality_label] || '#64748b') + '26', color: CRIT_COLORS[r.criticality_label] || '#94a3b8' }}>
+                      <span className="px-1.5 py-0.5 rounded text-[11px] font-medium" style={{ background: (CRIT_COLORS[r.criticality_label] || 'var(--c-64748b)') + '26', color: CRIT_COLORS[r.criticality_label] || 'var(--c-94a3b8)' }}>
                         {r.criticality_label}
                       </span>
                     </td>

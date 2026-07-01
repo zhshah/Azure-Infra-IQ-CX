@@ -14,7 +14,7 @@ function GradeRing({ score, grade, color, size = 80 }) {
   const filled = (score / 100) * circ;
   return (
     <svg width={size} height={size} style={{ flexShrink: 0 }}>
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#1e293b" strokeWidth={7} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" style={{ stroke: 'var(--c-1e293b)' }} strokeWidth={7} />
       <circle
         cx={size / 2} cy={size / 2} r={r}
         fill="none"
@@ -29,7 +29,7 @@ function GradeRing({ score, grade, color, size = 80 }) {
         {grade}
       </text>
       <text x="50%" y="68%" dominantBaseline="middle" textAnchor="middle"
-        style={{ fill: "#94a3b8", fontSize: size * 0.14 }}>
+        style={{ fill: "var(--c-94a3b8)", fontSize: size * 0.14 }}>
         {score.toFixed(0)}
       </text>
     </svg>
@@ -42,7 +42,7 @@ function PillarCard({ pillar }) {
 
   return (
     <div style={{
-      background: "#0f172a", border: "1px solid #1e293b",
+      background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)",
       borderRadius: 12, padding: "16px 18px",
       display: "flex", flexDirection: "column", gap: 10,
     }}>
@@ -52,17 +52,17 @@ function PillarCard({ pillar }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
             <span style={{ fontSize: 18 }}>{icon}</span>
-            <span style={{ color: "#f1f5f9", fontWeight: 600, fontSize: 14 }}>{pillar.pillar}</span>
+            <span style={{ color: "var(--c-f1f5f9)", fontWeight: 600, fontSize: 14 }}>{pillar.pillar}</span>
           </div>
           {/* Score bar */}
-          <div style={{ background: "#1e293b", borderRadius: 4, height: 6, width: "100%", marginBottom: 4 }}>
+          <div style={{ background: "var(--c-1e293b)", borderRadius: 4, height: 6, width: "100%", marginBottom: 4 }}>
             <div style={{
               width: `${pillar.score}%`, height: "100%",
               background: pillar.color, borderRadius: 4,
               transition: "width 0.6s ease",
             }} />
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--c-64748b)" }}>
             <span>{pillar.resource_gap_count} resource{pillar.resource_gap_count !== 1 ? "s" : ""} need attention</span>
             <span style={{ color: pillar.color, fontWeight: 600 }}>{pillar.score.toFixed(0)}/100</span>
           </div>
@@ -71,7 +71,7 @@ function PillarCard({ pillar }) {
 
       {/* Gaps preview */}
       {pillar.gaps.length > 0 && (
-        <div style={{ fontSize: 12, color: "#94a3b8", borderTop: "1px solid #1e293b", paddingTop: 8 }}>
+        <div style={{ fontSize: 12, color: "var(--c-94a3b8)", borderTop: "1px solid var(--c-1e293b)", paddingTop: 8 }}>
           <div style={{ color: "#ef4444", marginBottom: 4, fontSize: 11, fontWeight: 600 }}>⚠ Top Gaps</div>
           {pillar.gaps.slice(0, open ? 10 : 2).map((g, i) => (
             <div key={i} style={{ marginBottom: 3, paddingLeft: 8, borderLeft: "2px solid #ef444460" }}>
@@ -80,7 +80,7 @@ function PillarCard({ pillar }) {
           ))}
           {pillar.gaps.length > 2 && (
             <button onClick={() => setOpen(!open)} style={{
-              background: "none", border: "none", color: "#38bdf8",
+              background: "none", border: "none", color: 'var(--c-38bdf8)',
               cursor: "pointer", fontSize: 11, padding: "2px 0", marginTop: 2,
             }}>
               {open ? "Show less" : `+${pillar.gaps.length - 2} more`}
@@ -91,10 +91,10 @@ function PillarCard({ pillar }) {
 
       {/* Recommendations */}
       {pillar.recommendations.length > 0 && (
-        <div style={{ fontSize: 12, borderTop: "1px solid #1e293b", paddingTop: 8 }}>
+        <div style={{ fontSize: 12, borderTop: "1px solid var(--c-1e293b)", paddingTop: 8 }}>
           <div style={{ color: "#22c55e", marginBottom: 4, fontSize: 11, fontWeight: 600 }}>✦ Azure Services</div>
           {pillar.recommendations.map((rec, i) => (
-            <div key={i} style={{ color: "#94a3b8", marginBottom: 3, paddingLeft: 8, borderLeft: "2px solid #22c55e60" }}>
+            <div key={i} style={{ color: "var(--c-94a3b8)", marginBottom: 3, paddingLeft: 8, borderLeft: "2px solid #22c55e60" }}>
               {rec}
             </div>
           ))}
@@ -113,28 +113,28 @@ export default function WAFScorecard({ waf }) {
 
   return (
     <div style={{
-      background: "#0d1117", border: "1px solid #1e293b",
+      background: "var(--c-0d1117)", border: "1px solid var(--c-1e293b)",
       borderRadius: 16, padding: "20px 24px",
     }}>
       {/* Panel header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <div>
-          <h2 style={{ color: "#f1f5f9", margin: 0, fontSize: 18, fontWeight: 700 }}>
+          <h2 style={{ color: "var(--c-f1f5f9)", margin: 0, fontSize: 18, fontWeight: 700 }}>
             Well-Architected Framework Scorecard
           </h2>
-          <p style={{ color: "#64748b", margin: "4px 0 0", fontSize: 13 }}>
+          <p style={{ color: "var(--c-64748b)", margin: "4px 0 0", fontSize: 13 }}>
             Across all 5 pillars · computed from live scan data
           </p>
         </div>
         {/* Overall score badge */}
         <div style={{
           display: "flex", flexDirection: "column", alignItems: "center",
-          background: "#0f172a", border: `2px solid ${gradeColor}`,
+          background: "var(--c-0f172a)", border: `2px solid ${gradeColor}`,
           borderRadius: 12, padding: "10px 18px", minWidth: 90,
         }}>
           <span style={{ color: gradeColor, fontSize: 32, fontWeight: 800, lineHeight: 1 }}>{grade}</span>
-          <span style={{ color: "#94a3b8", fontSize: 12, marginTop: 2 }}>{overall.toFixed(0)} / 100</span>
-          <span style={{ color: "#475569", fontSize: 10, marginTop: 1 }}>Overall</span>
+          <span style={{ color: "var(--c-94a3b8)", fontSize: 12, marginTop: 2 }}>{overall.toFixed(0)} / 100</span>
+          <span style={{ color: "var(--c-475569)", fontSize: 10, marginTop: 1 }}>Overall</span>
         </div>
       </div>
 
@@ -149,7 +149,7 @@ export default function WAFScorecard({ waf }) {
         ))}
       </div>
 
-      <div style={{ marginTop: 14, fontSize: 11, color: "#334155", textAlign: "right" }}>
+      <div style={{ marginTop: 14, fontSize: 11, color: "var(--c-334155)", textAlign: "right" }}>
         Generated {new Date(waf.generated_at).toLocaleString()}
       </div>
     </div>

@@ -19,7 +19,7 @@ function ComplianceRing({ pct, size = 100 }) {
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
       {/* Track */}
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke="#1f2937" strokeWidth={9} />
+      <circle cx={cx} cy={cy} r={r} fill="none" style={{ stroke: 'var(--c-1f2937)' }} strokeWidth={9} />
       {/* Fill */}
       <circle
         cx={cx} cy={cy} r={r}

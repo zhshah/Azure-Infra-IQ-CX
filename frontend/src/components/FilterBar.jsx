@@ -40,21 +40,21 @@ function SubBadge({ sub }) {
       style={{
         display: 'flex', alignItems: 'center', gap: 10,
         padding: '6px 12px', borderRadius: 8,
-        background: 'rgba(30, 41, 59, 0.4)', border: '1px solid rgba(30, 41, 59, 0.6)',
+        background: 'rgba(var(--rgb-slate), 0.4)', border: '1px solid rgba(var(--rgb-slate), 0.6)',
       }}
     >
       <Layers size={14} style={{ color: '#0078d4', flexShrink: 0 }} />
       <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.3 }}>
         {name
-          ? <span style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>{name}</span>
-          : <span style={{ fontSize: 12, fontWeight: 600, color: '#94a3b8', fontFamily: 'monospace' }}>{shortId}</span>
+          ? <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-e2e8f0)' }}>{name}</span>
+          : <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-94a3b8)', fontFamily: 'monospace' }}>{shortId}</span>
         }
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 1 }}>
-          {name && <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>{shortId}</span>}
-          {name && <span style={{ color: '#334155' }}>·</span>}
+          {name && <span style={{ fontSize: 10, color: 'var(--c-64748b)', fontFamily: 'monospace' }}>{shortId}</span>}
+          {name && <span style={{ color: 'var(--c-334155)' }}>·</span>}
           <span style={{ fontSize: 10, color: '#22c55e', fontWeight: 500 }}>${(sub.cost_current ?? 0).toFixed(2)}/mo</span>
-          {sub.resource_count != null && <span style={{ color: '#334155' }}>·</span>}
-          {sub.resource_count != null && <span style={{ fontSize: 10, color: '#64748b' }}>{sub.resource_count} resources</span>}
+          {sub.resource_count != null && <span style={{ color: 'var(--c-334155)' }}>·</span>}
+          {sub.resource_count != null && <span style={{ fontSize: 10, color: 'var(--c-64748b)' }}>{sub.resource_count} resources</span>}
         </div>
       </div>
     </div>
@@ -233,24 +233,27 @@ export default function FilterBar({
   if (!effectiveSubs.length && !resourceGroups.length && !resources.length) return null
 
   return (
-    <div style={{ borderBottom: '1px solid rgba(30, 41, 59, 0.5)', background: 'rgba(12, 18, 32, 0.6)' }}>
+    <div data-scope-bar style={{ borderBottom: '1px solid rgba(var(--rgb-slate), 0.5)', background: 'rgba(12, 18, 32, 0.6)' }}>
       {/* Primary filter row */}
       <div style={{ padding: '8px 24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 10, color: '#475569', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', flexShrink: 0 }}>
+          <span style={{ fontSize: 10, color: 'var(--c-475569)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', flexShrink: 0 }}>
             <Filter size={11} style={{ display: 'inline', verticalAlign: '-2px', marginRight: 4 }} />
             Scope
           </span>
 
-          {/* Subscription */}
-          {effectiveSubs.length === 1 && <SubBadge sub={effectiveSubs[0]} />}
-          {effectiveSubs.length > 1 && (
+          {/* Subscription scope. Render the full dropdown whenever there's something to navigate
+              — more than one subscription OR a management-group hierarchy — so a single enabled
+              subscription never collapses the picker (disabled subs are filtered out server-side,
+              which can legitimately leave one). Only the lone-sub / no-MG case shows a static badge. */}
+          {effectiveSubs.length === 1 && mgGroups.length === 0 && <SubBadge sub={effectiveSubs[0]} />}
+          {(effectiveSubs.length > 1 || mgGroups.length > 0) && (
             <div style={{ width: 200 }}>
               <SearchableSelect
                 value={selectedSubscription || ''}
                 onChange={onSubscriptionChange}
                 options={subOptions}
-                placeholder={`All ${effectiveSubs.length} subscriptions`}
+                placeholder={effectiveSubs.length > 1 ? `All ${effectiveSubs.length} subscriptions` : (effectiveSubs[0]?.subscription_name || 'Scope')}
                 searchPlaceholder="Search subscriptions…"
                 compact
               />
@@ -307,8 +310,8 @@ export default function FilterBar({
                 display: 'flex', alignItems: 'center', gap: 6,
                 padding: '5px 12px', borderRadius: 7, fontSize: 12, fontWeight: 500,
                 background: expanded || selectedTagKey ? 'rgba(168, 85, 247, 0.1)' : 'transparent',
-                border: `1px solid ${expanded || selectedTagKey ? 'rgba(168, 85, 247, 0.3)' : '#1e293b'}`,
-                color: expanded || selectedTagKey ? '#c084fc' : '#64748b',
+                border: `1px solid ${expanded || selectedTagKey ? 'rgba(168, 85, 247, 0.3)' : 'var(--c-1e293b)'}`,
+                color: expanded || selectedTagKey ? '#c084fc' : 'var(--c-64748b)',
                 cursor: 'pointer', transition: 'all 0.15s',
               }}
             >
@@ -335,18 +338,18 @@ export default function FilterBar({
               }}
               style={{
                 display: 'flex', alignItems: 'center', gap: 4,
-                background: 'none', border: 'none', color: '#64748b',
+                background: 'none', border: 'none', color: 'var(--c-64748b)',
                 cursor: 'pointer', fontSize: 11, transition: 'color 0.15s',
               }}
-              onMouseEnter={e => e.currentTarget.style.color = '#94a3b8'}
-              onMouseLeave={e => e.currentTarget.style.color = '#64748b'}
+              onMouseEnter={e => e.currentTarget.style.color = 'var(--c-94a3b8)'}
+              onMouseLeave={e => e.currentTarget.style.color = 'var(--c-64748b)'}
             >
               <X size={12} /> Clear
             </button>
           )}
 
           {/* Resource count + Save as Project */}
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12, fontSize: 11, color: '#64748b', flexShrink: 0 }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12, fontSize: 11, color: 'var(--c-64748b)', flexShrink: 0 }}>
             {hasAnyFilter && filteredCount !== undefined && totalCount !== undefined && (
               <span style={{ color: '#0078d4', fontWeight: 600 }}>
                 {filteredCount} of {totalCount} resources
@@ -355,7 +358,7 @@ export default function FilterBar({
             {!hasAnyFilter && subscriptions.length > 1 && (
               <span>
                 {subscriptions.reduce((s, x) => s + x.resource_count, 0)} resources ·{' '}
-                <span style={{ color: '#94a3b8' }}>
+                <span style={{ color: 'var(--c-94a3b8)' }}>
                   ${subscriptions.reduce((s, x) => s + x.cost_current, 0).toFixed(2)}/mo
                 </span>
               </span>
@@ -383,7 +386,7 @@ export default function FilterBar({
 
       {/* Tag filter row (expanded) — now with searchable dropdowns */}
       {expanded && tagKeys.length > 0 && (
-        <div style={{ padding: '8px 24px 12px', borderTop: '1px solid rgba(30, 41, 59, 0.4)' }}>
+        <div style={{ padding: '8px 24px 12px', borderTop: '1px solid rgba(var(--rgb-slate), 0.4)' }}>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, maxWidth: 600 }}>
             <div style={{ flex: 2, minWidth: 0 }}>
               <SearchableSelect
@@ -396,7 +399,7 @@ export default function FilterBar({
                 compact
               />
             </div>
-            <span style={{ color: '#475569', fontSize: 14, fontWeight: 600, paddingBottom: 8 }}>=</span>
+            <span style={{ color: 'var(--c-475569)', fontSize: 14, fontWeight: 600, paddingBottom: 8 }}>=</span>
             <div style={{ flex: 3, minWidth: 0 }}>
               <SearchableSelect
                 label="Tag Value"

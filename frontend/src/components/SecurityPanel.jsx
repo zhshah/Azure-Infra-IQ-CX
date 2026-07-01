@@ -13,7 +13,7 @@ const SEVERITY_COLOR = {
   critical: "#ef4444",
   high: "#f97316",
   medium: "#eab308",
-  low: "#64748b",
+  low: "var(--c-64748b)",
   informational: "#38bdf8",
 };
 
@@ -55,7 +55,7 @@ const PLAN_STATUS_COLOR = {
 // ══════════════════════════════════════════════════════════════════════════════════
 
 function SeverityBadge({ severity }) {
-  const color = SEVERITY_COLOR[severity] || "#64748b";
+  const color = SEVERITY_COLOR[severity] || "var(--c-64748b)";
   return (
     <span style={{
       background: `${color}20`, color,
@@ -69,7 +69,7 @@ function SeverityBadge({ severity }) {
 }
 
 function SourceBadge({ source }) {
-  const color = SOURCE_COLOR[source] || "#64748b";
+  const color = SOURCE_COLOR[source] || "var(--c-64748b)";
   const label = SOURCE_LABEL[source] || source;
   return (
     <span style={{
@@ -95,15 +95,15 @@ function SecureScoreGauge({ score }) {
   return (
     <div style={{ textAlign: "center" }}>
       <svg width="130" height="130" viewBox="0 0 120 120">
-        <circle cx="60" cy="60" r="52" fill="none" stroke="#1e293b" strokeWidth="10" />
+        <circle cx="60" cy="60" r="52" fill="none" style={{ stroke: 'var(--c-1e293b)' }} strokeWidth="10" />
         <circle cx="60" cy="60" r="52" fill="none" stroke={color} strokeWidth="10"
           strokeDasharray={circumference} strokeDashoffset={strokeDashoffset}
           strokeLinecap="round" transform="rotate(-90 60 60)"
           style={{ transition: "stroke-dashoffset 1s ease" }} />
         <text x="60" y="55" textAnchor="middle" fill={color} fontSize="26" fontWeight="800">{Math.round(pct)}%</text>
-        <text x="60" y="74" textAnchor="middle" fill="#64748b" fontSize="9">Secure Score</text>
+        <text x="60" y="74" textAnchor="middle" style={{ fill: 'var(--c-64748b)' }} fontSize="9">Secure Score</text>
       </svg>
-      <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 2 }}>
+      <div style={{ color: "var(--c-94a3b8)", fontSize: 11, marginTop: 2 }}>
         {score.current_score}/{score.max_score} pts
       </div>
     </div>
@@ -117,16 +117,16 @@ function SecureScoreGauge({ score }) {
 function KPITile({ icon: Icon, label, value, subtext, color = "#38bdf8", onClick }) {
   return (
     <div onClick={onClick} style={{
-      background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12,
+      background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 12,
       padding: "14px 16px", minWidth: 140, cursor: onClick ? "pointer" : "default",
       transition: "all 0.2s", borderTop: `3px solid ${color}`,
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         {Icon && typeof Icon !== "string" ? <Icon size={16} style={{ color }} /> : <span style={{ fontSize: 18 }}>{Icon}</span>}
-        <span style={{ color: "#94a3b8", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</span>
+        <span style={{ color: "var(--c-94a3b8)", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</span>
       </div>
-      <div style={{ color: "#f1f5f9", fontSize: 26, fontWeight: 800, lineHeight: 1 }}>{value}</div>
-      {subtext && <div style={{ color: "#64748b", fontSize: 10, marginTop: 4 }}>{subtext}</div>}
+      <div style={{ color: "var(--c-f1f5f9)", fontSize: 26, fontWeight: 800, lineHeight: 1 }}>{value}</div>
+      {subtext && <div style={{ color: "var(--c-64748b)", fontSize: 10, marginTop: 4 }}>{subtext}</div>}
     </div>
   );
 }
@@ -155,8 +155,8 @@ function KPISection({ defenderData, allFindings, securityGaps, onDrill }) {
         }}>
           <ShieldCheck size={18} color="#eab308" />
           <div style={{ flex: 1 }}>
-            <div style={{ color: "#fbbf24", fontWeight: 700, fontSize: 13 }}>Microsoft Defender for Cloud Not Configured</div>
-            <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 2 }}>
+            <div style={{ color: 'var(--c-fbbf24)', fontWeight: 700, fontSize: 13 }}>Microsoft Defender for Cloud Not Configured</div>
+            <div style={{ color: "var(--c-94a3b8)", fontSize: 12, marginTop: 2 }}>
               Enable Defender for Cloud to unlock Secure Score, Alerts, Plan Coverage, Compliance, and Vulnerability data.
             </div>
           </div>
@@ -174,7 +174,7 @@ function KPISection({ defenderData, allFindings, securityGaps, onDrill }) {
         <KPITile icon={ShieldCheck} label="Secure Score"
           value={secureScore ? `${Math.round(secureScore.percentage)}%` : (defenderAvailable ? "0%" : "—")}
           subtext={secureScore ? `${secureScore.current_score}/${secureScore.max_score} pts` : (defenderAvailable ? "" : "Enable Defender")}
-          color={secureScore && secureScore.percentage >= 70 ? "#22c55e" : defenderAvailable ? "#eab308" : "#64748b"}
+          color={secureScore && secureScore.percentage >= 70 ? "#22c55e" : defenderAvailable ? "#eab308" : "var(--c-64748b)"}
           onClick={() => secureScore && onDrill && onDrill("secure-score", secureScore)} />
         <KPITile icon={Search} label="Total Findings" value={allFindings.length}
           subtext={`${allFindings.filter(f => f.severity === "high" || f.severity === "critical").length} high/critical`}
@@ -183,22 +183,22 @@ function KPISection({ defenderData, allFindings, securityGaps, onDrill }) {
         <KPITile icon={Bell} label="Active Alerts"
           value={defenderAvailable ? alerts.length : "—"}
           subtext={defenderAvailable ? (criticalAlerts > 0 ? `${criticalAlerts} high severity` : "No critical") : "Enable Defender"}
-          color={!defenderAvailable ? "#64748b" : criticalAlerts > 0 ? "#ef4444" : "#22c55e"}
+          color={!defenderAvailable ? "var(--c-64748b)" : criticalAlerts > 0 ? "#ef4444" : "#22c55e"}
           onClick={() => defenderAvailable && onDrill && onDrill("alerts", alerts)} />
         <KPITile icon={ShieldCheck} label="Plan Coverage"
           value={plans ? `${plans.overall_coverage_pct}%` : (defenderAvailable ? "0%" : "—")}
           subtext={plans ? `${plans.fully_enabled}/${plans.total_plans} plans enabled` : (defenderAvailable ? "" : "Enable Defender")}
-          color={!defenderAvailable ? "#64748b" : plans && plans.overall_coverage_pct >= 80 ? "#22c55e" : "#eab308"}
+          color={!defenderAvailable ? "var(--c-64748b)" : plans && plans.overall_coverage_pct >= 80 ? "#22c55e" : "#eab308"}
           onClick={() => plans && onDrill && onDrill("plans", plans?.plan_details || [])} />
         <KPITile icon={ClipboardList} label="Compliance"
           value={complianceAvg !== null ? `${complianceAvg}%` : (defenderAvailable ? "—" : "—")}
           subtext={compliance.length > 0 ? `${compliance.length} standards` : (defenderAvailable ? "No standards configured" : "Enable Defender")}
-          color={!defenderAvailable ? "#64748b" : complianceAvg && complianceAvg >= 70 ? "#22c55e" : "#eab308"}
+          color={!defenderAvailable ? "var(--c-64748b)" : complianceAvg && complianceAvg >= 70 ? "#22c55e" : "#eab308"}
           onClick={() => compliance.length > 0 && onDrill && onDrill("compliance", compliance)} />
         <KPITile icon={Bug} label="Vulnerabilities"
           value={defenderAvailable ? totalVulns : "—"}
           subtext={defenderAvailable ? "CVEs on servers/containers" : "Enable Defender"}
-          color={!defenderAvailable ? "#64748b" : totalVulns > 50 ? "#ef4444" : totalVulns > 10 ? "#eab308" : "#22c55e"} />
+          color={!defenderAvailable ? "var(--c-64748b)" : totalVulns > 50 ? "#ef4444" : totalVulns > 10 ? "#eab308" : "#22c55e"} />
         {totalRisk > 0 && (
           <KPITile icon={DollarSign} label="Monthly Risk" value={`$${totalRisk.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
             subtext="Estimated exposure" color="#ef4444"
@@ -206,7 +206,7 @@ function KPISection({ defenderData, allFindings, securityGaps, onDrill }) {
         )}
         <KPITile icon={BarChart3} label="Resources Assessed"
           value={new Set(allFindings.map(f => f.resource_id)).size}
-          subtext="Unique resources with findings" color="#64748b" />
+          subtext="Unique resources with findings" color="var(--c-64748b)" />
       </div>
     </div>
   );
@@ -236,17 +236,17 @@ function DonutChart({ data, title, size = 140 }) {
   });
   return (
     <div style={{ textAlign: "center" }}>
-      {title && <div style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, marginBottom: 6 }}>{title}</div>}
+      {title && <div style={{ color: "var(--c-94a3b8)", fontSize: 11, fontWeight: 600, marginBottom: 6 }}>{title}</div>}
       <svg width={size} height={size} viewBox="0 0 120 120">
         {slices.map((s, i) => (
           <path key={i} d={s.path} fill="none" stroke={s.color} strokeWidth="16" strokeLinecap="butt" />
         ))}
-        <text x="60" y="58" textAnchor="middle" fill="#f1f5f9" fontSize="18" fontWeight="800">{total}</text>
-        <text x="60" y="72" textAnchor="middle" fill="#64748b" fontSize="8">total</text>
+        <text x="60" y="58" textAnchor="middle" style={{ fill: 'var(--c-f1f5f9)' }} fontSize="18" fontWeight="800">{total}</text>
+        <text x="60" y="72" textAnchor="middle" style={{ fill: 'var(--c-64748b)' }} fontSize="8">total</text>
       </svg>
       <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8, marginTop: 6 }}>
         {data.filter(d => d.value > 0).map((d, i) => (
-          <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "#94a3b8" }}>
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--c-94a3b8)" }}>
             <div style={{ width: 8, height: 8, borderRadius: "50%", background: d.color }} />
             <span>{d.name} ({d.value})</span>
           </div>
@@ -262,21 +262,21 @@ function HBarChart({ data, title, maxItems = 8, barColor = "#38bdf8" }) {
   const maxVal = Math.max(...items.map(d => d.value), 1);
   return (
     <div>
-      {title && <div style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, marginBottom: 10 }}>{title}</div>}
+      {title && <div style={{ color: "var(--c-94a3b8)", fontSize: 11, fontWeight: 600, marginBottom: 10 }}>{title}</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {items.map((d, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ color: "#94a3b8", fontSize: 10, width: 90, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", textAlign: "right" }}>
+            <span style={{ color: "var(--c-94a3b8)", fontSize: 10, width: 90, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", textAlign: "right" }}>
               {d.name}
             </span>
-            <div style={{ flex: 1, background: "#1e293b", borderRadius: 3, height: 14, overflow: "hidden" }}>
+            <div style={{ flex: 1, background: "var(--c-1e293b)", borderRadius: 3, height: 14, overflow: "hidden" }}>
               <div style={{
                 background: d.color || barColor, height: "100%",
                 width: `${(d.value / maxVal) * 100}%`, borderRadius: 3,
                 transition: "width 0.5s",
               }} />
             </div>
-            <span style={{ color: "#64748b", fontSize: 10, width: 28, textAlign: "right" }}>{d.value}</span>
+            <span style={{ color: "var(--c-64748b)", fontSize: 10, width: 28, textAlign: "right" }}>{d.value}</span>
           </div>
         ))}
       </div>
@@ -288,7 +288,7 @@ function ControlsProgressChart({ data, title }) {
   if (!data || !data.length) return null;
   return (
     <div>
-      {title && <div style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, marginBottom: 10 }}>{title}</div>}
+      {title && <div style={{ color: "var(--c-94a3b8)", fontSize: 11, fontWeight: 600, marginBottom: 10 }}>{title}</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {data.slice(0, 8).map((d, i) => {
           const total = d.healthy + d.unhealthy;
@@ -296,12 +296,12 @@ function ControlsProgressChart({ data, title }) {
           return (
             <div key={i}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-                <span style={{ color: "#94a3b8", fontSize: 10, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span style={{ color: "var(--c-94a3b8)", fontSize: 10, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {d.name}
                 </span>
-                <span style={{ color: "#64748b", fontSize: 9 }}>{Math.round(healthyPct)}%</span>
+                <span style={{ color: "var(--c-64748b)", fontSize: 9 }}>{Math.round(healthyPct)}%</span>
               </div>
-              <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: "#1e293b" }}>
+              <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: "var(--c-1e293b)" }}>
                 <div style={{ width: `${healthyPct}%`, background: "#22c55e", transition: "width 0.5s" }} />
                 <div style={{ width: `${100 - healthyPct}%`, background: "#ef4444" }} />
               </div>
@@ -320,9 +320,9 @@ function ControlsProgressChart({ data, title }) {
 function DefenderPlansSection({ plans }) {
   if (!plans || !plans.plans || !plans.plans.length) return null;
   return (
-    <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: 16 }}>
+    <div style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 12, padding: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <h3 style={{ color: "#f1f5f9", fontSize: 14, fontWeight: 700, margin: 0 }}>
+        <h3 style={{ color: "var(--c-f1f5f9)", fontSize: 14, fontWeight: 700, margin: 0 }}>
           Defender Plan Coverage
         </h3>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -333,14 +333,14 @@ function DefenderPlansSection({ plans }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8 }}>
         {plans.plans.map((p, i) => {
-          const statusColor = PLAN_STATUS_COLOR[p.status] || "#64748b";
+          const statusColor = PLAN_STATUS_COLOR[p.status] || "var(--c-64748b)";
           return (
             <div key={i} style={{
-              background: "#0d1117", border: `1px solid ${statusColor}30`,
+              background: "var(--c-0d1117)", border: `1px solid ${statusColor}30`,
               borderRadius: 8, padding: "10px 12px", borderLeft: `3px solid ${statusColor}`,
             }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ color: "#e2e8f0", fontSize: 11, fontWeight: 600 }}>{p.plan_name}</span>
+                <span style={{ color: "var(--c-e2e8f0)", fontSize: 11, fontWeight: 600 }}>{p.plan_name}</span>
                 <span style={{
                   background: `${statusColor}20`, color: statusColor,
                   fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 10,
@@ -349,10 +349,10 @@ function DefenderPlansSection({ plans }) {
                 </span>
               </div>
               <div style={{ marginTop: 6 }}>
-                <div style={{ background: "#1e293b", borderRadius: 3, height: 4, overflow: "hidden" }}>
+                <div style={{ background: "var(--c-1e293b)", borderRadius: 3, height: 4, overflow: "hidden" }}>
                   <div style={{ background: statusColor, height: "100%", width: `${p.coverage_pct}%` }} />
                 </div>
-                <div style={{ color: "#475569", fontSize: 9, marginTop: 3 }}>
+                <div style={{ color: "var(--c-475569)", fontSize: 9, marginTop: 3 }}>
                   {p.enabled_count}/{p.total_subscriptions} subscriptions
                 </div>
               </div>
@@ -371,20 +371,20 @@ function DefenderPlansSection({ plans }) {
 function SecurityAlertsSection({ alerts }) {
   const [expanded, setExpanded] = useState(false);
   if (!alerts || !alerts.length) return (
-    <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: 24, textAlign: "center" }}>
+    <div style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 12, padding: 24, textAlign: "center" }}>
       <span style={{ color: "#22c55e", fontSize: 13 }}>✓ No active security alerts</span>
     </div>
   );
   const shown = expanded ? alerts : alerts.slice(0, 5);
   return (
-    <div style={{ background: "#0f172a", border: "1px solid #ef444430", borderRadius: 12, padding: 16 }}>
+    <div style={{ background: "var(--c-0f172a)", border: "1px solid #ef444430", borderRadius: 12, padding: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <h3 style={{ color: "#f1f5f9", fontSize: 14, fontWeight: 700, margin: 0 }}>
+        <h3 style={{ color: "var(--c-f1f5f9)", fontSize: 14, fontWeight: 700, margin: 0 }}>
           Active Security Alerts ({alerts.length})
         </h3>
         {alerts.length > 5 && (
           <button onClick={() => setExpanded(!expanded)} style={{
-            background: "none", border: "1px solid #334155", color: "#94a3b8",
+            background: "none", border: "1px solid var(--c-334155)", color: "var(--c-94a3b8)",
             borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 10,
           }}>
             {expanded ? "Show Less" : `Show All (${alerts.length})`}
@@ -393,31 +393,31 @@ function SecurityAlertsSection({ alerts }) {
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {shown.map((alert, i) => {
-          const color = SEVERITY_COLOR[alert.severity] || "#64748b";
+          const color = SEVERITY_COLOR[alert.severity] || "var(--c-64748b)";
           return (
             <div key={i} style={{
-              background: "#0d1117", border: `1px solid ${color}30`, borderRadius: 8,
+              background: "var(--c-0d1117)", border: `1px solid ${color}30`, borderRadius: 8,
               padding: "10px 12px", borderLeft: `3px solid ${color}`,
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <SeverityBadge severity={alert.severity} />
-                <span style={{ color: "#f1f5f9", fontSize: 12, fontWeight: 600 }}>{alert.title}</span>
+                <span style={{ color: "var(--c-f1f5f9)", fontSize: 12, fontWeight: 600 }}>{alert.title}</span>
               </div>
-              <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 4 }}>
+              <div style={{ color: "var(--c-94a3b8)", fontSize: 11, marginTop: 4 }}>
                 {alert.description?.substring(0, 150)}{alert.description?.length > 150 ? "…" : ""}
               </div>
               <div style={{ display: "flex", gap: 10, marginTop: 6, flexWrap: "wrap" }}>
                 {alert.compromised_entity && (
-                  <span style={{ color: "#64748b", fontSize: 10 }}>Entity: <span style={{ color: "#94a3b8" }}>{alert.compromised_entity}</span></span>
+                  <span style={{ color: "var(--c-64748b)", fontSize: 10 }}>Entity: <span style={{ color: "var(--c-94a3b8)" }}>{alert.compromised_entity}</span></span>
                 )}
                 {alert.intent && (
-                  <span style={{ color: "#64748b", fontSize: 10 }}>Intent: <span style={{ color: "#94a3b8" }}>{alert.intent}</span></span>
+                  <span style={{ color: "var(--c-64748b)", fontSize: 10 }}>Intent: <span style={{ color: "var(--c-94a3b8)" }}>{alert.intent}</span></span>
                 )}
                 {alert.tactics && (
-                  <span style={{ color: "#64748b", fontSize: 10 }}>Tactics: <span style={{ color: "#94a3b8" }}>{alert.tactics}</span></span>
+                  <span style={{ color: "var(--c-64748b)", fontSize: 10 }}>Tactics: <span style={{ color: "var(--c-94a3b8)" }}>{alert.tactics}</span></span>
                 )}
                 {alert.start_time && (
-                  <span style={{ color: "#475569", fontSize: 9 }}>{new Date(alert.start_time).toLocaleDateString()}</span>
+                  <span style={{ color: "var(--c-475569)", fontSize: 9 }}>{new Date(alert.start_time).toLocaleDateString()}</span>
                 )}
               </div>
             </div>
@@ -434,13 +434,13 @@ function SecurityAlertsSection({ alerts }) {
 
 function ComplianceSection({ compliance }) {
   if (!compliance || !compliance.length) return (
-    <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: 24, textAlign: "center" }}>
-      <span style={{ color: "#64748b", fontSize: 12 }}>No regulatory compliance standards configured</span>
+    <div style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 12, padding: 24, textAlign: "center" }}>
+      <span style={{ color: "var(--c-64748b)", fontSize: 12 }}>No regulatory compliance standards configured</span>
     </div>
   );
   return (
-    <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: 16 }}>
-      <h3 style={{ color: "#f1f5f9", fontSize: 14, fontWeight: 700, margin: "0 0 12px" }}>
+    <div style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 12, padding: 16 }}>
+      <h3 style={{ color: "var(--c-f1f5f9)", fontSize: 14, fontWeight: 700, margin: "0 0 12px" }}>
         Regulatory Compliance
       </h3>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 10 }}>
@@ -448,15 +448,15 @@ function ComplianceSection({ compliance }) {
           const pct = c.compliance_pct || 0;
           const color = pct >= 80 ? "#22c55e" : pct >= 60 ? "#eab308" : "#ef4444";
           return (
-            <div key={i} style={{ background: "#0d1117", border: "1px solid #1e293b", borderRadius: 8, padding: "10px 12px" }}>
+            <div key={i} style={{ background: "var(--c-0d1117)", border: "1px solid var(--c-1e293b)", borderRadius: 8, padding: "10px 12px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                <span style={{ color: "#e2e8f0", fontSize: 11, fontWeight: 600 }}>{c.standard}</span>
+                <span style={{ color: "var(--c-e2e8f0)", fontSize: 11, fontWeight: 600 }}>{c.standard}</span>
                 <span style={{ color, fontSize: 12, fontWeight: 700 }}>{pct}%</span>
               </div>
-              <div style={{ background: "#1e293b", borderRadius: 4, height: 6, overflow: "hidden", marginBottom: 4 }}>
+              <div style={{ background: "var(--c-1e293b)", borderRadius: 4, height: 6, overflow: "hidden", marginBottom: 4 }}>
                 <div style={{ background: color, height: "100%", width: `${pct}%`, transition: "width 0.5s" }} />
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#64748b" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "var(--c-64748b)" }}>
                 <span>✓ {c.passed_controls} passed</span>
                 <span>✗ {c.failed_controls} failed</span>
                 <span>⊘ {c.skipped_controls} skipped</span>
@@ -476,40 +476,40 @@ function ComplianceSection({ compliance }) {
 function ChartsDashboard({ charts }) {
   if (!charts) return null;
   return (
-    <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: 16 }}>
-      <h3 style={{ color: "#f1f5f9", fontSize: 14, fontWeight: 700, margin: "0 0 16px" }}>
+    <div style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 12, padding: 16 }}>
+      <h3 style={{ color: "var(--c-f1f5f9)", fontSize: 14, fontWeight: 700, margin: "0 0 16px" }}>
         Security Analytics
       </h3>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 20 }}>
-        <div style={{ background: "#0d1117", borderRadius: 10, padding: 16, border: "1px solid #1e293b" }}>
+        <div style={{ background: "var(--c-0d1117)", borderRadius: 10, padding: 16, border: "1px solid var(--c-1e293b)" }}>
           <DonutChart data={charts.severity_distribution || []} title="Findings by Severity" />
         </div>
-        <div style={{ background: "#0d1117", borderRadius: 10, padding: 16, border: "1px solid #1e293b" }}>
+        <div style={{ background: "var(--c-0d1117)", borderRadius: 10, padding: 16, border: "1px solid var(--c-1e293b)" }}>
           <HBarChart data={charts.category_breakdown || []} title="Findings by Category" barColor="#a78bfa" />
         </div>
-        <div style={{ background: "#0d1117", borderRadius: 10, padding: 16, border: "1px solid #1e293b" }}>
+        <div style={{ background: "var(--c-0d1117)", borderRadius: 10, padding: 16, border: "1px solid var(--c-1e293b)" }}>
           <HBarChart data={charts.resource_type_breakdown || []} title="Findings by Resource Type" barColor="#38bdf8" />
         </div>
-        <div style={{ background: "#0d1117", borderRadius: 10, padding: 16, border: "1px solid #1e293b" }}>
+        <div style={{ background: "var(--c-0d1117)", borderRadius: 10, padding: 16, border: "1px solid var(--c-1e293b)" }}>
           <HBarChart data={charts.top_affected_resources || []} title="Most Affected Resources" barColor="#f97316" />
         </div>
         {charts.alerts_by_severity && charts.alerts_by_severity.some(d => d.value > 0) && (
-          <div style={{ background: "#0d1117", borderRadius: 10, padding: 16, border: "1px solid #1e293b" }}>
+          <div style={{ background: "var(--c-0d1117)", borderRadius: 10, padding: 16, border: "1px solid var(--c-1e293b)" }}>
             <DonutChart data={charts.alerts_by_severity} title="Alerts by Severity" />
           </div>
         )}
         {charts.controls_progress && charts.controls_progress.length > 0 && (
-          <div style={{ background: "#0d1117", borderRadius: 10, padding: 16, border: "1px solid #1e293b" }}>
+          <div style={{ background: "var(--c-0d1117)", borderRadius: 10, padding: 16, border: "1px solid var(--c-1e293b)" }}>
             <ControlsProgressChart data={charts.controls_progress} title="Score Controls Progress" />
           </div>
         )}
         {charts.implementation_effort && charts.implementation_effort.length > 0 && (
-          <div style={{ background: "#0d1117", borderRadius: 10, padding: 16, border: "1px solid #1e293b" }}>
+          <div style={{ background: "var(--c-0d1117)", borderRadius: 10, padding: 16, border: "1px solid var(--c-1e293b)" }}>
             <HBarChart data={charts.implementation_effort} title="By Implementation Effort" barColor="#34d399" />
           </div>
         )}
         {charts.defender_plan_coverage && charts.defender_plan_coverage.length > 0 && (
-          <div style={{ background: "#0d1117", borderRadius: 10, padding: 16, border: "1px solid #1e293b" }}>
+          <div style={{ background: "var(--c-0d1117)", borderRadius: 10, padding: 16, border: "1px solid var(--c-1e293b)" }}>
             <HBarChart
               data={charts.defender_plan_coverage.map(p => ({
                 name: p.name, value: p.coverage,
@@ -531,13 +531,13 @@ function ChartsDashboard({ charts }) {
 
 function ScoreControlsPanel({ controls }) {
   if (!controls || !controls.length) return (
-    <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: 24, textAlign: "center" }}>
+    <div style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 12, padding: 24, textAlign: "center" }}>
       <span style={{ color: "#22c55e", fontSize: 12 }}>✓ All score controls are healthy</span>
     </div>
   );
   return (
-    <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: 16 }}>
-      <h3 style={{ color: "#f1f5f9", fontSize: 14, fontWeight: 700, margin: "0 0 12px" }}>
+    <div style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 12, padding: 16 }}>
+      <h3 style={{ color: "var(--c-f1f5f9)", fontSize: 14, fontWeight: 700, margin: "0 0 12px" }}>
         Secure Score Improvement Actions
       </h3>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
@@ -545,14 +545,14 @@ function ScoreControlsPanel({ controls }) {
           const pct = c.maxScore > 0 ? (c.currentScore / c.maxScore * 100) : 0;
           const color = pct >= 80 ? "#22c55e" : pct >= 50 ? "#eab308" : "#ef4444";
           return (
-            <div key={i} style={{ background: "#0d1117", border: "1px solid #1e293b", borderRadius: 8, padding: "10px 12px" }}>
+            <div key={i} style={{ background: "var(--c-0d1117)", border: "1px solid var(--c-1e293b)", borderRadius: 8, padding: "10px 12px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                <span style={{ color: "#e2e8f0", fontSize: 11, fontWeight: 600, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span style={{ color: "var(--c-e2e8f0)", fontSize: 11, fontWeight: 600, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {c.controlName}
                 </span>
                 <span style={{ color, fontSize: 11, fontWeight: 700 }}>{Math.round(pct)}%</span>
               </div>
-              <div style={{ background: "#1e293b", borderRadius: 4, height: 4, overflow: "hidden" }}>
+              <div style={{ background: "var(--c-1e293b)", borderRadius: 4, height: 4, overflow: "hidden" }}>
                 <div style={{ background: color, height: "100%", width: `${pct}%`, transition: "width 0.5s" }} />
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
@@ -582,16 +582,16 @@ function SecurityTable({ findings, onSort, sortBy, sortDir }) {
     { key: "category", label: "Category", width: "110px" },
   ];
   return (
-    <div style={{ overflowX: "auto", borderRadius: 10, border: "1px solid #1e293b" }}>
+    <div style={{ overflowX: "auto", borderRadius: 10, border: "1px solid var(--c-1e293b)" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
         <thead>
-          <tr style={{ background: "#0a0f1a" }}>
+          <tr style={{ background: "var(--c-0a0f1a)" }}>
             {columns.map(col => (
               <th key={col.key} onClick={() => onSort(col.key)} style={{
-                padding: "8px 10px", color: sortBy === col.key ? "#38bdf8" : "#64748b",
+                padding: "8px 10px", color: sortBy === col.key ? "#38bdf8" : "var(--c-64748b)",
                 fontSize: 10, fontWeight: 700, textTransform: "uppercase",
                 cursor: "pointer", userSelect: "none", whiteSpace: "nowrap",
-                borderBottom: "1px solid #1e293b", textAlign: "left", width: col.width,
+                borderBottom: "1px solid var(--c-1e293b)", textAlign: "left", width: col.width,
               }}>
                 {col.label} {sortBy === col.key ? (sortDir === "asc" ? "▲" : "▼") : ""}
               </th>
@@ -602,27 +602,27 @@ function SecurityTable({ findings, onSort, sortBy, sortDir }) {
           {findings.map((f, i) => (
             <tr key={f.id || f.resource_id + f.title + i}
                 onClick={() => { if (f.resource_id) { setSelectedResourceId(f.resource_id); setSelectedResourceName(f.resource_name); } }}
-                style={{ background: i % 2 === 0 ? "#0f172a" : "#0d1117", cursor: f.resource_id ? "pointer" : "default" }}>
+                style={{ background: i % 2 === 0 ? "var(--c-0f172a)" : "var(--c-0d1117)", cursor: f.resource_id ? "pointer" : "default" }}>
               <td style={{ padding: "6px 10px" }}><SeverityBadge severity={f.severity} /></td>
-              <td style={{ padding: "6px 10px", color: "#e2e8f0", fontWeight: 500 }}>
+              <td style={{ padding: "6px 10px", color: "var(--c-e2e8f0)", fontWeight: 500 }}>
                 <div style={{ fontSize: 11 }}>{f.title}</div>
                 {f.description && (
-                  <div style={{ color: "#475569", fontSize: 9, marginTop: 2, maxWidth: 380, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <div style={{ color: "var(--c-475569)", fontSize: 9, marginTop: 2, maxWidth: 380, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {f.description}
                   </div>
                 )}
               </td>
-              <td style={{ padding: "6px 10px", color: f.resource_id ? "#93c5fd" : "#94a3b8", fontSize: 11 }}>
+              <td style={{ padding: "6px 10px", color: f.resource_id ? "#93c5fd" : "var(--c-94a3b8)", fontSize: 11 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                   <ResourceIconImg resourceType={f.resource_type} size={14} />
                   {f.resource_name}
                   {f.resource_id && <span style={{ color: "#3b82f6", fontSize: 10, marginLeft: 2 }}>↗</span>}
                 </div>
               </td>
-              <td style={{ padding: "6px 10px", color: "#64748b", fontSize: 10 }}>{(f.resource_type || "").split("/").pop()}</td>
-              <td style={{ padding: "6px 10px", color: "#64748b", fontSize: 10 }}>{f.resource_group}</td>
+              <td style={{ padding: "6px 10px", color: "var(--c-64748b)", fontSize: 10 }}>{(f.resource_type || "").split("/").pop()}</td>
+              <td style={{ padding: "6px 10px", color: "var(--c-64748b)", fontSize: 10 }}>{f.resource_group}</td>
               <td style={{ padding: "6px 10px" }}><SourceBadge source={f.source} /></td>
-              <td style={{ padding: "6px 10px", color: "#64748b", fontSize: 10 }}>{f.category || f.gap_type}</td>
+              <td style={{ padding: "6px 10px", color: "var(--c-64748b)", fontSize: 10 }}>{f.category || f.gap_type}</td>
             </tr>
           ))}
         </tbody>
@@ -637,27 +637,27 @@ function SecurityTable({ findings, onSort, sortBy, sortDir }) {
 
 function GapCard({ finding, onSelect }) {
   const [open, setOpen] = useState(false);
-  const color = SEVERITY_COLOR[finding.severity] || "#64748b";
+  const color = SEVERITY_COLOR[finding.severity] || "var(--c-64748b)";
   return (
     <div style={{
-      background: "#0f172a", border: `1px solid ${color}30`,
+      background: "var(--c-0f172a)", border: `1px solid ${color}30`,
       borderRadius: 10, padding: "12px 14px", borderLeft: `3px solid ${color}`,
     }}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
             <SeverityBadge severity={finding.severity} />
-            <span style={{ color: "#f1f5f9", fontSize: 12, fontWeight: 600 }}>{finding.title}</span>
+            <span style={{ color: "var(--c-f1f5f9)", fontSize: 12, fontWeight: 600 }}>{finding.title}</span>
             {finding.source && <SourceBadge source={finding.source} />}
           </div>
-          <div style={{ color: "#64748b", fontSize: 11, marginBottom: 4 }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "#94a3b8" }}>
+          <div style={{ color: "var(--c-64748b)", fontSize: 11, marginBottom: 4 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--c-94a3b8)" }}>
               <ResourceIconImg resourceType={finding.resource_type} size={13} />
               {finding.resource_name}
             </span>
             {finding.resource_group && <> · <span>{finding.resource_group}</span></>}
             {finding.subscription_id && (
-              <span style={{ color: "#475569", marginLeft: 6, fontSize: 9 }}>
+              <span style={{ color: "var(--c-475569)", marginLeft: 6, fontSize: 9 }}>
                 {finding.subscription_id.substring(0, 8)}…
               </span>
             )}
@@ -665,25 +665,25 @@ function GapCard({ finding, onSelect }) {
           {open && (
             <div style={{ marginTop: 6, marginBottom: 6 }}>
               {finding.description && (
-                <div style={{ color: "#94a3b8", fontSize: 11, marginBottom: 4 }}>{finding.description}</div>
+                <div style={{ color: "var(--c-94a3b8)", fontSize: 11, marginBottom: 4 }}>{finding.description}</div>
               )}
               {finding.remediation && (
-                <div style={{ color: "#34d399", fontSize: 10, marginTop: 4 }}>Remediation: {finding.remediation}</div>
+                <div style={{ color: 'var(--c-34d399)', fontSize: 10, marginTop: 4 }}>Remediation: {finding.remediation}</div>
               )}
               {finding.threats && (
                 <div style={{ color: "#eab308", fontSize: 10, marginTop: 3 }}>Threats: {finding.threats}</div>
               )}
               {finding.implementation_effort && (
-                <div style={{ color: "#475569", fontSize: 9, marginTop: 3 }}>Effort: {finding.implementation_effort}</div>
+                <div style={{ color: "var(--c-475569)", fontSize: 9, marginTop: 3 }}>Effort: {finding.implementation_effort}</div>
               )}
             </div>
           )}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
             {finding.category && (
-              <span style={{ color: "#475569", fontSize: 9 }}>{GAP_TYPE_LABEL[finding.category] || finding.category}</span>
+              <span style={{ color: "var(--c-475569)", fontSize: 9 }}>{GAP_TYPE_LABEL[finding.category] || finding.category}</span>
             )}
             <button onClick={() => setOpen(!open)} style={{
-              background: "none", border: "none", color: "#475569",
+              background: "none", border: "none", color: "var(--c-475569)",
               cursor: "pointer", fontSize: 10, padding: 0,
             }}>
               {open ? "Hide ‹" : "Details ›"}
@@ -773,19 +773,19 @@ function FilterBar({ filters, setFilters, allFindings }) {
       <input type="text" placeholder="Search…" value={filters.search || ""}
         onChange={e => setFilters(f => ({ ...f, search: e.target.value }))}
         style={{
-          background: "#0c1220", color: "#e2e8f0", border: "1px solid #1e293b",
+          background: "var(--c-0c1220)", color: "var(--c-e2e8f0)", border: "1px solid var(--c-1e293b)",
           borderRadius: 7, padding: "7px 10px", fontSize: 11, width: 140,
           outline: 'none', transition: 'border-color 0.15s',
         }}
         onFocus={e => e.target.style.borderColor = '#0078d4'}
-        onBlur={e => e.target.style.borderColor = '#1e293b'}
+        onBlur={e => e.target.style.borderColor = 'var(--c-1e293b)'}
       />
       {Object.values(filters).some(v => v && v !== "all" && v !== "") && (
         <button onClick={() => setFilters({
           severity: "all", source: "all", resourceType: "all",
           subscription: "all", resourceGroup: "all", category: "all", search: "",
         })} style={{
-          background: "transparent", border: "1px solid #1e293b", color: "#94a3b8",
+          background: "transparent", border: "1px solid var(--c-1e293b)", color: "var(--c-94a3b8)",
           borderRadius: 7, padding: "6px 12px", cursor: "pointer", fontSize: 11,
           display: 'flex', alignItems: 'center', gap: 4, transition: 'all 0.15s',
         }}>
@@ -823,8 +823,8 @@ function exportToCSV(findings, filename = "security_findings.csv") {
 // ══════════════════════════════════════════════════════════════════════════════════
 
 function ZeroTrustTab({ data, loading }) {
-  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#64748b" }}>Loading Zero Trust assessment…</div>;
-  if (!data) return <div style={{ textAlign: "center", padding: 40, color: "#64748b" }}>No data available</div>;
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "var(--c-64748b)" }}>Loading Zero Trust assessment…</div>;
+  if (!data) return <div style={{ textAlign: "center", padding: 40, color: "var(--c-64748b)" }}>No data available</div>;
 
   const maturityColor = data.overall_score >= 80 ? "#22c55e" : data.overall_score >= 60 ? "#eab308" : data.overall_score >= 40 ? "#f97316" : "#ef4444";
   const circumference = 2 * Math.PI * 52;
@@ -833,21 +833,21 @@ function ZeroTrustTab({ data, loading }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* Header with overall score */}
-      <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: 20, display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap" }}>
+      <div style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 12, padding: 20, display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap" }}>
         <div style={{ textAlign: "center" }}>
           <svg width="130" height="130" viewBox="0 0 120 120">
-            <circle cx="60" cy="60" r="52" fill="none" stroke="#1e293b" strokeWidth="10" />
+            <circle cx="60" cy="60" r="52" fill="none" style={{ stroke: 'var(--c-1e293b)' }} strokeWidth="10" />
             <circle cx="60" cy="60" r="52" fill="none" stroke={maturityColor} strokeWidth="10"
               strokeDasharray={circumference} strokeDashoffset={offset}
               strokeLinecap="round" transform="rotate(-90 60 60)"
               style={{ transition: "stroke-dashoffset 1s ease" }} />
             <text x="60" y="55" textAnchor="middle" fill={maturityColor} fontSize="26" fontWeight="800">{data.overall_score}</text>
-            <text x="60" y="74" textAnchor="middle" fill="#64748b" fontSize="9">Zero Trust</text>
+            <text x="60" y="74" textAnchor="middle" style={{ fill: 'var(--c-64748b)' }} fontSize="9">Zero Trust</text>
           </svg>
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-            <span style={{ color: "#f1f5f9", fontSize: 20, fontWeight: 800 }}>Zero Trust Scorecard</span>
+            <span style={{ color: "var(--c-f1f5f9)", fontSize: 20, fontWeight: 800 }}>Zero Trust Scorecard</span>
             <span style={{ background: `${maturityColor}15`, color: maturityColor, fontSize: 12, fontWeight: 700, padding: "3px 12px", borderRadius: 20, border: `1px solid ${maturityColor}35` }}>
               {data.maturity_level}
             </span>
@@ -855,10 +855,10 @@ function ZeroTrustTab({ data, loading }) {
               {data.overall_grade}
             </span>
           </div>
-          <div style={{ color: "#94a3b8", fontSize: 12 }}>
+          <div style={{ color: "var(--c-94a3b8)", fontSize: 12 }}>
             {data.passing_checks}/{data.total_checks} checks passing across {data.pillars?.length || 6} pillars
           </div>
-          <div style={{ color: "#64748b", fontSize: 11, marginTop: 4 }}>
+          <div style={{ color: "var(--c-64748b)", fontSize: 11, marginTop: 4 }}>
             Based on Microsoft Zero Trust model — verify explicitly, use least privilege, assume breach
           </div>
         </div>
@@ -869,22 +869,22 @@ function ZeroTrustTab({ data, loading }) {
         {(data.pillars || []).map(p => {
           const color = p.score >= 80 ? "#22c55e" : p.score >= 60 ? "#eab308" : p.score >= 40 ? "#f97316" : "#ef4444";
           return (
-            <div key={p.key} style={{ background: "#0f172a", border: `1px solid ${color}25`, borderRadius: 12, padding: 16, borderTop: `3px solid ${color}` }}>
+            <div key={p.key} style={{ background: "var(--c-0f172a)", border: `1px solid ${color}25`, borderRadius: 12, padding: 16, borderTop: `3px solid ${color}` }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: 20 }}>{p.icon}</span>
                   <div>
-                    <div style={{ color: "#f1f5f9", fontSize: 14, fontWeight: 700 }}>{p.name}</div>
-                    <div style={{ color: "#475569", fontSize: 10 }}>{p.description?.substring(0, 60)}…</div>
+                    <div style={{ color: "var(--c-f1f5f9)", fontSize: 14, fontWeight: 700 }}>{p.name}</div>
+                    <div style={{ color: "var(--c-475569)", fontSize: 10 }}>{p.description?.substring(0, 60)}…</div>
                   </div>
                 </div>
                 <div style={{ textAlign: "center" }}>
                   <div style={{ color, fontSize: 24, fontWeight: 800 }}>{p.score}</div>
-                  <div style={{ color: "#475569", fontSize: 9, fontWeight: 700 }}>{p.grade}</div>
+                  <div style={{ color: "var(--c-475569)", fontSize: 9, fontWeight: 700 }}>{p.grade}</div>
                 </div>
               </div>
               {/* Progress bar */}
-              <div style={{ background: "#1e293b", borderRadius: 4, height: 6, marginBottom: 12, overflow: "hidden" }}>
+              <div style={{ background: "var(--c-1e293b)", borderRadius: 4, height: 6, marginBottom: 12, overflow: "hidden" }}>
                 <div style={{ background: color, height: "100%", width: `${p.score}%`, transition: "width 0.5s", borderRadius: 4 }} />
               </div>
               {/* Checks */}
@@ -893,8 +893,8 @@ function ZeroTrustTab({ data, loading }) {
                   <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 8px", background: c.status === "pass" ? "#05280f15" : "#3b000015", borderRadius: 6, border: `1px solid ${c.status === "pass" ? "#16a34a20" : "#dc262620"}` }}>
                     <span style={{ fontSize: 12, marginTop: 1 }}>{c.status === "pass" ? "✓" : "✗"}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ color: "#e2e8f0", fontSize: 11, fontWeight: 600 }}>{c.name}</div>
-                      <div style={{ color: "#64748b", fontSize: 10 }}>{c.detail}</div>
+                      <div style={{ color: "var(--c-e2e8f0)", fontSize: 11, fontWeight: 600 }}>{c.name}</div>
+                      <div style={{ color: "var(--c-64748b)", fontSize: 10 }}>{c.detail}</div>
                       {c.status !== "pass" && (
                         <div style={{ color: "#f97316", fontSize: 10, marginTop: 2 }}>{c.recommendation}</div>
                       )}
@@ -915,26 +915,26 @@ function ZeroTrustTab({ data, loading }) {
 // ══════════════════════════════════════════════════════════════════════════════════
 
 function AttackSurfaceTab({ data, loading }) {
-  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#64748b" }}>Analyzing attack surface…</div>;
-  if (!data) return <div style={{ textAlign: "center", padding: 40, color: "#64748b" }}>No data available</div>;
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "var(--c-64748b)" }}>Analyzing attack surface…</div>;
+  if (!data) return <div style={{ textAlign: "center", padding: 40, color: "var(--c-64748b)" }}>No data available</div>;
 
   const riskColor = data.risk_level === "critical" ? "#ef4444" : data.risk_level === "high" ? "#f97316" : data.risk_level === "medium" ? "#eab308" : "#22c55e";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* Summary header */}
-      <div style={{ background: "#0f172a", border: `1px solid ${riskColor}25`, borderRadius: 12, padding: 20, borderLeft: `4px solid ${riskColor}` }}>
+      <div style={{ background: "var(--c-0f172a)", border: `1px solid ${riskColor}25`, borderRadius: 12, padding: 20, borderLeft: `4px solid ${riskColor}` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
           <div>
-            <div style={{ color: "#64748b", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>Attack Surface Exposure</div>
+            <div style={{ color: "var(--c-64748b)", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>Attack Surface Exposure</div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
               <span style={{ color: riskColor, fontSize: 42, fontWeight: 800 }}>{data.attack_surface_score}</span>
-              <span style={{ color: "#475569", fontSize: 18 }}>/100 risk</span>
+              <span style={{ color: "var(--c-475569)", fontSize: 18 }}>/100 risk</span>
               <span style={{ background: `${riskColor}15`, color: riskColor, fontSize: 12, fontWeight: 700, padding: "3px 12px", borderRadius: 20, border: `1px solid ${riskColor}35` }}>
                 {data.risk_level?.toUpperCase()}
               </span>
             </div>
-            <div style={{ color: "#475569", fontSize: 11 }}>
+            <div style={{ color: "var(--c-475569)", fontSize: 11 }}>
               {data.total_exposures} exposure points identified — lower is better
             </div>
           </div>
@@ -945,10 +945,10 @@ function AttackSurfaceTab({ data, loading }) {
               { label: "No Backup", value: data.no_backup_count, icon: "○" },
               { label: "Blind Spots", value: data.unmonitored_count, icon: "○" },
             ].map(m => (
-              <div key={m.label} style={{ background: "#1e293b", borderRadius: 10, padding: "10px 14px", textAlign: "center", minWidth: 70 }}>
+              <div key={m.label} style={{ background: "var(--c-1e293b)", borderRadius: 10, padding: "10px 14px", textAlign: "center", minWidth: 70 }}>
                 <div style={{ fontSize: 16, marginBottom: 2 }}>{m.icon}</div>
                 <div style={{ color: m.value > 0 ? "#f97316" : "#22c55e", fontSize: 20, fontWeight: 800 }}>{m.value}</div>
-                <div style={{ color: "#64748b", fontSize: 9, fontWeight: 600 }}>{m.label}</div>
+                <div style={{ color: "var(--c-64748b)", fontSize: 9, fontWeight: 600 }}>{m.label}</div>
               </div>
             ))}
           </div>
@@ -957,19 +957,19 @@ function AttackSurfaceTab({ data, loading }) {
 
       {/* Category summary bars */}
       {data.category_summary?.length > 0 && (
-        <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: 16 }}>
-          <h3 style={{ color: "#f1f5f9", fontSize: 14, fontWeight: 700, margin: "0 0 12px" }}>Exposure by Category</h3>
+        <div style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 12, padding: 16 }}>
+          <h3 style={{ color: "var(--c-f1f5f9)", fontSize: 14, fontWeight: 700, margin: "0 0 12px" }}>Exposure by Category</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {data.category_summary.map((cat, i) => {
-              const catColor = cat.severity === "critical" ? "#ef4444" : cat.severity === "high" ? "#f97316" : cat.severity === "medium" ? "#eab308" : "#64748b";
+              const catColor = cat.severity === "critical" ? "#ef4444" : cat.severity === "high" ? "#f97316" : cat.severity === "medium" ? "#eab308" : "var(--c-64748b)";
               return (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ color: "#94a3b8", fontSize: 11, width: 180, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>{cat.category}</span>
-                  <div style={{ flex: 1, background: "#1e293b", borderRadius: 4, height: 16, overflow: "hidden" }}>
+                  <span style={{ color: "var(--c-94a3b8)", fontSize: 11, width: 180, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>{cat.category}</span>
+                  <div style={{ flex: 1, background: "var(--c-1e293b)", borderRadius: 4, height: 16, overflow: "hidden" }}>
                     <div style={{ background: catColor, height: "100%", width: `${Math.min(100, cat.count * 20)}%`, borderRadius: 4, transition: "width 0.5s" }} />
                   </div>
                   <SeverityBadge severity={cat.severity} />
-                  <span style={{ color: "#94a3b8", fontSize: 11, width: 30, textAlign: "right" }}>{cat.count}</span>
+                  <span style={{ color: "var(--c-94a3b8)", fontSize: 11, width: 30, textAlign: "right" }}>{cat.count}</span>
                 </div>
               );
             })}
@@ -979,20 +979,20 @@ function AttackSurfaceTab({ data, loading }) {
 
       {/* Exposure details */}
       {data.exposures?.length > 0 && (
-        <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: 16 }}>
-          <h3 style={{ color: "#f1f5f9", fontSize: 14, fontWeight: 700, margin: "0 0 12px" }}>🔍 Exposure Details ({data.exposures.length})</h3>
+        <div style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 12, padding: 16 }}>
+          <h3 style={{ color: "var(--c-f1f5f9)", fontSize: 14, fontWeight: 700, margin: "0 0 12px" }}>🔍 Exposure Details ({data.exposures.length})</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {data.exposures.map((e, i) => {
-              const sevColor = SEVERITY_COLOR[e.severity] || "#64748b";
+              const sevColor = SEVERITY_COLOR[e.severity] || "var(--c-64748b)";
               return (
-                <div key={i} style={{ background: "#0d1117", border: `1px solid ${sevColor}25`, borderRadius: 8, padding: "10px 12px", borderLeft: `3px solid ${sevColor}` }}>
+                <div key={i} style={{ background: "var(--c-0d1117)", border: `1px solid ${sevColor}25`, borderRadius: 8, padding: "10px 12px", borderLeft: `3px solid ${sevColor}` }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
                     <SeverityBadge severity={e.severity} />
-                    <span style={{ background: "#1e293b", color: "#94a3b8", fontSize: 9, padding: "2px 6px", borderRadius: 10 }}>{e.category}</span>
-                    <span style={{ color: "#e2e8f0", fontSize: 12, fontWeight: 600 }}>{e.resource_name}</span>
+                    <span style={{ background: "var(--c-1e293b)", color: "var(--c-94a3b8)", fontSize: 9, padding: "2px 6px", borderRadius: 10 }}>{e.category}</span>
+                    <span style={{ color: "var(--c-e2e8f0)", fontSize: 12, fontWeight: 600 }}>{e.resource_name}</span>
                   </div>
-                  <div style={{ color: "#94a3b8", fontSize: 11 }}>{e.description}</div>
-                  <div style={{ color: "#34d399", fontSize: 10, marginTop: 4 }}>Remediation: {e.remediation}</div>
+                  <div style={{ color: "var(--c-94a3b8)", fontSize: 11 }}>{e.description}</div>
+                  <div style={{ color: 'var(--c-34d399)', fontSize: 10, marginTop: 4 }}>Remediation: {e.remediation}</div>
                 </div>
               );
             })}
@@ -1195,28 +1195,28 @@ function DBFindingsTab({ onSelectResource }) {
           <input type="text" placeholder="Search..." value={filters.search}
             onChange={e => handleFilterChange("search", e.target.value)}
             style={{
-              background: "#0c1220", color: "#e2e8f0", border: "1px solid #1e293b",
+              background: "var(--c-0c1220)", color: "var(--c-e2e8f0)", border: "1px solid var(--c-1e293b)",
               borderRadius: 7, padding: "7px 10px", fontSize: 11, width: 130,
               outline: "none",
             }}
             onFocus={e => e.target.style.borderColor = "#0078d4"}
-            onBlur={e => e.target.style.borderColor = "#1e293b"}
+            onBlur={e => e.target.style.borderColor = "var(--c-1e293b)"}
           />
           {hasActiveFilters && (
             <button onClick={clearFilters} style={{
-              background: "transparent", border: "1px solid #1e293b", color: "#94a3b8",
+              background: "transparent", border: "1px solid var(--c-1e293b)", color: "var(--c-94a3b8)",
               borderRadius: 7, padding: "6px 10px", cursor: "pointer", fontSize: 11,
             }}>✕ Clear</button>
           )}
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <button onClick={handleRefresh} disabled={refreshing} style={{
-            background: "#1e293b", border: "1px solid #334155", color: refreshing ? "#475569" : "#94a3b8",
+            background: "var(--c-1e293b)", border: "1px solid var(--c-334155)", color: refreshing ? "var(--c-475569)" : "var(--c-94a3b8)",
             borderRadius: 6, padding: "6px 12px", cursor: refreshing ? "default" : "pointer", fontSize: 11,
           }}>{refreshing ? "⟳ Scanning..." : "⟳ Refresh"}</button>
           <button onClick={handleExport} disabled={exporting || total === 0} style={{
-            background: "#1e293b", border: "1px solid #334155",
-            color: exporting || total === 0 ? "#475569" : "#94a3b8",
+            background: "var(--c-1e293b)", border: "1px solid var(--c-334155)",
+            color: exporting || total === 0 ? "var(--c-475569)" : "var(--c-94a3b8)",
             borderRadius: 6, padding: "6px 12px", cursor: exporting || total === 0 ? "default" : "pointer", fontSize: 11,
           }}>{exporting ? "Exporting..." : "↓ Export CSV"}</button>
         </div>
@@ -1224,14 +1224,14 @@ function DBFindingsTab({ onSelectResource }) {
 
       {/* Status bar */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ color: "#475569", fontSize: 11 }}>
+        <div style={{ color: "var(--c-475569)", fontSize: 11 }}>
           {loading ? "Loading..." : `Showing ${items.length} of ${total} findings`}
           {total > 0 && ` · Page ${page + 1} of ${totalPages}`}
         </div>
-        <div style={{ display: "flex", gap: 4, background: "#0f172a", borderRadius: 8, padding: 3 }}>
-          <span style={{ color: "#94a3b8", fontSize: 10, padding: "3px 8px" }}>
+        <div style={{ display: "flex", gap: 4, background: "var(--c-0f172a)", borderRadius: 8, padding: 3 }}>
+          <span style={{ color: "var(--c-94a3b8)", fontSize: 10, padding: "3px 8px" }}>
             Persisted to {" "}
-            <span style={{ color: "#38bdf8", fontWeight: 600 }}>Azure SQL Database</span>
+            <span style={{ color: 'var(--c-38bdf8)', fontWeight: 600 }}>Azure SQL Database</span>
           </span>
         </div>
       </div>
@@ -1243,17 +1243,17 @@ function DBFindingsTab({ onSelectResource }) {
       )}
 
       {/* Table */}
-      <div style={{ overflowX: "auto", borderRadius: 10, border: "1px solid #1e293b" }}>
+      <div style={{ overflowX: "auto", borderRadius: 10, border: "1px solid var(--c-1e293b)" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
-            <tr style={{ background: "#0a0f1a" }}>
+            <tr style={{ background: "var(--c-0a0f1a)" }}>
               {columns.map(col => (
                 <th key={col.key} onClick={() => handleSort(col.key)} style={{
-                  padding: "10px 10px", color: sortBy === col.key ? "#38bdf8" : "#64748b",
+                  padding: "10px 10px", color: sortBy === col.key ? "#38bdf8" : "var(--c-64748b)",
                   fontSize: 10, fontWeight: 700, textTransform: "uppercase",
                   cursor: "pointer", userSelect: "none", whiteSpace: "nowrap",
-                  borderBottom: "2px solid #1e293b", textAlign: "left", width: col.width,
-                  position: "sticky", top: 0, background: "#0a0f1a", zIndex: 1,
+                  borderBottom: "2px solid var(--c-1e293b)", textAlign: "left", width: col.width,
+                  position: "sticky", top: 0, background: "var(--c-0a0f1a)", zIndex: 1,
                 }}>
                   {col.label} {sortBy === col.key ? (sortDir === "asc" ? "▲" : "▼") : ""}
                 </th>
@@ -1262,42 +1262,42 @@ function DBFindingsTab({ onSelectResource }) {
           </thead>
           <tbody>
             {loading && items.length === 0 ? (
-              <tr><td colSpan={columns.length} style={{ padding: 40, textAlign: "center", color: "#64748b" }}>Loading findings...</td></tr>
+              <tr><td colSpan={columns.length} style={{ padding: 40, textAlign: "center", color: "var(--c-64748b)" }}>Loading findings...</td></tr>
             ) : items.length === 0 ? (
-              <tr><td colSpan={columns.length} style={{ padding: 40, textAlign: "center", color: "#64748b" }}>
+              <tr><td colSpan={columns.length} style={{ padding: 40, textAlign: "center", color: "var(--c-64748b)" }}>
                 {total === 0 ? "No findings persisted yet. Click ⟳ Refresh to scan and persist." : "No findings match current filters."}
               </td></tr>
             ) : items.map((f, i) => (
               <tr key={f.id || i}
                   onClick={() => f.resource_id && onSelectResource && onSelectResource(f.resource_id, f.resource_name)}
                   style={{
-                    background: i % 2 === 0 ? "#0f172a" : "#0d1117",
+                    background: i % 2 === 0 ? "var(--c-0f172a)" : "var(--c-0d1117)",
                     cursor: f.resource_id ? "pointer" : "default",
                     transition: "background 0.1s",
                   }}
                   onMouseEnter={e => e.currentTarget.style.background = "#1e293b40"}
-                  onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? "#0f172a" : "#0d1117"}>
+                  onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? "var(--c-0f172a)" : "var(--c-0d1117)"}>
                 <td style={{ padding: "8px 10px" }}><SeverityBadge severity={f.severity} /></td>
-                <td style={{ padding: "8px 10px", color: "#e2e8f0", fontWeight: 500 }}>
+                <td style={{ padding: "8px 10px", color: "var(--c-e2e8f0)", fontWeight: 500 }}>
                   <div style={{ fontSize: 11 }}>{f.title}</div>
                   {f.description && (
-                    <div style={{ color: "#475569", fontSize: 9, marginTop: 2, maxWidth: 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <div style={{ color: "var(--c-475569)", fontSize: 9, marginTop: 2, maxWidth: 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {f.description}
                     </div>
                   )}
                 </td>
-                <td style={{ padding: "8px 10px", color: f.resource_id ? "#93c5fd" : "#94a3b8", fontSize: 11 }}>
+                <td style={{ padding: "8px 10px", color: f.resource_id ? "#93c5fd" : "var(--c-94a3b8)", fontSize: 11 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                     <ResourceIconImg resourceType={f.resource_type} size={14} />
                     <span style={{ maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.resource_name}</span>
                     {f.resource_id && <span style={{ color: "#3b82f6", fontSize: 10 }}>↗</span>}
                   </div>
                 </td>
-                <td style={{ padding: "8px 10px", color: "#64748b", fontSize: 10 }}>{(f.resource_type || "").split("/").pop()}</td>
-                <td style={{ padding: "8px 10px", color: "#64748b", fontSize: 10 }}>{f.resource_group}</td>
+                <td style={{ padding: "8px 10px", color: "var(--c-64748b)", fontSize: 10 }}>{(f.resource_type || "").split("/").pop()}</td>
+                <td style={{ padding: "8px 10px", color: "var(--c-64748b)", fontSize: 10 }}>{f.resource_group}</td>
                 <td style={{ padding: "8px 10px" }}><SourceBadge source={f.source} /></td>
-                <td style={{ padding: "8px 10px", color: "#64748b", fontSize: 10 }}>{GAP_TYPE_LABEL[f.category] || f.category}</td>
-                <td style={{ padding: "8px 10px", color: f.monthly_risk_usd > 0 ? "#ef4444" : "#475569", fontSize: 10, fontWeight: f.monthly_risk_usd > 0 ? 600 : 400 }}>
+                <td style={{ padding: "8px 10px", color: "var(--c-64748b)", fontSize: 10 }}>{GAP_TYPE_LABEL[f.category] || f.category}</td>
+                <td style={{ padding: "8px 10px", color: f.monthly_risk_usd > 0 ? "#ef4444" : "var(--c-475569)", fontSize: 10, fontWeight: f.monthly_risk_usd > 0 ? 600 : 400 }}>
                   {f.monthly_risk_usd > 0 ? `$${Number(f.monthly_risk_usd).toFixed(0)}` : "—"}
                 </td>
               </tr>
@@ -1310,13 +1310,13 @@ function DBFindingsTab({ onSelectResource }) {
       {totalPages > 1 && (
         <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 4 }}>
           <button disabled={page === 0} onClick={() => setPage(0)} style={{
-            background: "none", border: "1px solid #1e293b",
-            color: page === 0 ? "#334155" : "#94a3b8",
+            background: "none", border: "1px solid var(--c-1e293b)",
+            color: page === 0 ? "var(--c-334155)" : "var(--c-94a3b8)",
             borderRadius: 6, padding: "4px 8px", cursor: page === 0 ? "default" : "pointer", fontSize: 10,
           }}>⟪</button>
           <button disabled={page === 0} onClick={() => setPage(p => p - 1)} style={{
-            background: "none", border: "1px solid #1e293b",
-            color: page === 0 ? "#334155" : "#94a3b8",
+            background: "none", border: "1px solid var(--c-1e293b)",
+            color: page === 0 ? "var(--c-334155)" : "var(--c-94a3b8)",
             borderRadius: 6, padding: "4px 10px", cursor: page === 0 ? "default" : "pointer", fontSize: 11,
           }}>← Prev</button>
           <div style={{ display: "flex", gap: 2 }}>
@@ -1328,9 +1328,9 @@ function DBFindingsTab({ onSelectResource }) {
               else pageNum = page - 3 + i;
               return (
                 <button key={pageNum} onClick={() => setPage(pageNum)} style={{
-                  background: page === pageNum ? "#334155" : "none",
-                  border: page === pageNum ? "1px solid #475569" : "1px solid transparent",
-                  color: page === pageNum ? "#f1f5f9" : "#64748b",
+                  background: page === pageNum ? "var(--c-334155)" : "none",
+                  border: page === pageNum ? "1px solid var(--c-475569)" : "1px solid transparent",
+                  color: page === pageNum ? "var(--c-f1f5f9)" : "var(--c-64748b)",
                   borderRadius: 4, padding: "3px 8px", cursor: "pointer", fontSize: 10, fontWeight: page === pageNum ? 700 : 400,
                   minWidth: 28,
                 }}>{pageNum + 1}</button>
@@ -1338,13 +1338,13 @@ function DBFindingsTab({ onSelectResource }) {
             })}
           </div>
           <button disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)} style={{
-            background: "none", border: "1px solid #1e293b",
-            color: page >= totalPages - 1 ? "#334155" : "#94a3b8",
+            background: "none", border: "1px solid var(--c-1e293b)",
+            color: page >= totalPages - 1 ? "var(--c-334155)" : "var(--c-94a3b8)",
             borderRadius: 6, padding: "4px 10px", cursor: page >= totalPages - 1 ? "default" : "pointer", fontSize: 11,
           }}>Next →</button>
           <button disabled={page >= totalPages - 1} onClick={() => setPage(totalPages - 1)} style={{
-            background: "none", border: "1px solid #1e293b",
-            color: page >= totalPages - 1 ? "#334155" : "#94a3b8",
+            background: "none", border: "1px solid var(--c-1e293b)",
+            color: page >= totalPages - 1 ? "var(--c-334155)" : "var(--c-94a3b8)",
             borderRadius: 6, padding: "4px 8px", cursor: page >= totalPages - 1 ? "default" : "pointer", fontSize: 10,
           }}>⟫</button>
         </div>
@@ -1445,7 +1445,7 @@ export default function SecurityPanel({ securityGaps = [] }) {
         items: (data || []).map(f => ({ name: f.title || f.resource_name, type: f.resource_type, severity: f.severity, source: f.source || "internal", detail: f.description })),
         columns: [
           { key: "name", label: "Finding", width: "2fr", value: i => i.name },
-          { key: "severity", label: "Severity", width: "80px", value: i => i.severity, color: i => ({ critical: "#ef4444", high: "#f97316", medium: "#eab308", low: "#64748b" })[i.severity] || "#94a3b8" },
+          { key: "severity", label: "Severity", width: "80px", value: i => i.severity, color: i => ({ critical: "#ef4444", high: "#f97316", medium: "#eab308", low: "var(--c-64748b)" })[i.severity] || "var(--c-94a3b8)" },
           { key: "source", label: "Source", width: "80px", value: i => i.source },
         ],
       },
@@ -1537,9 +1537,9 @@ export default function SecurityPanel({ securityGaps = [] }) {
   }, [sortBy]);
 
   const tabStyle = (tab) => ({
-    background: activeTab === tab ? "#1e293b" : "transparent",
-    border: activeTab === tab ? "1px solid #334155" : "1px solid transparent",
-    color: activeTab === tab ? "#f1f5f9" : "#64748b",
+    background: activeTab === tab ? "var(--c-1e293b)" : "transparent",
+    border: activeTab === tab ? "1px solid var(--c-334155)" : "1px solid transparent",
+    color: activeTab === tab ? "var(--c-f1f5f9)" : "var(--c-64748b)",
     borderRadius: 8, padding: "6px 14px", cursor: "pointer",
     fontSize: 11, fontWeight: activeTab === tab ? 700 : 500,
     transition: "all 0.2s",
@@ -1547,27 +1547,27 @@ export default function SecurityPanel({ securityGaps = [] }) {
 
   if (loading && !defenderData && !securityGaps.length) {
     return (
-      <div style={{ background: "#0d1117", borderRadius: 16, padding: 40, textAlign: "center" }}>
-        <div style={{ color: "#64748b", fontSize: 14 }}>Loading comprehensive security posture from Defender for Cloud…</div>
+      <div style={{ background: "var(--c-0d1117)", borderRadius: 16, padding: 40, textAlign: "center" }}>
+        <div style={{ color: "var(--c-64748b)", fontSize: 14 }}>Loading comprehensive security posture from Defender for Cloud…</div>
       </div>
     );
   }
 
   return (
-    <div style={{ background: "#0d1117", border: "1px solid #1e293b", borderRadius: 16, padding: "20px 24px" }}>
+    <div style={{ background: "var(--c-0d1117)", border: "1px solid var(--c-1e293b)", borderRadius: 16, padding: "20px 24px" }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           {defenderData?.defender?.secure_score && <SecureScoreGauge score={defenderData.defender.secure_score} />}
           <div>
-            <h2 style={{ color: "#f1f5f9", margin: 0, fontSize: 20, fontWeight: 800 }}>Security Posture</h2>
-            <p style={{ color: "#64748b", margin: "4px 0 0", fontSize: 12 }}>
+            <h2 style={{ color: "var(--c-f1f5f9)", margin: 0, fontSize: 20, fontWeight: 800 }}>Security Posture</h2>
+            <p style={{ color: "var(--c-64748b)", margin: "4px 0 0", fontSize: 12 }}>
               Microsoft Defender for Cloud · Azure Advisor · Azure Arc · Heuristic Analysis
             </p>
           </div>
         </div>
         <button onClick={() => exportToCSV(sorted)} style={{
-          background: "#1e293b", border: "1px solid #334155", color: "#94a3b8",
+          background: "var(--c-1e293b)", border: "1px solid var(--c-334155)", color: "var(--c-94a3b8)",
           borderRadius: 6, padding: "6px 14px", cursor: "pointer", fontSize: 11,
         }}>↓ Export CSV</button>
       </div>
@@ -1576,7 +1576,7 @@ export default function SecurityPanel({ securityGaps = [] }) {
       <KPISection defenderData={defenderData} allFindings={allFindings} securityGaps={securityGaps} onDrill={handleDrill} />
 
       {/* Tab Navigation */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 16, flexWrap: "wrap", background: "#0f172a", borderRadius: 10, padding: 4, border: "1px solid #1e293b" }}>
+      <div style={{ display: "flex", gap: 4, marginBottom: 16, flexWrap: "wrap", background: "var(--c-0f172a)", borderRadius: 10, padding: 4, border: "1px solid var(--c-1e293b)" }}>
         <button style={tabStyle("overview")} onClick={() => setActiveTab("overview")}><BarChart3 size={12} style={{marginRight:4}} /> Overview</button>
         <button style={tabStyle("findings")} onClick={() => setActiveTab("findings")}><Search size={12} style={{marginRight:4}} /> Findings ({allFindings.length})</button>
         <button style={tabStyle("alerts")} onClick={() => setActiveTab("alerts")}><Bell size={12} style={{marginRight:4}} /> Alerts ({defenderData?.defender?.alerts?.length || 0})</button>
@@ -1606,20 +1606,20 @@ export default function SecurityPanel({ securityGaps = [] }) {
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
             <FilterBar filters={filters} setFilters={(fn) => { setFilters(fn); setPage(0); }} allFindings={allFindings} />
-            <div style={{ display: "flex", gap: 4, background: "#0f172a", borderRadius: 8, padding: 3 }}>
+            <div style={{ display: "flex", gap: 4, background: "var(--c-0f172a)", borderRadius: 8, padding: 3 }}>
               <button onClick={() => { setView("card"); setPage(0); }} style={{
-                background: view === "card" ? "#1e293b" : "none",
-                border: "none", color: view === "card" ? "#f1f5f9" : "#64748b",
+                background: view === "card" ? "var(--c-1e293b)" : "none",
+                border: "none", color: view === "card" ? "var(--c-f1f5f9)" : "var(--c-64748b)",
                 borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 11,
               }}>▦ Cards</button>
               <button onClick={() => { setView("list"); setPage(0); }} style={{
-                background: view === "list" ? "#1e293b" : "none",
-                border: "none", color: view === "list" ? "#f1f5f9" : "#64748b",
+                background: view === "list" ? "var(--c-1e293b)" : "none",
+                border: "none", color: view === "list" ? "var(--c-f1f5f9)" : "var(--c-64748b)",
                 borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 11,
               }}>≡ List</button>
             </div>
           </div>
-          <div style={{ color: "#475569", fontSize: 11, marginBottom: 10 }}>
+          <div style={{ color: "var(--c-475569)", fontSize: 11, marginBottom: 10 }}>
             Showing {paginated.length} of {sorted.length} findings
             {sorted.length !== allFindings.length && ` (${allFindings.length} total)`}
           </div>
@@ -1633,12 +1633,12 @@ export default function SecurityPanel({ securityGaps = [] }) {
           {totalPages > 1 && (
             <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 14 }}>
               <button disabled={page === 0} onClick={() => setPage(p => p - 1)} style={{
-                background: "none", border: "1px solid #1e293b", color: page === 0 ? "#334155" : "#94a3b8",
+                background: "none", border: "1px solid var(--c-1e293b)", color: page === 0 ? "var(--c-334155)" : "var(--c-94a3b8)",
                 borderRadius: 6, padding: "4px 10px", cursor: page === 0 ? "default" : "pointer", fontSize: 11,
               }}>← Prev</button>
-              <span style={{ color: "#64748b", fontSize: 11 }}>Page {page + 1} of {totalPages}</span>
+              <span style={{ color: "var(--c-64748b)", fontSize: 11 }}>Page {page + 1} of {totalPages}</span>
               <button disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)} style={{
-                background: "none", border: "1px solid #1e293b", color: page >= totalPages - 1 ? "#334155" : "#94a3b8",
+                background: "none", border: "1px solid var(--c-1e293b)", color: page >= totalPages - 1 ? "var(--c-334155)" : "var(--c-94a3b8)",
                 borderRadius: 6, padding: "4px 10px", cursor: page >= totalPages - 1 ? "default" : "pointer", fontSize: 11,
               }}>Next →</button>
             </div>
@@ -1682,7 +1682,7 @@ export default function SecurityPanel({ securityGaps = [] }) {
       )}
 
       {error && (
-        <div style={{ marginTop: 12, padding: "8px 12px", background: "#1e293b", borderRadius: 8 }}>
+        <div style={{ marginTop: 12, padding: "8px 12px", background: "var(--c-1e293b)", borderRadius: 8 }}>
           <span style={{ color: "#eab308", fontSize: 11 }}>△ {error}</span>
         </div>
       )}

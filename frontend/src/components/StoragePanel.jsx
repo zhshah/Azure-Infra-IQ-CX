@@ -6,6 +6,7 @@ import {
   TrendingDown, Database, XCircle, Info,
 } from 'lucide-react'
 import { SCORE_STYLE } from '../scoreColors'
+import { useDrill } from '../drill/DrillContext'
 
 // ── Formatters ─────────────────────────────────────────────────────────────────
 
@@ -68,7 +69,7 @@ function ScoreBadge({ label }) {
 
 // ── KPI card ───────────────────────────────────────────────────────────────────
 
-function KpiCard({ label, value, sub, accent, icon: Icon, tooltip }) {
+function KpiCard({ label, value, sub, accent, icon: Icon, tooltip, onClick }) {
   const [showTip, setShowTip] = useState(false)
   const border = {
     blue:   'border-l-2 border-l-blue-500/60',
@@ -79,7 +80,11 @@ function KpiCard({ label, value, sub, accent, icon: Icon, tooltip }) {
     gray:   'border-l-2 border-l-gray-600/60',
   }[accent] || ''
   return (
-    <div className={clsx('card flex flex-col gap-1', border)}>
+    <div
+      onClick={onClick}
+      title={onClick ? 'Click to view the underlying storage accounts' : undefined}
+      className={clsx('card flex flex-col gap-1', border, onClick && 'cursor-pointer hover:border-blue-600/50 transition-colors')}
+    >
       <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">{label}</span>
@@ -638,6 +643,7 @@ function AllStorageTable({ accounts, onResourceClick }) {
 // ── Main panel ─────────────────────────────────────────────────────────────────
 
 export default function StoragePanel({ resources, onResourceClick }) {
+  const { openResourceDrill } = useDrill()
   const accounts = useMemo(() => resources.filter(isStorage), [resources])
 
   const totalCost     = accounts.reduce((s, r) => s + (r.cost_current_month || 0), 0)
@@ -660,12 +666,13 @@ export default function StoragePanel({ resources, onResourceClick }) {
     <div className="space-y-6">
       {/* KPI strip */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-        <KpiCard label="Storage Accounts"  value={accounts.length}   sub="across all subscriptions"          accent="blue"   icon={HardDrive}    />
+        <KpiCard label="Storage Accounts"  value={accounts.length}   sub="across all subscriptions"          accent="blue"   icon={HardDrive}    onClick={() => openResourceDrill('Storage accounts', accounts)} />
         <KpiCard label="Monthly Cost"      value={fmt(totalCost)}    sub="current billing period"            accent="purple" icon={Database}     />
-        <KpiCard label="Idle Confirmed"    value={idleConfirmed}     sub="zero reads — safe delete candidates" accent="red"  icon={XCircle}      />
+        <KpiCard label="Idle Confirmed"    value={idleConfirmed}     sub="zero reads — safe delete candidates" accent="red"  icon={XCircle}      onClick={() => openResourceDrill('Idle-confirmed storage accounts', accounts.filter(r => r.idle_confirmed))} />
         <KpiCard label="No Access Tracking" value={noTracking}       sub="blind spots — enable to confirm"   accent="orange" icon={AlertTriangle}
+          onClick={() => openResourceDrill('Storage accounts without access tracking', accounts.filter(r => !r.storage_last_access_tracking))}
           tooltip="Azure blob last-access tracking is not enabled on these accounts. Without it, the tool cannot confirm whether they are idle or actively used. Enable it under Data Management → Lifecycle Management in the Azure Portal, then rescan to get a confident idle/delete recommendation." />
-        <KpiCard label="Potential Savings" value={fmt(totalSavings)} sub={`${fmt(totalSavings * 12)}/yr projected`} accent="green" icon={TrendingDown} />
+        <KpiCard label="Potential Savings" value={fmt(totalSavings)} sub={`${fmt(totalSavings * 12)}/yr projected`} accent="green" icon={TrendingDown} onClick={() => openResourceDrill('Storage accounts with savings potential', accounts.filter(r => (r.estimated_monthly_savings || 0) > 0))} />
       </div>
 
       {/* Actionable sections */}

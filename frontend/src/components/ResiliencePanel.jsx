@@ -1,6 +1,21 @@
 import React, { useState, useMemo } from "react";
 import ResourceDetailDrawer from "./ResourceDetailDrawer";
 import { asText } from "../utils/safeText";
+import { useDrill } from "../drill/DrillContext";
+
+// Map a resilience finding into the resource-like shape the drill drawer expects so the
+// count tiles can reveal exactly which resources are behind each number.
+function findingToResource(f) {
+  return {
+    resource_id: f.resource_id || f.id,
+    resource_name: f.name || f.resource_name,
+    resource_type: f.type || f.resource_type,
+    resource_group: f.rg || f.resource_group,
+    location: f.location,
+    subscription_id: f.subscription_id,
+    cost_current_month: f.cost ?? f.cost_usd ?? 0,
+  };
+}
 
 const RISK_COLOR = { Critical: "#ef4444", High: "#f97316", Medium: "#eab308", Low: "#22c55e" };
 
@@ -182,13 +197,13 @@ function analyzeResilience(resources) {
 
 function ResilienceCard({ finding, onSelect }) {
   const [open, setOpen] = useState(false);
-  const color = RISK_COLOR[finding.risk] || "#64748b";
+  const color = RISK_COLOR[finding.risk] || "var(--c-64748b)";
 
   return (
     <div
       style={{
-        background: "#0f172a",
-        border: "1px solid #1e293b",
+        background: "var(--c-0f172a)",
+        border: "1px solid var(--c-1e293b)",
         borderRadius: 12,
         padding: "14px 16px",
         borderLeft: `3px solid ${color}`,
@@ -199,7 +214,7 @@ function ResilienceCard({ finding, onSelect }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           {/* Title row */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
-            <span style={{ color: "#f1f5f9", fontWeight: 700, fontSize: 14 }}>{finding.name}</span>
+            <span style={{ color: "var(--c-f1f5f9)", fontWeight: 700, fontSize: 14 }}>{finding.name}</span>
             <span
               style={{
                 background: `${color}20`,
@@ -217,27 +232,27 @@ function ResilienceCard({ finding, onSelect }) {
             </span>
             <span
               style={{
-                background: "#1e293b",
-                color: "#64748b",
+                background: "var(--c-1e293b)",
+                color: "var(--c-64748b)",
                 fontSize: 9,
                 padding: "2px 7px",
                 borderRadius: 20,
-                border: "1px solid #334155",
+                border: "1px solid var(--c-334155)",
               }}
             >
               {finding.category}
             </span>
-            <span style={{ color: "#475569", fontSize: 10 }}>{finding.rg}</span>
+            <span style={{ color: "var(--c-475569)", fontSize: 10 }}>{finding.rg}</span>
           </div>
 
           {/* Description */}
-          <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.6, marginBottom: 6 }}>
+          <div style={{ color: "var(--c-94a3b8)", fontSize: 12, lineHeight: 1.6, marginBottom: 6 }}>
             {finding.description}
           </div>
 
           {/* Cost */}
           {finding.cost > 0 && (
-            <div style={{ color: "#475569", fontSize: 11, marginBottom: 6 }}>
+            <div style={{ color: "var(--c-475569)", fontSize: 11, marginBottom: 6 }}>
               💰 ${Math.round(finding.cost).toLocaleString()}/mo associated cost
             </div>
           )}
@@ -245,7 +260,7 @@ function ResilienceCard({ finding, onSelect }) {
           {/* Expand button */}
           <button
             onClick={() => setOpen(!open)}
-            style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 10, padding: 0 }}
+            style={{ background: "none", border: "none", color: "var(--c-475569)", cursor: "pointer", fontSize: 10, padding: 0 }}
           >
             {open ? "▲ Hide recommendation" : "▼ Show recommendation & fix"}
           </button>
@@ -262,16 +277,16 @@ function ResilienceCard({ finding, onSelect }) {
             <div
               style={{
                 marginTop: 10,
-                background: "#1e293b",
+                background: "var(--c-1e293b)",
                 borderRadius: 8,
                 padding: "12px 14px",
-                border: "1px solid #334155",
+                border: "1px solid var(--c-334155)",
               }}
             >
               <div style={{ color: "#22c55e", fontSize: 11, fontWeight: 600, marginBottom: 6 }}>
                 ✅ Recommendation
               </div>
-              <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.6, marginBottom: 10 }}>
+              <div style={{ color: "var(--c-94a3b8)", fontSize: 12, lineHeight: 1.6, marginBottom: 10 }}>
                 {asText(finding.recommendation)}
               </div>
               <a
@@ -291,6 +306,7 @@ function ResilienceCard({ finding, onSelect }) {
 }
 
 export default function ResiliencePanel({ resources = [] }) {
+  const { openResourceDrill } = useDrill();
   const clientFindings = useMemo(() => analyzeResilience(resources), [resources]);
   const [apiFindings, setApiFindings] = useState(null);
   const [apiLoading, setApiLoading] = useState(false);
@@ -340,8 +356,8 @@ export default function ResiliencePanel({ resources = [] }) {
       {/* Hero header */}
       <div
         style={{
-          background: "#0f172a",
-          border: "1px solid #1e293b",
+          background: "var(--c-0f172a)",
+          border: "1px solid var(--c-1e293b)",
           borderRadius: 16,
           padding: "24px",
           marginBottom: 24,
@@ -349,7 +365,7 @@ export default function ResiliencePanel({ resources = [] }) {
       >
         <div
           style={{
-            color: "#64748b",
+            color: "var(--c-64748b)",
             fontSize: 11,
             fontWeight: 700,
             textTransform: "uppercase",
@@ -359,16 +375,18 @@ export default function ResiliencePanel({ resources = [] }) {
         >
           Resilience & SLA Gap Analysis
         </div>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
-          <span style={{ color: "#f1f5f9", fontSize: 48, fontWeight: 800, lineHeight: 1 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10, cursor: findings.length ? "pointer" : "default" }}
+          onClick={() => openResourceDrill("All resilience risks", findings.map(findingToResource))}
+          title={findings.length ? "Click to view the affected resources" : undefined}>
+          <span style={{ color: "var(--c-f1f5f9)", fontSize: 48, fontWeight: 800, lineHeight: 1 }}>
             {findings.length}
           </span>
-          <span style={{ color: "#475569", fontSize: 20 }}>resilience risks</span>
+          <span style={{ color: "var(--c-475569)", fontSize: 20 }}>resilience risks</span>
         </div>
-        <div style={{ color: "#64748b", fontSize: 12, lineHeight: 1.6, marginBottom: 20, maxWidth: 640 }}>
+        <div style={{ color: "var(--c-64748b)", fontSize: 12, lineHeight: 1.6, marginBottom: 20, maxWidth: 640 }}>
           Identifies single points of failure, unprotected storage, unmonitored compute,
           missing load balancers, and geographic concentration risks across your Azure estate.
-          These are <strong style={{ color: "#94a3b8" }}>availability and SLA risks</strong> — not cost issues.
+          These are <strong style={{ color: "var(--c-94a3b8)" }}>availability and SLA risks</strong> — not cost issues.
         </div>
 
         {/* Severity breakdown */}
@@ -376,6 +394,8 @@ export default function ResiliencePanel({ resources = [] }) {
           {Object.entries(bySev).map(([sev, count]) => (
             <div
               key={sev}
+              onClick={() => openResourceDrill(`${sev} resilience risks`, findings.filter(f => f.risk === sev).map(findingToResource))}
+              title={count ? "Click to view the affected resources" : undefined}
               style={{
                 background: `${RISK_COLOR[sev]}10`,
                 border: `1px solid ${RISK_COLOR[sev]}25`,
@@ -383,10 +403,11 @@ export default function ResiliencePanel({ resources = [] }) {
                 padding: "10px 18px",
                 textAlign: "center",
                 minWidth: 70,
+                cursor: count ? "pointer" : "default",
               }}
             >
               <div style={{ color: RISK_COLOR[sev], fontSize: 24, fontWeight: 800 }}>{count}</div>
-              <div style={{ color: "#64748b", fontSize: 10, fontWeight: 600, textTransform: "uppercase" }}>
+              <div style={{ color: "var(--c-64748b)", fontSize: 10, fontWeight: 600, textTransform: "uppercase" }}>
                 {sev}
               </div>
             </div>
@@ -394,8 +415,8 @@ export default function ResiliencePanel({ resources = [] }) {
           {categories.length > 0 && (
             <div
               style={{
-                background: "#1e293b",
-                border: "1px solid #334155",
+                background: "var(--c-1e293b)",
+                border: "1px solid var(--c-334155)",
                 borderRadius: 10,
                 padding: "10px 14px",
                 flex: 1,
@@ -404,7 +425,7 @@ export default function ResiliencePanel({ resources = [] }) {
             >
               <div
                 style={{
-                  color: "#64748b",
+                  color: "var(--c-64748b)",
                   fontSize: 10,
                   fontWeight: 600,
                   textTransform: "uppercase",
@@ -418,12 +439,12 @@ export default function ResiliencePanel({ resources = [] }) {
                   <span
                     key={c}
                     style={{
-                      background: "#0f172a",
-                      color: "#94a3b8",
+                      background: "var(--c-0f172a)",
+                      color: "var(--c-94a3b8)",
                       fontSize: 10,
                       padding: "2px 8px",
                       borderRadius: 10,
-                      border: "1px solid #334155",
+                      border: "1px solid var(--c-334155)",
                     }}
                   >
                     {c}
@@ -441,14 +462,14 @@ export default function ResiliencePanel({ resources = [] }) {
           style={{
             textAlign: "center",
             padding: "60px 20px",
-            color: "#475569",
-            background: "#0f172a",
+            color: "var(--c-475569)",
+            background: "var(--c-0f172a)",
             borderRadius: 16,
-            border: "1px solid #1e293b",
+            border: "1px solid var(--c-1e293b)",
           }}
         >
           <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
-          <div style={{ fontSize: 16, fontWeight: 600, color: "#94a3b8", marginBottom: 6 }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: "var(--c-94a3b8)", marginBottom: 6 }}>
             No resilience gaps detected
           </div>
           <div style={{ fontSize: 12 }}>

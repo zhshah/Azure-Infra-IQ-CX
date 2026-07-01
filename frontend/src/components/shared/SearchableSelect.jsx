@@ -155,7 +155,7 @@ export default function SearchableSelect({
       {label && (
         <label
           style={{
-            color: '#64748b',
+            color: 'var(--c-64748b)',
             fontSize: 10,
             fontWeight: 600,
             textTransform: 'uppercase',
@@ -180,10 +180,10 @@ export default function SearchableSelect({
           justifyContent: 'space-between',
           gap: 6,
           padding: `${py} 10px`,
-          background: open ? '#111827' : '#0f172a',
-          border: `1px solid ${open ? '#0078d4' : '#1e293b'}`,
+          background: open ? 'var(--c-111827)' : 'var(--c-0f172a)',
+          border: `1px solid ${open ? '#0078d4' : 'var(--c-1e293b)'}`,
           borderRadius: 7,
-          color: value ? '#e2e8f0' : '#64748b',
+          color: value ? 'var(--c-e2e8f0)' : 'var(--c-64748b)',
           fontSize: 13,
           fontWeight: value ? 500 : 400,
           cursor: disabled ? 'not-allowed' : 'pointer',
@@ -211,7 +211,7 @@ export default function SearchableSelect({
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                color: '#64748b',
+                color: 'var(--c-64748b)',
                 cursor: 'pointer',
                 padding: 1,
                 borderRadius: 3,
@@ -223,7 +223,7 @@ export default function SearchableSelect({
           <ChevronDown
             size={13}
             style={{
-              color: '#475569',
+              color: 'var(--c-475569)',
               transition: 'transform 0.2s',
               transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
             }}
@@ -240,8 +240,8 @@ export default function SearchableSelect({
             left: 0,
             right: 0,
             zIndex: 9999,
-            background: '#111827',
-            border: '1px solid #334155',
+            background: 'var(--c-111827)',
+            border: '1px solid var(--c-334155)',
             borderRadius: 8,
             boxShadow: '0 12px 40px rgba(0,0,0,0.5), 0 4px 12px rgba(0,0,0,0.3)',
             overflow: 'hidden',
@@ -250,7 +250,7 @@ export default function SearchableSelect({
         >
           {/* Search input */}
           {normalized.length > 5 && (
-            <div style={{ padding: '8px 10px 6px', borderBottom: '1px solid #1e293b' }}>
+            <div style={{ padding: '8px 10px 6px', borderBottom: '1px solid var(--c-1e293b)' }}>
               <div style={{ position: 'relative' }}>
                 <Search
                   size={13}
@@ -259,7 +259,7 @@ export default function SearchableSelect({
                     left: 8,
                     top: '50%',
                     transform: 'translateY(-50%)',
-                    color: '#475569',
+                    color: 'var(--c-475569)',
                     pointerEvents: 'none',
                   }}
                 />
@@ -274,17 +274,17 @@ export default function SearchableSelect({
                   placeholder={searchPlaceholder}
                   style={{
                     width: '100%',
-                    background: '#0f172a',
-                    border: '1px solid #1e293b',
+                    background: 'var(--c-0f172a)',
+                    border: '1px solid var(--c-1e293b)',
                     borderRadius: 6,
-                    color: '#e2e8f0',
+                    color: 'var(--c-e2e8f0)',
                     fontSize: 12,
                     padding: '6px 10px 6px 28px',
                     outline: 'none',
                     boxSizing: 'border-box',
                   }}
                   onFocus={e => (e.target.style.borderColor = '#0078d4')}
-                  onBlur={e => (e.target.style.borderColor = '#1e293b')}
+                  onBlur={e => (e.target.style.borderColor = 'var(--c-1e293b)')}
                 />
               </div>
             </div>
@@ -297,11 +297,11 @@ export default function SearchableSelect({
               maxHeight: 260,
               overflowY: 'auto',
               scrollbarWidth: 'thin',
-              scrollbarColor: '#1e293b transparent',
+              scrollbarColor: 'var(--c-1e293b) transparent',
             }}
           >
             {filtered.length === 0 && (
-              <div style={{ padding: '14px 12px', color: '#475569', fontSize: 12, textAlign: 'center' }}>
+              <div style={{ padding: '14px 12px', color: 'var(--c-475569)', fontSize: 12, textAlign: 'center' }}>
                 No matches found
               </div>
             )}
@@ -312,7 +312,7 @@ export default function SearchableSelect({
               return (
                 <React.Fragment key={(o.value || o.label || idx) + ':' + (o.group || '')}>
                 {showHeader && (
-                  <div style={{ padding: '7px 12px 3px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#64748b', background: '#0c1322' }}>
+                  <div style={{ padding: '7px 12px 3px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--c-64748b)', background: 'var(--c-0c1322)' }}>
                     {o.group}
                   </div>
                 )}
@@ -331,7 +331,7 @@ export default function SearchableSelect({
                       : isSelected
                         ? 'rgba(0, 120, 212, 0.06)'
                         : 'transparent',
-                    color: o.disabled ? '#5b6472' : (isSelected ? '#e2e8f0' : '#94a3b8'),
+                    color: o.disabled ? '#5b6472' : (isSelected ? 'var(--c-e2e8f0)' : 'var(--c-94a3b8)'),
                     opacity: o.disabled ? 0.75 : 1,
                     fontSize: 13,
                     transition: 'background 0.1s',
@@ -360,7 +360,7 @@ export default function SearchableSelect({
                       <div
                         style={{
                           fontSize: 11,
-                          color: '#475569',
+                          color: 'var(--c-475569)',
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
                           whiteSpace: 'nowrap',
@@ -376,8 +376,8 @@ export default function SearchableSelect({
                       style={{
                         fontSize: 10,
                         fontWeight: 600,
-                        color: '#475569',
-                        background: '#1e293b',
+                        color: 'var(--c-475569)',
+                        background: 'var(--c-1e293b)',
                         padding: '1px 6px',
                         borderRadius: 8,
                         flexShrink: 0,

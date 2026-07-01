@@ -183,20 +183,27 @@ def get_custom_tags(resource_id: str) -> Dict[str, str]:
 
 
 def set_custom_tag(resource_id: str, tag_key: str, tag_value: str) -> None:
+    # Single-row upsert. We DELETE + INSERT rather than rely on upsert_conflict_sql here —
+    # the latter produced "SQL contains 6 parameter markers, but 12 parameters were
+    # supplied" on Azure SQL (the doubled MERGE parameters didn't line up with the
+    # generated marker count). The delete+insert path is identical in semantics, works
+    # on both backends, and matches what set_resource_tags / bulk_set_tags already do.
     now = _now()
-    db  = _conn()
-    _upsert = upsert_conflict_sql(
-        "resource_custom_tags",
-        insert_cols=["resource_id", "tag_key", "tag_value", "source", "created_at", "updated_at"],
-        pk_cols=["resource_id", "tag_key"],
-        update_cols=["tag_value", "updated_at"],
-    )
-    _params = (resource_id.lower(), tag_key, tag_value, 'user', now, now)
-    if is_azure_sql():
-        _params = _params + _params
-    db.execute(_upsert, _params)
-    db.commit()
-    db.close()
+    rid_low = resource_id.lower()
+    db = _conn()
+    try:
+        db.execute(
+            "DELETE FROM resource_custom_tags WHERE resource_id = ? AND tag_key = ?",
+            (rid_low, tag_key),
+        )
+        db.execute(
+            "INSERT INTO resource_custom_tags (resource_id, tag_key, tag_value, source, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'user', ?, ?)",
+            (rid_low, tag_key, tag_value, now, now),
+        )
+        db.commit()
+    finally:
+        db.close()
 
 
 def set_resource_tags(resource_id: str, tags: Dict[str, str]) -> None:

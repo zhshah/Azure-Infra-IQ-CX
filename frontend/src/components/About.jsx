@@ -7,14 +7,14 @@ import React from 'react'
 import { DollarSign, Server, Brain, ShieldCheck, LifeBuoy, ScrollText, Activity, Cloud, Lock } from 'lucide-react'
 
 const C = {
-  panel: '#131a2b',
+  panel: 'var(--c-131a2b)',
   border: 'rgba(148, 163, 184, 0.16)',
-  textStrong: '#f1f5f9',
-  text: '#cbd5e1',
-  muted: '#94a3b8',
+  textStrong: 'var(--c-f1f5f9)',
+  text: 'var(--c-cbd5e1)',
+  muted: 'var(--c-94a3b8)',
   primary: '#3b82f6',
   primaryHover: '#60a5fa',
-  soft: '#0c1220',
+  soft: 'var(--c-0c1220)',
 }
 const FONT = '"Segoe UI", system-ui, -apple-system, sans-serif'
 

@@ -230,7 +230,16 @@ export const api = {
   getBCDRResource:       (id)        => request(`/bcdr/resource/${encodeURIComponent(id)}`),
   refreshBCDR:           ()          => request('/bcdr/refresh', { method: 'POST' }),
   getBCDRBusinessImpact: ()          => request('/bcdr/business-impact'),
-  getBCDRRecoverySeq:    ()          => request('/bcdr/recovery-sequence'),
+  getBCDRRecoverySeq:    (filters)    => {
+    const p = new URLSearchParams()
+    if (filters?.subscription_id) p.set('subscription_id', filters.subscription_id)
+    if (filters?.resource_group)  p.set('resource_group',  filters.resource_group)
+    if (filters?.resource_type)   p.set('resource_type',   filters.resource_type)
+    if (filters?.azure_tag)       p.set('azure_tag',       filters.azure_tag)
+    if (filters?.custom_tag)      p.set('custom_tag',      filters.custom_tag)
+    const qs = p.toString()
+    return request('/bcdr/recovery-sequence' + (qs ? `?${qs}` : ''))
+  },
 
   // Health Score
   getHealthScore:        ()          => request('/health-score'),
@@ -286,8 +295,8 @@ export const api = {
   deleteBCDRMetadata:    (id)        => request(`/bcdr/metadata/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   // BCDR Consultant Report (full 13-section grounded report)
-  generateBcdrConsultantReport: (customer_info, project_id) => request('/bcdr/consultant-report', {
-    method: 'POST', body: JSON.stringify({ customer_info: customer_info || {}, project_id: project_id || null }),
+  generateBcdrConsultantReport: (customer_info, project_id, include_bia = false) => request('/bcdr/consultant-report', {
+    method: 'POST', body: JSON.stringify({ customer_info: customer_info || {}, project_id: project_id || null, include_bia: !!include_bia }),
   }),
   exportBcdrConsultantXlsx: async (report) => {
     const res = await fetch(`${BASE}/bcdr/consultant-report/export.xlsx`, {
@@ -305,6 +314,27 @@ export const api = {
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
   },
   getBCDRMetadataStats:  ()          => request('/bcdr/metadata/stats'),
+
+  // Business Impact Analysis (consultant-grade, framework-based, AI-generated)
+  generateBIA: (intake, { project_id = null, resource_ids = null } = {}) => request('/bia/generate', {
+    method: 'POST',
+    body: JSON.stringify({ intake: intake || {}, project_id: project_id || null, resource_ids: resource_ids || null }),
+  }),
+  exportBIAXlsx: async (report) => {
+    const res = await fetch(`${BASE}/bia/export.xlsx`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ report }),
+    })
+    if (!res.ok) {
+      const t = await res.text().catch(() => ''); let detail; try { detail = JSON.parse(t).detail } catch {}
+      throw new Error(detail || `Excel export failed (HTTP ${res.status})`)
+    }
+    const blob = await res.blob()
+    const cd = res.headers.get('Content-Disposition') || ''
+    const fname = cd.match(/filename="?([^"]+)"?/)?.[1] || 'business-impact-analysis.xlsx'
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = fname
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+  },
 
   // BCDR Phase 1 supporting inputs (uploaded files stored in Azure SQL)
   listBcdrAttachments:   (resourceId) =>

@@ -798,7 +798,13 @@ def _enrich_with_resource_details(result: dict, resources: List[dict], subscript
     all_resources = resources
     
     def _build_resource_card(r: dict) -> dict:
-        """Build enriched resource card with user metadata."""
+        """Build enriched resource card with user metadata.
+
+        Includes BOTH the legacy short keys (id/name/type) used by the BCDR
+        deep-dive cards AND the canonical keys (resource_id/resource_name/...)
+        that the AI findings drill-down + ResourceDetailDrawer expect, so every
+        number in this report is clickable through to the underlying resource.
+        """
         card = {
             "id": r.get("resource_id", ""),
             "name": r.get("resource_name", r.get("resource_id", "").split("/")[-1]),
@@ -806,7 +812,15 @@ def _enrich_with_resource_details(result: dict, resources: List[dict], subscript
             "location": r.get("location", "unknown"),
             "has_backup": r.get("has_backup", False),
             "zone_redundant": r.get("zone_redundant", False),
-            "score": r.get("final_score", 0)
+            "score": r.get("final_score", 0),
+            # Canonical keys for the universal resource drill-down
+            "resource_id": r.get("resource_id", ""),
+            "resource_name": r.get("resource_name", r.get("resource_id", "").split("/")[-1]),
+            "resource_type": r.get("resource_type", "unknown"),
+            "resource_group": r.get("resource_group", ""),
+            "subscription_id": r.get("subscription_id", ""),
+            "cost_current_month": r.get("cost_current_month", 0),
+            "final_score": r.get("final_score", 0),
         }
         
         # Include user BCDR metadata if available
@@ -845,13 +859,20 @@ def _enrich_with_resource_details(result: dict, resources: List[dict], subscript
             gap["resource_details"] = resource_list
             gap["total_affected"] = gap.get("affected_resources_count", len(resource_list))
             gap["showing_count"] = len(resource_list)
+            # Expose the same structured list under the canonical key so the AI
+            # findings UI can render each affected resource as a clickable row.
+            gap["affected_resources"] = resource_list
+            gap["affected_count"] = gap.get("affected_resources_count", len(resource_list))
     
     # Enrich recommendations with actual resource lists
     if "recommendations" in result:
         for rec in result["recommendations"]:
             rec_id = rec.get("rec_id", "")
             resource_list = []
-            
+            # Preserve the AI's original "type: count" hints before we overwrite
+            # affected_resources with the structured, drillable resource list.
+            type_hints = rec.get("affected_resources", [])
+
             # Map recommendation to actual resources
             if "backup" in rec.get("title", "").lower() or rec.get("category") == "Backup" or rec_id == "REC-001":
                 resource_list = [_build_resource_card(r) for r in no_backup_resources[:50]]
@@ -861,11 +882,16 @@ def _enrich_with_resource_details(result: dict, resources: List[dict], subscript
             elif "zone" in rec.get("title", "").lower() or "redundancy" in rec.get("title", "").lower() or rec_id == "REC-003":
                 non_zone_resources = [r for r in resources if not r.get("zone_redundant", False)]
                 resource_list = [_build_resource_card(r) for r in non_zone_resources[:50]]
-            
+
             rec["resource_details"] = resource_list
-            rec["total_affected"] = len([r for r in resources if any(rt in r.get("resource_type", "") for rt in rec.get("affected_resources", []))] or resource_list)
+            rec["total_affected"] = len([r for r in resources if any(rt in r.get("resource_type", "") for rt in type_hints)] or resource_list)
             rec["showing_count"] = len(resource_list)
-    
+            # Structured, drillable list under the canonical key (keep the type
+            # hints available separately for any text rendering that needs them).
+            rec["affected_resource_types"] = type_hints
+            rec["affected_resources"] = resource_list
+            rec["affected_count"] = rec["total_affected"]
+
     return result
 
 

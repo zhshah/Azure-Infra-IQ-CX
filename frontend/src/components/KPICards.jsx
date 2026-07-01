@@ -60,7 +60,7 @@ function componentColor(score) {
 
 // ── Mini comparison bar ────────────────────────────────────────────────────────
 
-function CompareBar({ current, previous, colorCurrent = '#3b82f6', colorPrevious = '#1e3a5f' }) {
+function CompareBar({ current, previous, colorCurrent = '#3b82f6', colorPrevious = 'var(--c-1e3a5f)' }) {
   const max = Math.max(current, previous, 0.01)
   return (
     <div className="flex flex-col gap-1 mt-1">

@@ -26,7 +26,7 @@ const EDGE_STYLE = {
   network:    { stroke: '#34d399', label: 'network'    },
   storage:    { stroke: '#fb923c', label: 'storage'    },
   dependency: { stroke: '#a78bfa', label: 'depends on' },
-  app:        { stroke: '#94a3b8', label: 'same app'   },
+  app:        { stroke: 'var(--c-94a3b8)', label: 'same app'   },
 }
 
 function commonPrefixLen(a, b) {
@@ -130,22 +130,22 @@ function NodeCircle({ x, y, r, color, label, resourceType, isOrphan, onClick, is
 
       {/* Type icon */}
       <text textAnchor="middle" dominantBaseline="central"
-        fontSize={iconSize} fontWeight="700" fill="#0f172a"
+        fontSize={iconSize} fontWeight="700" style={{ fill: 'var(--c-0f172a)' }}
         fontFamily="ui-sans-serif, system-ui, sans-serif"
         style={{ pointerEvents: 'none', userSelect: 'none' }} opacity={0.85}>
         {icon}
       </text>
 
       {/* Orphan dot */}
-      {isOrphan && <circle r={4.5} cx={r - 3} cy={-(r - 3)} fill="#f97316" stroke="#0f172a" strokeWidth={1} />}
+      {isOrphan && <circle r={4.5} cx={r - 3} cy={-(r - 3)} fill="#f97316" style={{ stroke: 'var(--c-0f172a)' }} strokeWidth={1} />}
 
       {/* Full name label — only on hover, with pill background */}
       {hov && (
         <g transform={`translate(0,${r + labelPad + 10})`} style={{ pointerEvents: 'none' }}>
           <rect x={-labelW / 2} y={-10} width={labelW} height={20}
-            rx={10} fill="#1e293b" stroke={color} strokeWidth={1} strokeOpacity={0.6} />
+            rx={10} style={{ fill: 'var(--c-1e293b)' }} stroke={color} strokeWidth={1} strokeOpacity={0.6} />
           <text textAnchor="middle" dominantBaseline="central"
-            fontSize={10} fontWeight="500" fill="#f1f5f9"
+            fontSize={10} fontWeight="500" style={{ fill: 'var(--c-f1f5f9)' }}
             fontFamily="ui-sans-serif, sans-serif">
             {label}
           </text>

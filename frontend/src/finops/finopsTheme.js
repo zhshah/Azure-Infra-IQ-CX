@@ -5,10 +5,10 @@
 
 // ─── Base palette ─────────────────────────────────────────────────────────────
 export const FINOPS_COLORS = {
-  bg:       '#0a0f1e',
-  surface:  '#111827',
-  surface2: '#0d1424',
-  border:   '#1e293b',
+  bg:       'var(--c-0a0f1e)',
+  surface:  'var(--c-111827)',
+  surface2: 'var(--c-0d1424)',
+  border:   'var(--c-1e293b)',
   accent:   '#3b82f6',
   accentDim:'rgba(59,130,246,0.15)',
   green:    '#22c55e',
@@ -17,9 +17,9 @@ export const FINOPS_COLORS = {
   orange:   '#f97316',
   purple:   '#8b5cf6',
   cyan:     '#06b6d4',
-  muted:    '#64748b',
-  text:     '#e2e8f0',
-  textDim:  '#94a3b8',
+  muted:    'var(--c-64748b)',
+  text:     'var(--c-e2e8f0)',
+  textDim:  'var(--c-94a3b8)',
 }
 
 // Shorthand alias used in inline styles (mirrors the `C` object pattern already in components)
@@ -35,14 +35,14 @@ export const CHART_COLORS = [
 // ─── Recharts tooltip style ───────────────────────────────────────────────────
 export const CHART_TOOLTIP_STYLE = {
   contentStyle: {
-    background: '#1e293b',
-    border: '1px solid #334155',
+    background: 'var(--c-1e293b)',
+    border: '1px solid var(--c-334155)',
     borderRadius: 10,
-    color: '#e2e8f0',
+    color: 'var(--c-e2e8f0)',
     fontSize: 13,
   },
-  labelStyle: { color: '#94a3b8', marginBottom: 4 },
-  itemStyle:  { color: '#e2e8f0' },
+  labelStyle: { color: 'var(--c-94a3b8)', marginBottom: 4 },
+  itemStyle:  { color: 'var(--c-e2e8f0)' },
   cursor:     { fill: 'rgba(59,130,246,0.06)' },
 }
 
@@ -131,7 +131,7 @@ export const CARD_STYLE = {
 
 // ─── Shared input style ───────────────────────────────────────────────────────
 export const INPUT_STYLE = {
-  background:  '#0d1424',
+  background:  'var(--c-0d1424)',
   border:      `1px solid ${FINOPS_COLORS.border}`,
   color:       FINOPS_COLORS.text,
   borderRadius: 7,

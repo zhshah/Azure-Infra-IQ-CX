@@ -36,8 +36,8 @@ export default function ChargebackPanel() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h2 style={{ color: '#f1f5f9', fontSize: 18, fontWeight: 700, margin: 0 }}>Chargeback Report</h2>
-          <p style={{ color: '#64748b', fontSize: 12, margin: 0 }}>
+          <h2 style={{ color: 'var(--c-f1f5f9)', fontSize: 18, fontWeight: 700, margin: 0 }}>Chargeback Report</h2>
+          <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: 0 }}>
             Cost by CostCenter tag — sourced from Azure Cost Management API
           </p>
         </div>
@@ -49,8 +49,8 @@ export default function ChargebackPanel() {
           />
           {data && (
             <button onClick={() => finopsApi.exportAllocationXlsx('TagKey:CostCenter', timeRange, dateFrom, dateTo)} title="Download XLSX" style={{
-              background: '#0d2b1f', border: '1px solid #166534', borderRadius: 6,
-              padding: '5px 10px', cursor: 'pointer', color: '#4ade80', fontSize: 11,
+              background: 'var(--c-0d2b1f)', border: '1px solid var(--c-166534)', borderRadius: 6,
+              padding: '5px 10px', cursor: 'pointer', color: 'var(--c-4ade80)', fontSize: 11,
               display: 'flex', alignItems: 'center', gap: 4,
             }}>
               <Download size={12} /> XLSX
@@ -62,17 +62,17 @@ export default function ChargebackPanel() {
       {loading && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 20 }}>
           <RefreshCw size={16} className="animate-spin" style={{ color: '#3b82f6' }} />
-          <span style={{ color: '#94a3b8', fontSize: 12 }}>Loading…</span>
+          <span style={{ color: 'var(--c-94a3b8)', fontSize: 12 }}>Loading…</span>
         </div>
       )}
       {error && (
-        <div style={{ background: '#1a0e0e', border: '1px solid #7f1d1d', borderRadius: 8, padding: 12, color: '#fca5a5', fontSize: 12, display: 'flex', gap: 8 }}>
+        <div style={{ background: '#1a0e0e', border: '1px solid var(--c-7f1d1d)', borderRadius: 8, padding: 12, color: 'var(--c-fca5a5)', fontSize: 12, display: 'flex', gap: 8 }}>
           <AlertCircle size={14} />{error}
         </div>
       )}
 
       {data && entries.length === 0 && (
-        <div style={{ color: '#334155', fontSize: 12, textAlign: 'center', padding: 40 }}>
+        <div style={{ color: 'var(--c-334155)', fontSize: 12, textAlign: 'center', padding: 40 }}>
           No chargeback data found for this period. Apply a CostCenter tag to resources for full chargeback coverage.
         </div>
       )}
@@ -85,10 +85,10 @@ export default function ChargebackPanel() {
               { label: 'Total Allocated',  value: fmtUsd(data.total_allocated_usd),   color: '#3b82f6' },
               { label: 'Unallocated',      value: fmtUsd(data.total_unallocated_usd), color: '#f59e0b' },
               { label: 'Tag Coverage',     value: fmtPct(data.coverage_pct),           color: '#22c55e' },
-              { label: 'Cost Centers',     value: entries.filter(e => e.cost_center !== '(Unallocated)').length, color: '#94a3b8' },
+              { label: 'Cost Centers',     value: entries.filter(e => e.cost_center !== '(Unallocated)').length, color: 'var(--c-94a3b8)' },
             ].map(c => (
-              <div key={c.label} style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 8, padding: '10px 14px' }}>
-                <div style={{ color: '#64748b', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>{c.label}</div>
+              <div key={c.label} style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 8, padding: '10px 14px' }}>
+                <div style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>{c.label}</div>
                 <div style={{ color: c.color, fontSize: 18, fontWeight: 700 }}>{c.value}</div>
               </div>
             ))}
@@ -96,7 +96,7 @@ export default function ChargebackPanel() {
 
           {/* Coverage warning */}
           {data.coverage_pct < 80 && (
-            <div style={{ background: '#1c1003', border: '1px solid #854d0e', borderRadius: 8, padding: 12, fontSize: 12, color: '#fbbf24', display: 'flex', gap: 8 }}>
+            <div style={{ background: 'var(--c-1c1003)', border: '1px solid #854d0e', borderRadius: 8, padding: 12, fontSize: 12, color: 'var(--c-fbbf24)', display: 'flex', gap: 8 }}>
               <AlertCircle size={14} style={{ flexShrink: 0 }} />
               Only {fmtPct(data.coverage_pct)} of spend has a CostCenter tag. Apply the CostCenter tag to remaining resources for full chargeback coverage.
             </div>
@@ -105,28 +105,28 @@ export default function ChargebackPanel() {
           {/* Pie + table */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 16 }}>
             {/* Pie */}
-            <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
-              <div style={{ color: '#94a3b8', fontSize: 12, fontWeight: 600, marginBottom: 10 }}>By Cost Center</div>
+            <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
+              <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, fontWeight: 600, marginBottom: 10 }}>By Cost Center</div>
               <ResponsiveContainer width="100%" height={240}>
                 <PieChart>
                   <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} innerRadius={45} paddingAngle={2}>
                     {pieData.map((d, i) => <Cell key={i} fill={d.color} />)}
                   </Pie>
-                  <Tooltip formatter={v => fmtUsd(v, 2)} contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 11 }} />
-                  <Legend iconSize={9} wrapperStyle={{ fontSize: 10, color: '#94a3b8' }} />
+                  <Tooltip formatter={v => fmtUsd(v, 2)} contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }} />
+                  <Legend iconSize={9} wrapperStyle={{ fontSize: 10, color: 'var(--c-94a3b8)' }} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
 
             {/* Table */}
-            <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
-              <div style={{ color: '#94a3b8', fontSize: 12, fontWeight: 600, marginBottom: 10 }}>
+            <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
+              <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, fontWeight: 600, marginBottom: 10 }}>
                 Detail — {data.period_label}
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr>{['Cost Center', 'Allocated (USD)', 'Coverage %', 'Top Service'].map(h => (
-                    <th key={h} style={{ textAlign: 'left', color: '#475569', padding: '5px 8px', borderBottom: '1px solid #1e293b', fontWeight: 600 }}>{h}</th>
+                    <th key={h} style={{ textAlign: 'left', color: 'var(--c-475569)', padding: '5px 8px', borderBottom: '1px solid var(--c-1e293b)', fontWeight: 600 }}>{h}</th>
                   ))}</tr>
                 </thead>
                 <tbody>
@@ -134,14 +134,14 @@ export default function ChargebackPanel() {
                     const topSvc = Object.entries(e.by_service || {}).sort((a, b) => b[1] - a[1])[0]
                     const isUnalloc = e.cost_center === '(Unallocated)'
                     return (
-                      <tr key={i} style={{ borderBottom: '1px solid #0f172a', opacity: isUnalloc ? 0.6 : 1 }}>
-                        <td style={{ padding: '6px 8px', color: isUnalloc ? '#f59e0b' : '#e2e8f0', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <tr key={i} style={{ borderBottom: '1px solid var(--c-0f172a)', opacity: isUnalloc ? 0.6 : 1 }}>
+                        <td style={{ padding: '6px 8px', color: isUnalloc ? '#f59e0b' : 'var(--c-e2e8f0)', display: 'flex', alignItems: 'center', gap: 6 }}>
                           {!isUnalloc && <div style={{ width: 8, height: 8, borderRadius: '50%', background: CHART_COLORS[i % CHART_COLORS.length], flexShrink: 0 }} />}
                           {e.cost_center}
                         </td>
                         <td style={{ padding: '6px 8px', color: '#3b82f6', fontWeight: 600 }}>{fmtUsd(e.allocated_cost_usd, 2)}</td>
-                        <td style={{ padding: '6px 8px', color: '#64748b' }}>{fmtPct(e.coverage_pct)}</td>
-                        <td style={{ padding: '6px 8px', color: '#475569', fontSize: 11 }}>{topSvc ? topSvc[0] : '—'}</td>
+                        <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{fmtPct(e.coverage_pct)}</td>
+                        <td style={{ padding: '6px 8px', color: 'var(--c-475569)', fontSize: 11 }}>{topSvc ? topSvc[0] : '—'}</td>
                       </tr>
                     )
                   })}

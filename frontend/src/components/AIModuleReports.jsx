@@ -14,8 +14,8 @@ function SectionHeader({ icon, title, count }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, marginTop: 20 }}>
       <span style={{ width: 3, height: 16, borderRadius: 2, background: '#0078d4', display: 'inline-block' }} />
-      <span style={{ color: '#f1f5f9', fontSize: 15, fontWeight: 700 }}>{title}</span>
-      {count != null && <span style={{ color: '#475569', fontSize: 12 }}>({count})</span>}
+      <span style={{ color: 'var(--c-f1f5f9)', fontSize: 15, fontWeight: 700 }}>{title}</span>
+      {count != null && <span style={{ color: 'var(--c-475569)', fontSize: 12 }}>({count})</span>}
     </div>
   );
 }
@@ -24,15 +24,15 @@ function RoadmapPhase({ phase, color, data }) {
   if (!data) return null;
   return (
     <div style={{
-      background: '#0f172a', border: `1px solid ${color}30`, borderRadius: 12,
+      background: 'var(--c-0f172a)', border: `1px solid ${color}30`, borderRadius: 12,
       padding: '14px 16px', flex: 1, minWidth: 220,
     }}>
       <div style={{ color, fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{phase}</div>
-      {data.timeline && <div style={{ color: '#64748b', fontSize: 11, marginBottom: 8 }}>{data.timeline}</div>}
+      {data.timeline && <div style={{ color: 'var(--c-64748b)', fontSize: 11, marginBottom: 8 }}>{data.timeline}</div>}
       {(data.actions || data.items || []).map((a, i) => (
         <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
           <span style={{ color, fontSize: 10, marginTop: 2 }}>•</span>
-          <span style={{ color: '#94a3b8', fontSize: 12, lineHeight: 1.5 }}>{typeof a === 'string' ? a : a.title || a.description}</span>
+          <span style={{ color: 'var(--c-94a3b8)', fontSize: 12, lineHeight: 1.5 }}>{typeof a === 'string' ? a : a.title || a.description}</span>
         </div>
       ))}
       {data.estimated_cost && <div style={{ color, fontSize: 11, marginTop: 8, fontWeight: 600 }}>Est. {data.estimated_cost}</div>}
@@ -40,15 +40,15 @@ function RoadmapPhase({ phase, color, data }) {
   );
 }
 
-function MetricCard({ label, value, color = '#e2e8f0', sub }) {
+function MetricCard({ label, value, color = 'var(--c-e2e8f0)', sub }) {
   return (
     <div style={{
-      background: '#0f172a', border: '1px solid #1e293b', borderRadius: 10,
+      background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 10,
       padding: '12px 16px', minWidth: 120, flex: 1,
     }}>
-      <div style={{ color: '#475569', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 4 }}>{label}</div>
+      <div style={{ color: 'var(--c-475569)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 4 }}>{label}</div>
       <div style={{ color, fontSize: 22, fontWeight: 800 }}>{value}</div>
-      {sub && <div style={{ color: '#475569', fontSize: 10, marginTop: 2 }}>{sub}</div>}
+      {sub && <div style={{ color: 'var(--c-475569)', fontSize: 10, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -67,7 +67,7 @@ function MaturityAIReport({ data, onResourceClick }) {
     <div>
       {/* Executive Summary */}
       <div style={{
-        background: 'linear-gradient(135deg, #0f172a, #1e1b4b30)', border: '1px solid #3b82f630',
+        background: 'linear-gradient(135deg, var(--c-0f172a), #1e1b4b30)', border: '1px solid #3b82f630',
         borderRadius: 16, padding: 20, marginBottom: 20,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
@@ -77,7 +77,7 @@ function MaturityAIReport({ data, onResourceClick }) {
               {data.overall_label}
             </div>
             {data.executive_summary && (
-              <p style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.7 }}>{data.executive_summary}</p>
+              <p style={{ color: 'var(--c-94a3b8)', fontSize: 13, lineHeight: 1.7 }}>{data.executive_summary}</p>
             )}
           </div>
         </div>
@@ -92,10 +92,10 @@ function MaturityAIReport({ data, onResourceClick }) {
             return (
               <ExpandableCard key={i} title={`${dim.name} — ${dim.score}% (${dim.grade || ''})`} severity={dim.grade === 'F' ? 'critical' : dim.grade === 'D' ? 'high' : dim.grade === 'C' ? 'medium' : 'low'}>
                 {dim.findings?.map((f, j) => (
-                  <div key={j} style={{ color: '#94a3b8', fontSize: 12, lineHeight: 1.6, marginTop: 6 }}>• {typeof f === 'string' ? f : f.title || f.detail}</div>
+                  <div key={j} style={{ color: 'var(--c-94a3b8)', fontSize: 12, lineHeight: 1.6, marginTop: 6 }}>• {typeof f === 'string' ? f : f.title || f.detail}</div>
                 ))}
                 {dim.recommendations?.map((r, j) => (
-                  <div key={j} style={{ color: '#7dd3fc', fontSize: 12, lineHeight: 1.6, marginTop: 4 }}>• {typeof r === 'string' ? r : r.title || r.description}</div>
+                  <div key={j} style={{ color: 'var(--c-7dd3fc)', fontSize: 12, lineHeight: 1.6, marginTop: 4 }}>• {typeof r === 'string' ? r : r.title || r.description}</div>
                 ))}
               </ExpandableCard>
             );
@@ -158,7 +158,7 @@ function SecurityAIReport({ data, onResourceClick }) {
           {data.category_analysis.map((cat, i) => (
             <ExpandableCard key={i} title={`${cat.category} — ${cat.score ?? ''}%`}>
               {cat.findings?.map((f, j) => (
-                <div key={j} style={{ color: '#94a3b8', fontSize: 12, lineHeight: 1.6, marginTop: 6 }}>
+                <div key={j} style={{ color: 'var(--c-94a3b8)', fontSize: 12, lineHeight: 1.6, marginTop: 6 }}>
                   • {typeof f === 'string' ? f : f.title || f.detail}
                 </div>
               ))}
@@ -173,7 +173,7 @@ function SecurityAIReport({ data, onResourceClick }) {
           <SectionHeader icon="📋" title="Compliance Gaps" count={data.compliance_gaps.length} />
           {data.compliance_gaps.map((g, i) => (
             <ExpandableCard key={i} title={`${g.framework}: ${g.gap}`}>
-              <div style={{ color: '#7dd3fc', fontSize: 12, marginTop: 6 }}>Fix: {g.remediation}</div>
+              <div style={{ color: 'var(--c-7dd3fc)', fontSize: 12, marginTop: 6 }}>Fix: {g.remediation}</div>
             </ExpandableCard>
           ))}
         </>
@@ -211,7 +211,7 @@ function MonitoringAIReport({ data, onResourceClick }) {
         </div>
       </div>
       {data.executive_summary && (
-        <div style={{ color: '#cbd5e1', fontSize: 13, lineHeight: 1.7, marginBottom: 18, padding: 14, background: '#0f172a', borderRadius: 10, border: '1px solid #1e293b' }}>
+        <div style={{ color: 'var(--c-cbd5e1)', fontSize: 13, lineHeight: 1.7, marginBottom: 18, padding: 14, background: 'var(--c-0f172a)', borderRadius: 10, border: '1px solid var(--c-1e293b)' }}>
           {data.executive_summary}
         </div>
       )}
@@ -220,7 +220,7 @@ function MonitoringAIReport({ data, onResourceClick }) {
           <SectionHeader icon="📡" title="Observability Categories" count={data.categories.length} />
           {data.categories.map((cat, i) => (
             <ExpandableCard key={i} title={`${cat.name} — ${cat.score ?? ''}%`}>
-              {cat.assessment && <div style={{ color: '#94a3b8', fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>{cat.assessment}</div>}
+              {cat.assessment && <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>{cat.assessment}</div>}
               {cat.findings?.length > 0 && <FindingsList findings={cat.findings} onResourceClick={onResourceClick} />}
             </ExpandableCard>
           ))}
@@ -257,14 +257,14 @@ function InnovationAIReport({ data }) {
           {data.gap_analysis.map((g, i) => (
             <ExpandableCard key={i} title={g.category} severity={g.priority}>
               <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8 }}>
-                <div><span style={{ color: '#64748b', fontSize: 11 }}>Current: </span><span style={{ color: '#94a3b8', fontSize: 12 }}>{g.current_state}</span></div>
-                <div><span style={{ color: '#64748b', fontSize: 11 }}>Target: </span><span style={{ color: '#38bdf8', fontSize: 12 }}>{g.target_state}</span></div>
+                <div><span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Current: </span><span style={{ color: 'var(--c-94a3b8)', fontSize: 12 }}>{g.current_state}</span></div>
+                <div><span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Target: </span><span style={{ color: 'var(--c-38bdf8)', fontSize: 12 }}>{g.target_state}</span></div>
               </div>
-              <p style={{ color: '#94a3b8', fontSize: 12, lineHeight: 1.6, marginTop: 6 }}>{g.gap_description}</p>
+              <p style={{ color: 'var(--c-94a3b8)', fontSize: 12, lineHeight: 1.6, marginTop: 6 }}>{g.gap_description}</p>
               {g.azure_services?.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
                   {g.azure_services.map((s, j) => (
-                    <span key={j} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', border: '1px solid #0369a150', color: '#38bdf8' }}>{s}</span>
+                    <span key={j} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', border: '1px solid #0369a150', color: 'var(--c-38bdf8)' }}>{s}</span>
                   ))}
                 </div>
               )}
@@ -278,12 +278,12 @@ function InnovationAIReport({ data }) {
         <>
           <SectionHeader icon="⚡" title="Quick Wins" count={data.quick_wins.length} />
           {data.quick_wins.map((w, i) => (
-            <div key={i} style={{ background: '#0f172a', border: '1px solid #16a34a30', borderRadius: 8, padding: '10px 14px', marginBottom: 6 }}>
-              <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600 }}>{w.title}</div>
-              <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 4 }}>{w.description}</div>
+            <div key={i} style={{ background: 'var(--c-0f172a)', border: '1px solid #16a34a30', borderRadius: 8, padding: '10px 14px', marginBottom: 6 }}>
+              <div style={{ color: 'var(--c-e2e8f0)', fontSize: 13, fontWeight: 600 }}>{w.title}</div>
+              <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, marginTop: 4 }}>{w.description}</div>
               <div style={{ display: 'flex', gap: 12, marginTop: 6 }}>
-                {w.effort && <span style={{ fontSize: 10, color: '#64748b' }}>Effort: {w.effort}</span>}
-                {w.impact && <span style={{ fontSize: 10, color: '#64748b' }}>Impact: {w.impact}</span>}
+                {w.effort && <span style={{ fontSize: 10, color: 'var(--c-64748b)' }}>Effort: {w.effort}</span>}
+                {w.impact && <span style={{ fontSize: 10, color: 'var(--c-64748b)' }}>Impact: {w.impact}</span>}
               </div>
             </div>
           ))}
@@ -335,8 +335,8 @@ function MigrationAIReport({ data }) {
 
       {/* Executive Summary */}
       {data.executive_summary && (
-        <div style={{ background: '#0f172a', border: '1px solid #3b82f630', borderRadius: 12, padding: 16, marginBottom: 16 }}>
-          <p style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.7 }}>{data.executive_summary}</p>
+        <div style={{ background: 'var(--c-0f172a)', border: '1px solid #3b82f630', borderRadius: 12, padding: 16, marginBottom: 16 }}>
+          <p style={{ color: 'var(--c-94a3b8)', fontSize: 13, lineHeight: 1.7 }}>{data.executive_summary}</p>
         </div>
       )}
 
@@ -344,7 +344,7 @@ function MigrationAIReport({ data }) {
       {data.dc_migration_analysis && (
         <>
           <SectionHeader icon="🏢" title="Data Center Migration Analysis" />
-          <div style={{ background: '#0f172a', border: '1px solid #fb923c30', borderRadius: 12, padding: 16, marginBottom: 16 }}>
+          <div style={{ background: 'var(--c-0f172a)', border: '1px solid #fb923c30', borderRadius: 12, padding: 16, marginBottom: 16 }}>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
               {data.dc_migration_analysis.arc_machines_count > 0 && (
                 <MetricCard label="Arc Machines" value={data.dc_migration_analysis.arc_machines_count} color="#fb923c" />
@@ -356,9 +356,9 @@ function MigrationAIReport({ data }) {
             {data.dc_migration_analysis.migration_waves?.map((wave, i) => (
               <ExpandableCard key={i} title={wave.name || `Wave ${i + 1}`} severity={wave.priority || 'P' + (i + 1)}>
                 {wave.workloads?.map((w, j) => (
-                  <div key={j} style={{ color: '#94a3b8', fontSize: 12, lineHeight: 1.6, marginTop: 4 }}>• {typeof w === 'string' ? w : w.name || w.description}</div>
+                  <div key={j} style={{ color: 'var(--c-94a3b8)', fontSize: 12, lineHeight: 1.6, marginTop: 4 }}>• {typeof w === 'string' ? w : w.name || w.description}</div>
                 ))}
-                {wave.description && <p style={{ color: '#94a3b8', fontSize: 12, marginTop: 6 }}>{wave.description}</p>}
+                {wave.description && <p style={{ color: 'var(--c-94a3b8)', fontSize: 12, marginTop: 6 }}>{wave.description}</p>}
               </ExpandableCard>
             ))}
           </div>
@@ -372,15 +372,15 @@ function MigrationAIReport({ data }) {
           {data.workload_analysis.map((w, i) => (
             <ExpandableCard key={i} title={w.workload_name || w.name} severity={w.complexity === 'High' ? 'high' : w.complexity === 'Medium' ? 'medium' : 'low'}>
               <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8 }}>
-                <div><span style={{ color: '#64748b', fontSize: 11 }}>Current: </span><span style={{ color: '#94a3b8', fontSize: 12 }}>{w.current_state}</span></div>
-                <div><span style={{ color: '#64748b', fontSize: 11 }}>Target: </span><span style={{ color: '#38bdf8', fontSize: 12 }}>{w.target_state}</span></div>
-                {w.migration_approach && <div><span style={{ color: '#64748b', fontSize: 11 }}>Approach: </span><span style={{ color: '#a78bfa', fontSize: 12 }}>{w.migration_approach}</span></div>}
-                {w.estimated_effort && <div><span style={{ color: '#64748b', fontSize: 11 }}>Effort: </span><span style={{ color: '#94a3b8', fontSize: 12 }}>{w.estimated_effort}</span></div>}
+                <div><span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Current: </span><span style={{ color: 'var(--c-94a3b8)', fontSize: 12 }}>{w.current_state}</span></div>
+                <div><span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Target: </span><span style={{ color: 'var(--c-38bdf8)', fontSize: 12 }}>{w.target_state}</span></div>
+                {w.migration_approach && <div><span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Approach: </span><span style={{ color: 'var(--c-a78bfa)', fontSize: 12 }}>{w.migration_approach}</span></div>}
+                {w.estimated_effort && <div><span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Effort: </span><span style={{ color: 'var(--c-94a3b8)', fontSize: 12 }}>{w.estimated_effort}</span></div>}
               </div>
               {w.risks?.length > 0 && (
                 <div style={{ marginTop: 8 }}>
                   {w.risks.map((r, j) => (
-                    <div key={j} style={{ color: '#fca5a5', fontSize: 11, marginTop: 2 }}>△ {typeof r === 'string' ? r : r.title || r.description}</div>
+                    <div key={j} style={{ color: 'var(--c-fca5a5)', fontSize: 11, marginTop: 2 }}>△ {typeof r === 'string' ? r : r.title || r.description}</div>
                   ))}
                 </div>
               )}
@@ -449,7 +449,7 @@ function BackupAIReport({ data, onResourceClick }) {
       </div>
 
       {data.executive_summary && (
-        <div style={{ color: '#cbd5e1', fontSize: 13, lineHeight: 1.7, marginBottom: 18, padding: 14, background: '#0f172a', borderRadius: 10, border: '1px solid #1e293b' }}>
+        <div style={{ color: 'var(--c-cbd5e1)', fontSize: 13, lineHeight: 1.7, marginBottom: 18, padding: 14, background: 'var(--c-0f172a)', borderRadius: 10, border: '1px solid var(--c-1e293b)' }}>
           {data.executive_summary}
         </div>
       )}
@@ -474,7 +474,7 @@ function BackupAIReport({ data, onResourceClick }) {
             return (
               <ExpandableCard key={i} title={`${svc.service_type} — ${pct}% protected (${prot}/${total})`}
                 severity={pct < 30 ? 'critical' : pct < 60 ? 'high' : pct < 90 ? 'medium' : 'low'}>
-                {svc.backup_solution && <div style={{ color: '#94a3b8', fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>{svc.backup_solution}</div>}
+                {svc.backup_solution && <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>{svc.backup_solution}</div>}
                 {svcFindings.length > 0 && <FindingsList findings={svcFindings} onResourceClick={onResourceClick} />}
               </ExpandableCard>
             );
@@ -516,8 +516,8 @@ function ResilienceAIReport({ data, onResourceClick }) {
 
       {/* Executive Summary */}
       {data.executive_summary && (
-        <div style={{ background: '#0f172a', border: '1px solid #3b82f630', borderRadius: 12, padding: 16, marginBottom: 16 }}>
-          <p style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.7 }}>{data.executive_summary}</p>
+        <div style={{ background: 'var(--c-0f172a)', border: '1px solid #3b82f630', borderRadius: 12, padding: 16, marginBottom: 16 }}>
+          <p style={{ color: 'var(--c-94a3b8)', fontSize: 13, lineHeight: 1.7 }}>{data.executive_summary}</p>
         </div>
       )}
 
@@ -559,8 +559,8 @@ function AVSBCDRAIReport({ data, onResourceClick }) {
 
       {/* Executive Summary */}
       {data.executive_summary && (
-        <div style={{ background: '#0f172a', border: '1px solid #a78bfa30', borderRadius: 12, padding: 16, marginBottom: 16 }}>
-          <p style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.7 }}>{data.executive_summary}</p>
+        <div style={{ background: 'var(--c-0f172a)', border: '1px solid #a78bfa30', borderRadius: 12, padding: 16, marginBottom: 16 }}>
+          <p style={{ color: 'var(--c-94a3b8)', fontSize: 13, lineHeight: 1.7 }}>{data.executive_summary}</p>
         </div>
       )}
 
@@ -568,10 +568,10 @@ function AVSBCDRAIReport({ data, onResourceClick }) {
       {data.cross_zonal_dr && (
         <>
           <SectionHeader icon="🏢" title="Cross-Zonal DR (Qatar Central AV36p → AV64)" />
-          <div style={{ background: '#0f172a', border: '1px solid #22c55e30', borderRadius: 12, padding: 16, marginBottom: 16 }}>
-            <p style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.7 }}>{typeof data.cross_zonal_dr === 'string' ? data.cross_zonal_dr : data.cross_zonal_dr.description}</p>
+          <div style={{ background: 'var(--c-0f172a)', border: '1px solid #22c55e30', borderRadius: 12, padding: 16, marginBottom: 16 }}>
+            <p style={{ color: 'var(--c-94a3b8)', fontSize: 13, lineHeight: 1.7 }}>{typeof data.cross_zonal_dr === 'string' ? data.cross_zonal_dr : data.cross_zonal_dr.description}</p>
             {data.cross_zonal_dr.steps?.map((s, i) => (
-              <div key={i} style={{ color: '#86efac', fontSize: 12, marginTop: 4 }}>→ {typeof s === 'string' ? s : s.title}</div>
+              <div key={i} style={{ color: 'var(--c-86efac)', fontSize: 12, marginTop: 4 }}>→ {typeof s === 'string' ? s : s.title}</div>
             ))}
           </div>
         </>
@@ -581,11 +581,11 @@ function AVSBCDRAIReport({ data, onResourceClick }) {
       {data.cross_regional_dr && (
         <>
           <SectionHeader icon="🌍" title="Cross-Regional DR Options" />
-          <div style={{ background: '#0f172a', border: '1px solid #3b82f630', borderRadius: 12, padding: 16, marginBottom: 16 }}>
-            <p style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.7 }}>{typeof data.cross_regional_dr === 'string' ? data.cross_regional_dr : data.cross_regional_dr.description}</p>
+          <div style={{ background: 'var(--c-0f172a)', border: '1px solid #3b82f630', borderRadius: 12, padding: 16, marginBottom: 16 }}>
+            <p style={{ color: 'var(--c-94a3b8)', fontSize: 13, lineHeight: 1.7 }}>{typeof data.cross_regional_dr === 'string' ? data.cross_regional_dr : data.cross_regional_dr.description}</p>
             {data.cross_regional_dr.options?.map((o, i) => (
               <ExpandableCard key={i} title={typeof o === 'string' ? o : o.name || o.title}>
-                {o.description && <p style={{ color: '#94a3b8', fontSize: 12, marginTop: 6 }}>{o.description}</p>}
+                {o.description && <p style={{ color: 'var(--c-94a3b8)', fontSize: 12, marginTop: 6 }}>{o.description}</p>}
               </ExpandableCard>
             ))}
           </div>
@@ -629,8 +629,8 @@ function DeepBCDRAIReport({ data, onResourceClick }) {
       </div>
 
       {data.executive_summary && typeof data.executive_summary === 'string' && (
-        <div style={{ background: '#0f172a', border: '1px solid #3b82f630', borderRadius: 12, padding: 16, marginBottom: 16 }}>
-          <p style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.7 }}>{data.executive_summary}</p>
+        <div style={{ background: 'var(--c-0f172a)', border: '1px solid #3b82f630', borderRadius: 12, padding: 16, marginBottom: 16 }}>
+          <p style={{ color: 'var(--c-94a3b8)', fontSize: 13, lineHeight: 1.7 }}>{data.executive_summary}</p>
         </div>
       )}
 
@@ -645,20 +645,20 @@ function DeepBCDRAIReport({ data, onResourceClick }) {
       {data.regional_analysis && (
         <>
           <SectionHeader icon="🌐" title="Regional Analysis" />
-          <div style={{ background: '#0f172a', border: '1px solid #3b82f630', borderRadius: 12, padding: 16, marginBottom: 16 }}>
+          <div style={{ background: 'var(--c-0f172a)', border: '1px solid #3b82f630', borderRadius: 12, padding: 16, marginBottom: 16 }}>
             {data.regional_analysis.primary_regions?.length > 0 && (
               <div style={{ marginBottom: 8 }}>
-                <span style={{ color: '#64748b', fontSize: 11 }}>Primary Regions: </span>
+                <span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Primary Regions: </span>
                 {data.regional_analysis.primary_regions.map((r, i) => (
-                  <span key={i} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', color: '#38bdf8', marginRight: 4 }}>{r}</span>
+                  <span key={i} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', color: 'var(--c-38bdf8)', marginRight: 4 }}>{r}</span>
                 ))}
               </div>
             )}
             {data.regional_analysis.recommended_dr_regions?.length > 0 && (
               <div>
-                <span style={{ color: '#64748b', fontSize: 11 }}>Recommended DR: </span>
+                <span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Recommended DR: </span>
                 {data.regional_analysis.recommended_dr_regions.map((r, i) => (
-                  <span key={i} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#16a34a20', color: '#86efac', marginRight: 4 }}>{r}</span>
+                  <span key={i} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#16a34a20', color: 'var(--c-86efac)', marginRight: 4 }}>{r}</span>
                 ))}
               </div>
             )}
@@ -716,7 +716,7 @@ function GenericAIReport({ data, onResourceClick }) {
         </div>
       </div>
       {data.executive_summary && (
-        <div style={{ color: '#cbd5e1', fontSize: 13, lineHeight: 1.7, marginBottom: 18, padding: 14, background: '#0f172a', borderRadius: 10, border: '1px solid #1e293b' }}>
+        <div style={{ color: 'var(--c-cbd5e1)', fontSize: 13, lineHeight: 1.7, marginBottom: 18, padding: 14, background: 'var(--c-0f172a)', borderRadius: 10, border: '1px solid var(--c-1e293b)' }}>
           {data.executive_summary}
         </div>
       )}
@@ -725,7 +725,7 @@ function GenericAIReport({ data, onResourceClick }) {
           <SectionHeader icon="📂" title="Categories" count={data.categories.length} />
           {data.categories.map((cat, i) => (
             <ExpandableCard key={i} title={`${cat.name} — ${cat.score ?? ''}%`}>
-              {cat.assessment && <div style={{ color: '#94a3b8', fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>{cat.assessment}</div>}
+              {cat.assessment && <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>{cat.assessment}</div>}
               {cat.findings?.length > 0 && <FindingsList findings={cat.findings} onResourceClick={onResourceClick} />}
             </ExpandableCard>
           ))}

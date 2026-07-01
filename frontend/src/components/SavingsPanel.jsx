@@ -2,6 +2,18 @@ import React, { useState } from 'react'
 import { TrendingDown, ChevronDown, ChevronRight } from 'lucide-react'
 import clsx from 'clsx'
 import { asText } from '../utils/safeText'
+import { useDrill } from '../drill/DrillContext'
+
+const recToResource = (r) => ({
+  resource_id: r.resource_id,
+  resource_name: r.resource_name,
+  resource_type: r.resource_type,
+  resource_group: r.resource_group,
+  location: r.location,
+  subscription_id: r.subscription_id,
+  cost_current_month: r.current_monthly_cost ?? 0,
+  estimated_monthly_savings: r.estimated_monthly_savings ?? 0,
+})
 
 function fmtShort(n) {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
@@ -22,6 +34,7 @@ const PRIORITY_STYLE = {
 export default function SavingsPanel({ recommendations }) {
   const [expanded, setExpanded] = useState(true)
   const [priorityFilter, setPriorityFilter] = useState('')
+  const { openResourceDrill, openResourceDetail } = useDrill()
 
   if (!recommendations?.length) {
     return (
@@ -62,7 +75,11 @@ export default function SavingsPanel({ recommendations }) {
           <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
             Savings Opportunities
           </h2>
-          <span className="text-xs px-1.5 py-0.5 rounded-md bg-green-900/50 text-green-400 font-semibold">
+          <span
+            className="text-xs px-1.5 py-0.5 rounded-md bg-green-900/50 text-green-400 font-semibold cursor-pointer hover:bg-green-800/60"
+            title="Click to view the resources behind these savings"
+            onClick={(e) => { e.stopPropagation(); openResourceDrill('Savings opportunities', filtered.map(recToResource)) }}
+          >
             {filtered.length}
           </span>
         </div>
@@ -110,7 +127,9 @@ export default function SavingsPanel({ recommendations }) {
               return (
                 <div
                   key={r.resource_id}
-                  className="p-3 bg-gray-800/70 rounded-lg border border-gray-700/60 hover:border-gray-600 transition-colors"
+                  onClick={() => openResourceDetail(recToResource(r))}
+                  title="Open full resource details"
+                  className="p-3 bg-gray-800/70 rounded-lg border border-gray-700/60 hover:border-gray-600 transition-colors cursor-pointer"
                 >
                   {/* Top row: name + savings */}
                   <div className="flex items-start justify-between gap-3 min-w-0">

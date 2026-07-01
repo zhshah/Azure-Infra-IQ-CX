@@ -56,7 +56,7 @@ export default function TagManagementModule() {
       enum_values: [],
       category: 'Custom',
       is_required: false,
-      color: '#6b7280',
+      color: 'var(--c-6b7280)',
     })
   }
   

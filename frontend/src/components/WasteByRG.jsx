@@ -186,7 +186,7 @@ export default function WasteByRG({ resources = [], onBarClick }) {
               tickLine={false}
               width={136}
             />
-            <Tooltip content={<RGTooltip />} cursor={{ fill: '#1f2937', opacity: 0.6 }} />
+            <Tooltip content={<RGTooltip />} cursor={{ fill: 'var(--c-1f2937)', opacity: 0.6 }} />
             <Bar dataKey="waste" radius={[0, 4, 4, 0]} maxBarSize={24}>
               {chartData.map((d) => (
                 <Cell

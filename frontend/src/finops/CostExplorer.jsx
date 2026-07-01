@@ -188,8 +188,8 @@ export default function CostExplorer() {
           <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={120} innerRadius={50} paddingAngle={2}>
             {pieData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
           </Pie>
-          <Tooltip formatter={v => fmtUsd(v, 2)} contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 11 }} />
-          <Legend iconSize={10} wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+          <Tooltip formatter={v => fmtUsd(v, 2)} contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }} />
+          <Legend iconSize={10} wrapperStyle={{ fontSize: 11, color: 'var(--c-94a3b8)' }} />
         </PieChart>
       )
     }
@@ -205,8 +205,8 @@ export default function CostExplorer() {
           <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
           <XAxis dataKey="date" tick={{ fill: '#475569', fontSize: 10 }} />
           <YAxis tick={{ fill: '#475569', fontSize: 10 }} tickFormatter={v => '$' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v)} />
-          <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 11 }} formatter={v => fmtUsd(v, 2)} />
-          <Legend iconSize={10} wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+          <Tooltip contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }} formatter={v => fmtUsd(v, 2)} />
+          <Legend iconSize={10} wrapperStyle={{ fontSize: 11, color: 'var(--c-94a3b8)' }} />
           {labels.map((l, i) => (
             <Area key={l} type="monotone" dataKey={l} stackId="1" stroke={CHART_COLORS[i % CHART_COLORS.length]} fill={`url(#g${i})`} strokeWidth={1.5} dot={false} />
           ))}
@@ -218,8 +218,8 @@ export default function CostExplorer() {
         <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
         <XAxis dataKey="date" tick={{ fill: '#475569', fontSize: 10 }} />
         <YAxis tick={{ fill: '#475569', fontSize: 10 }} tickFormatter={v => '$' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v)} />
-        <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 11 }} formatter={v => fmtUsd(v, 2)} />
-        <Legend iconSize={10} wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+        <Tooltip contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }} formatter={v => fmtUsd(v, 2)} />
+        <Legend iconSize={10} wrapperStyle={{ fontSize: 11, color: 'var(--c-94a3b8)' }} />
         {labels.map((l, i) => (
           <Bar key={l} dataKey={l} stackId="stack" fill={CHART_COLORS[i % CHART_COLORS.length]} />
         ))}
@@ -234,15 +234,15 @@ export default function CostExplorer() {
       {/* ── Header ── */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <div>
-          <h2 style={{ color: '#f1f5f9', fontSize: 18, fontWeight: 700, margin: 0 }}>Cost Explorer</h2>
-          <p style={{ color: '#64748b', fontSize: 12, margin: 0 }}>Live Azure Cost Management — same data as Azure Portal</p>
+          <h2 style={{ color: 'var(--c-f1f5f9)', fontSize: 18, fontWeight: 700, margin: 0 }}>Cost Explorer</h2>
+          <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: 0 }}>Live Azure Cost Management — same data as Azure Portal</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {result && (
             <button onClick={() => finopsApi.downloadCsv(groupBy[0], timeRange).catch(e => console.error('CSV export:', e))}
               style={{
-                background: 'transparent', border: '1px solid #1e293b', borderRadius: 7,
-                padding: '6px 14px', color: '#94a3b8', fontSize: 11, fontWeight: 500,
+                background: 'transparent', border: '1px solid var(--c-1e293b)', borderRadius: 7,
+                padding: '6px 14px', color: 'var(--c-94a3b8)', fontSize: 11, fontWeight: 500,
                 cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5,
                 transition: 'all 0.15s',
               }}>
@@ -256,7 +256,7 @@ export default function CostExplorer() {
       <EnterpriseCard title="Query Parameters" icon={SearchIcon} iconColor="#0078d4" noPadding>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, padding: '14px 16px' }}>
           <div>
-            <label style={{ color: '#64748b', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 4 }}>Time Range</label>
+            <label style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 4 }}>Time Range</label>
             <DateRangePicker
               value={timeRange} onChange={setTimeRange}
               dateFrom={dateFrom} dateTo={dateTo}
@@ -267,7 +267,7 @@ export default function CostExplorer() {
           <SearchableSelect label="Group By"    value={groupBy[0]}  onChange={v => setGroupBy([v])} options={DIMENSION_OPTIONS} compact />
           <SearchableSelect label="Cost Type"   value={costType}    onChange={setCostType}    options={COST_TYPE_OPTIONS} compact />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <label style={{ color: '#64748b', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', visibility: 'hidden' }}>Run</label>
+            <label style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', visibility: 'hidden' }}>Run</label>
             <div style={{ display: 'flex', gap: 6 }}>
               <button onClick={run} disabled={loading} style={{
                 flex: 1, background: '#0078d4', border: 'none', borderRadius: 7, padding: '8px 14px',
@@ -293,20 +293,20 @@ export default function CostExplorer() {
 
       {/* ── Error ── */}
       {error && (
-        <div style={{ background: '#1a0e0e', border: '1px solid #7f1d1d', borderRadius: 8, padding: 14, color: '#fca5a5', display: 'flex', gap: 8 }}>
+        <div style={{ background: '#1a0e0e', border: '1px solid var(--c-7f1d1d)', borderRadius: 8, padding: 14, color: 'var(--c-fca5a5)', display: 'flex', gap: 8 }}>
           <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
           <div style={{ flex: 1 }}>
             <span style={{ fontSize: 12 }}>{error}</span>
-            <button onClick={run} style={{ marginLeft: 12, fontSize: 11, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer' }}>↺ Retry</button>
+            <button onClick={run} style={{ marginLeft: 12, fontSize: 11, color: 'var(--c-60a5fa)', background: 'none', border: 'none', cursor: 'pointer' }}>↺ Retry</button>
           </div>
         </div>
       )}
 
       {/* ── XLSX export error ── */}
       {xlsxError && (
-        <div style={{ background: '#1a0e0e', border: '1px solid #7f1d1d', borderRadius: 8, padding: '8px 14px', color: '#fca5a5', fontSize: 12, display: 'flex', justifyContent: 'space-between' }}>
+        <div style={{ background: '#1a0e0e', border: '1px solid var(--c-7f1d1d)', borderRadius: 8, padding: '8px 14px', color: 'var(--c-fca5a5)', fontSize: 12, display: 'flex', justifyContent: 'space-between' }}>
           XLSX export failed: {xlsxError}
-          <button onClick={() => setXlsxError(null)} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>✕</button>
+          <button onClick={() => setXlsxError(null)} style={{ background: 'none', border: 'none', color: 'var(--c-94a3b8)', cursor: 'pointer' }}>✕</button>
         </div>
       )}
 
@@ -322,9 +322,9 @@ export default function CostExplorer() {
               {isTimeSeries && (
                 <button onClick={() => setAccumulated(a => !a)} style={{
                   background: accumulated ? 'rgba(0, 120, 212, 0.1)' : 'transparent',
-                  border: `1px solid ${accumulated ? 'rgba(0, 120, 212, 0.3)' : '#1e293b'}`,
+                  border: `1px solid ${accumulated ? 'rgba(0, 120, 212, 0.3)' : 'var(--c-1e293b)'}`,
                   borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
-                  color: accumulated ? '#0078d4' : '#64748b', fontSize: 11, fontWeight: 500,
+                  color: accumulated ? '#0078d4' : 'var(--c-64748b)', fontSize: 11, fontWeight: 500,
                   transition: 'all 0.15s',
                 }}>
                   ∑ Cumulative
@@ -332,10 +332,10 @@ export default function CostExplorer() {
               )}
               {CHART_TYPES.map(ct => (
                 <button key={ct.value} onClick={() => setChartType(ct.value)} title={ct.label} style={{
-                  background: chartType === ct.value ? '#1e293b' : 'transparent',
-                  border: `1px solid ${chartType === ct.value ? 'rgba(30, 41, 59, 0.7)' : 'transparent'}`,
+                  background: chartType === ct.value ? 'var(--c-1e293b)' : 'transparent',
+                  border: `1px solid ${chartType === ct.value ? 'rgba(var(--rgb-slate), 0.7)' : 'transparent'}`,
                   borderRadius: 6, padding: '4px 8px', cursor: 'pointer',
-                  color: chartType === ct.value ? '#e2e8f0' : '#475569',
+                  color: chartType === ct.value ? 'var(--c-e2e8f0)' : 'var(--c-475569)',
                   transition: 'all 0.15s',
                 }}>
                   <ct.Icon size={14} />
@@ -344,7 +344,7 @@ export default function CostExplorer() {
               <button onClick={handleDownloadXlsx} title="Download XLSX" style={{
                 background: 'rgba(34, 197, 94, 0.08)', border: '1px solid rgba(34, 197, 94, 0.25)',
                 borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
-                color: '#4ade80', fontSize: 11, fontWeight: 500,
+                color: 'var(--c-4ade80)', fontSize: 11, fontWeight: 500,
                 display: 'flex', alignItems: 'center', gap: 4, transition: 'all 0.15s',
               }}>
                 <Download size={12} /> XLSX
@@ -364,20 +364,20 @@ export default function CostExplorer() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr>{['Dimension', 'Cost (USD)', '% of Total'].map(h => (
-                <th key={h} style={{ textAlign: 'left', color: '#475569', padding: '6px 8px', borderBottom: '1px solid rgba(30, 41, 59, 0.5)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</th>
+                <th key={h} style={{ textAlign: 'left', color: 'var(--c-475569)', padding: '6px 8px', borderBottom: '1px solid rgba(var(--rgb-slate), 0.5)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</th>
               ))}</tr>
             </thead>
             <tbody>
               {result.top_contributors.map((r, i) => (
                 <tr key={i} style={{ borderBottom: '1px solid rgba(15, 23, 42, 0.5)' }}>
-                  <td style={{ padding: '8px 8px', color: '#e2e8f0' }}>
+                  <td style={{ padding: '8px 8px', color: 'var(--c-e2e8f0)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <div style={{ width: 8, height: 8, borderRadius: '50%', background: CHART_COLORS[i % CHART_COLORS.length], flexShrink: 0 }} />
                       {r.label}
                     </div>
                   </td>
                   <td style={{ padding: '8px 8px', color: '#0078d4', fontWeight: 600 }}>{fmtUsd(r.cost, 2)}</td>
-                  <td style={{ padding: '8px 8px', color: '#64748b' }}>
+                  <td style={{ padding: '8px 8px', color: 'var(--c-64748b)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <div style={{ height: 4, width: `${Math.min(r.pct, 100)}%`, background: CHART_COLORS[i % CHART_COLORS.length], borderRadius: 2, maxWidth: 80 }} />
                       {r.pct}%
@@ -391,7 +391,7 @@ export default function CostExplorer() {
       )}
 
       {!result && !loading && (
-        <div style={{ textAlign: 'center', padding: 60, color: '#334155', fontSize: 13 }}>
+        <div style={{ textAlign: 'center', padding: 60, color: 'var(--c-334155)', fontSize: 13 }}>
           Configure your filters above and click <strong style={{ color: '#0078d4' }}>Run Query</strong> to load live Azure cost data.
         </div>
       )}

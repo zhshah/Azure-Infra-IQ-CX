@@ -34,8 +34,8 @@ const MODULE_META = {
 };
 
 const RISK_COLOR = { critical: '#ef4444', high: '#f97316', medium: '#eab308', low: '#22c55e', strong: '#22c55e', moderate: '#eab308', weak: '#ef4444' };
-const riskColor = (rl) => RISK_COLOR[(rl || '').toLowerCase()] || '#64748b';
-const scoreColor = (s) => (s == null ? '#64748b' : s >= 75 ? '#22c55e' : s >= 50 ? '#eab308' : s >= 25 ? '#f97316' : '#ef4444');
+const riskColor = (rl) => RISK_COLOR[(rl || '').toLowerCase()] || 'var(--c-64748b)';
+const scoreColor = (s) => (s == null ? 'var(--c-64748b)' : s >= 75 ? '#22c55e' : s >= 50 ? '#eab308' : s >= 25 ? '#f97316' : '#ef4444');
 
 function timeAgo(iso) {
   if (!iso) return null;
@@ -53,21 +53,21 @@ function ScoreRing({ score, color, size = 48, stroke = 5 }) {
   const pct = score == null ? 0 : Math.max(0, Math.min(100, score));
   return (
     <svg width={size} height={size} style={{ flexShrink: 0 }}>
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#1f2937" strokeWidth={stroke} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" style={{ stroke: 'var(--c-1f2937)' }} strokeWidth={stroke} />
       <circle
         cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
         strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)} strokeLinecap="round"
         transform={`rotate(-90 ${size / 2} ${size / 2})`}
       />
       <text x="50%" y="50%" dominantBaseline="central" textAnchor="middle"
-        fontSize={size * 0.30} fontWeight="800" fill={score == null ? '#475569' : '#f1f5f9'}>
+        fontSize={size * 0.30} fontWeight="800" fill={score == null ? 'var(--c-475569)' : 'var(--c-f1f5f9)'}>
         {score == null ? '—' : score}
       </text>
     </svg>
   );
 }
 
-const panel = { background: '#0f172a', border: '1px solid #1e293b', borderRadius: 14 };
+const panel = { background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 14 };
 
 // ── Per-category mini card ──────────────────────────────────────────────────
 function ModuleCard({ m, busy, onOpen, onAnalyze }) {
@@ -79,20 +79,20 @@ function ModuleCard({ m, busy, onOpen, onAnalyze }) {
       onClick={() => onOpen(m)}
       style={{
         ...panel, padding: 14, cursor: 'pointer', position: 'relative',
-        borderLeft: `3px solid ${m.available ? meta.color : '#334155'}`,
+        borderLeft: `3px solid ${m.available ? meta.color : 'var(--c-334155)'}`,
         transition: 'transform .12s, border-color .12s', minHeight: 150,
         display: 'flex', flexDirection: 'column', gap: 10,
       }}
       onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.borderColor = meta.color; }}
-      onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.borderColor = '#1e293b'; e.currentTarget.style.borderLeft = `3px solid ${m.available ? meta.color : '#334155'}`; }}
+      onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.borderColor = 'var(--c-1e293b)'; e.currentTarget.style.borderLeft = `3px solid ${m.available ? meta.color : 'var(--c-334155)'}`; }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <div style={{ width: 30, height: 30, borderRadius: 8, background: meta.color + '22', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           <Icon size={16} style={{ color: meta.color }} />
         </div>
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ color: '#f1f5f9', fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.label}</div>
-          <div style={{ color: '#64748b', fontSize: 10.5 }}>{m.available ? (when ? `Updated ${when}` : 'Analyzed') : 'Not analyzed yet'}</div>
+          <div style={{ color: 'var(--c-f1f5f9)', fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.label}</div>
+          <div style={{ color: 'var(--c-64748b)', fontSize: 10.5 }}>{m.available ? (when ? `Updated ${when}` : 'Analyzed') : 'Not analyzed yet'}</div>
         </div>
         <ScoreRing score={m.available ? m.score : null} color={scoreColor(m.score)} size={44} />
       </div>
@@ -103,12 +103,12 @@ function ModuleCard({ m, busy, onOpen, onAnalyze }) {
             {m.risk_level && (
               <span style={{ fontSize: 10, fontWeight: 700, color: riskColor(m.risk_level), background: riskColor(m.risk_level) + '1f', border: `1px solid ${riskColor(m.risk_level)}55`, borderRadius: 5, padding: '1px 7px', textTransform: 'capitalize' }}>{m.risk_level}</span>
             )}
-            {m.category_count > 0 && <span style={{ fontSize: 10, color: '#94a3b8', background: '#1e293b', borderRadius: 5, padding: '1px 7px' }}>{m.category_count} categories</span>}
-            {m.finding_count > 0 && <span style={{ fontSize: 10, color: '#94a3b8', background: '#1e293b', borderRadius: 5, padding: '1px 7px' }}>{m.finding_count} findings</span>}
+            {m.category_count > 0 && <span style={{ fontSize: 10, color: 'var(--c-94a3b8)', background: 'var(--c-1e293b)', borderRadius: 5, padding: '1px 7px' }}>{m.category_count} categories</span>}
+            {m.finding_count > 0 && <span style={{ fontSize: 10, color: 'var(--c-94a3b8)', background: 'var(--c-1e293b)', borderRadius: 5, padding: '1px 7px' }}>{m.finding_count} findings</span>}
           </div>
           {m.top_recommendation && (
-            <div style={{ color: '#cbd5e1', fontSize: 11.5, lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-              <span style={{ color: '#fbbf24', fontWeight: 700 }}>▶ </span>{m.top_recommendation}
+            <div style={{ color: 'var(--c-cbd5e1)', fontSize: 11.5, lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+              <span style={{ color: 'var(--c-fbbf24)', fontWeight: 700 }}>▶ </span>{m.top_recommendation}
             </div>
           )}
           <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'center', gap: 4, color: meta.color, fontSize: 11, fontWeight: 600 }}>
@@ -117,13 +117,13 @@ function ModuleCard({ m, busy, onOpen, onAnalyze }) {
         </>
       ) : (
         <>
-          <div style={{ color: '#64748b', fontSize: 11.5, lineHeight: 1.45, flex: 1 }}>
+          <div style={{ color: 'var(--c-64748b)', fontSize: 11.5, lineHeight: 1.45, flex: 1 }}>
             Run AI analysis to surface this category's risks, findings and prioritized recommendations.
           </div>
           <button
             onClick={(e) => { e.stopPropagation(); onAnalyze(m); }}
             disabled={busy}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: busy ? '#1e293b' : meta.color + '22', color: busy ? '#64748b' : meta.color, border: `1px solid ${busy ? '#334155' : meta.color + '66'}`, borderRadius: 7, padding: '6px 10px', fontSize: 11.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer' }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: busy ? 'var(--c-1e293b)' : meta.color + '22', color: busy ? 'var(--c-64748b)' : meta.color, border: `1px solid ${busy ? 'var(--c-334155)' : meta.color + '66'}`, borderRadius: 7, padding: '6px 10px', fontSize: 11.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer' }}
           >
             {busy ? <><Loader2 size={13} className="animate-spin" /> Analyzing…</> : <><Wand2 size={13} /> Analyze now</>}
           </button>
@@ -142,29 +142,29 @@ function ExecutiveBriefing({ briefing, loading, error, canGenerate, analyzedCoun
     { key: 'later', label: 'Later · 90+ days', color: '#22c55e' },
   ];
   return (
-    <div style={{ ...panel, padding: 16, background: 'linear-gradient(135deg,#0f172a,#131c33)', borderColor: '#312e81' }}>
+    <div style={{ ...panel, padding: 16, background: 'linear-gradient(135deg,var(--c-0f172a),var(--c-131c33))', borderColor: 'var(--c-312e81)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <div style={{ width: 30, height: 30, borderRadius: 8, background: '#6366f133', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Sparkles size={16} style={{ color: '#a5b4fc' }} />
         </div>
         <div style={{ flex: 1 }}>
-          <div style={{ color: '#f1f5f9', fontWeight: 700, fontSize: 14 }}>AI Executive Briefing</div>
-          <div style={{ color: '#94a3b8', fontSize: 11 }}>Cross-category synthesis — the highest-leverage actions across your whole estate</div>
+          <div style={{ color: 'var(--c-f1f5f9)', fontWeight: 700, fontSize: 14 }}>AI Executive Briefing</div>
+          <div style={{ color: 'var(--c-94a3b8)', fontSize: 11 }}>Cross-category synthesis — the highest-leverage actions across your whole estate</div>
         </div>
         <button
           onClick={onGenerate}
           disabled={loading || !canGenerate}
           title={!canGenerate ? 'Analyze at least 2 categories first' : ''}
-          style={{ display: 'flex', alignItems: 'center', gap: 6, background: loading || !canGenerate ? '#1e293b' : '#6366f1', color: loading || !canGenerate ? '#64748b' : '#fff', border: 'none', borderRadius: 8, padding: '7px 12px', fontSize: 12, fontWeight: 700, cursor: loading || !canGenerate ? 'default' : 'pointer' }}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, background: loading || !canGenerate ? 'var(--c-1e293b)' : '#6366f1', color: loading || !canGenerate ? 'var(--c-64748b)' : '#fff', border: 'none', borderRadius: 8, padding: '7px 12px', fontSize: 12, fontWeight: 700, cursor: loading || !canGenerate ? 'default' : 'pointer' }}
         >
           {loading ? <><Loader2 size={14} className="animate-spin" /> Synthesizing…</> : <><Brain size={14} /> {briefing ? 'Regenerate' : 'Generate'}</>}
         </button>
       </div>
 
-      {error && <div style={{ color: '#fca5a5', fontSize: 12, background: '#7f1d1d33', border: '1px solid #7f1d1d', borderRadius: 8, padding: '8px 12px' }}>{error}</div>}
+      {error && <div style={{ color: 'var(--c-fca5a5)', fontSize: 12, background: '#7f1d1d33', border: '1px solid var(--c-7f1d1d)', borderRadius: 8, padding: '8px 12px' }}>{error}</div>}
 
       {!briefing && !loading && !error && (
-        <div style={{ color: '#94a3b8', fontSize: 12.5, padding: '6px 2px' }}>
+        <div style={{ color: 'var(--c-94a3b8)', fontSize: 12.5, padding: '6px 2px' }}>
           {canGenerate
             ? `Synthesize ${analyzedCount} analyzed categories into one CIO-level briefing with cross-cutting risks and a unified roadmap.`
             : 'Analyze at least 2 categories (cards below) to unlock the cross-category executive briefing.'}
@@ -178,36 +178,36 @@ function ExecutiveBriefing({ briefing, loading, error, canGenerate, analyzedCoun
       {briefing && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {briefing.headline && (
-            <div style={{ color: '#f8fafc', fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Zap size={16} style={{ color: '#fbbf24', flexShrink: 0 }} /> {briefing.headline}
+            <div style={{ color: 'var(--c-f8fafc)', fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Zap size={16} style={{ color: 'var(--c-fbbf24)', flexShrink: 0 }} /> {briefing.headline}
             </div>
           )}
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
             {briefing.estate_health_score != null && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <ScoreRing score={Math.round(briefing.estate_health_score)} color={scoreColor(briefing.estate_health_score)} size={46} />
-                <div style={{ color: '#94a3b8', fontSize: 11 }}>Estate<br />Health</div>
+                <div style={{ color: 'var(--c-94a3b8)', fontSize: 11 }}>Estate<br />Health</div>
               </div>
             )}
             {briefing.estate_posture && (
-              <p style={{ color: '#cbd5e1', fontSize: 12.5, lineHeight: 1.6, margin: 0, flex: 1, minWidth: 240 }}>{briefing.estate_posture}</p>
+              <p style={{ color: 'var(--c-cbd5e1)', fontSize: 12.5, lineHeight: 1.6, margin: 0, flex: 1, minWidth: 240 }}>{briefing.estate_posture}</p>
             )}
           </div>
 
           {briefing.top_cross_cutting_risks?.length > 0 && (
             <div>
-              <div style={{ color: '#94a3b8', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Top cross-cutting risks</div>
+              <div style={{ color: 'var(--c-94a3b8)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Top cross-cutting risks</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {briefing.top_cross_cutting_risks.slice(0, 5).map((r, i) => (
-                  <div key={i} style={{ background: '#0b1220', border: '1px solid #1e293b', borderLeft: `3px solid ${riskColor(r.severity)}`, borderRadius: 8, padding: '8px 12px' }}>
+                  <div key={i} style={{ background: 'var(--c-0b1220)', border: '1px solid var(--c-1e293b)', borderLeft: `3px solid ${riskColor(r.severity)}`, borderRadius: 8, padding: '8px 12px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 9.5, fontWeight: 700, color: riskColor(r.severity), textTransform: 'uppercase' }}>{r.severity}</span>
-                      <span style={{ color: '#f1f5f9', fontWeight: 600, fontSize: 12.5 }}>{r.title}</span>
+                      <span style={{ color: 'var(--c-f1f5f9)', fontWeight: 600, fontSize: 12.5 }}>{r.title}</span>
                       {(r.categories || []).map((c, j) => (
-                        <span key={j} style={{ fontSize: 9.5, color: '#94a3b8', background: '#1e293b', borderRadius: 4, padding: '0 6px' }}>{c}</span>
+                        <span key={j} style={{ fontSize: 9.5, color: 'var(--c-94a3b8)', background: 'var(--c-1e293b)', borderRadius: 4, padding: '0 6px' }}>{c}</span>
                       ))}
                     </div>
-                    {r.detail && <div style={{ color: '#94a3b8', fontSize: 11.5, marginTop: 3, lineHeight: 1.45 }}>{r.detail}</div>}
+                    {r.detail && <div style={{ color: 'var(--c-94a3b8)', fontSize: 11.5, marginTop: 3, lineHeight: 1.45 }}>{r.detail}</div>}
                   </div>
                 ))}
               </div>
@@ -216,16 +216,16 @@ function ExecutiveBriefing({ briefing, loading, error, canGenerate, analyzedCoun
 
           {(roadmap.now?.length || roadmap.next?.length || roadmap.later?.length) > 0 && (
             <div>
-              <div style={{ color: '#94a3b8', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ color: 'var(--c-94a3b8)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <ClipboardList size={13} /> Unified roadmap
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10 }}>
                 {buckets.map((b) => (
-                  <div key={b.key} style={{ background: '#0b1220', border: '1px solid #1e293b', borderRadius: 8, padding: '10px 12px' }}>
+                  <div key={b.key} style={{ background: 'var(--c-0b1220)', border: '1px solid var(--c-1e293b)', borderRadius: 8, padding: '10px 12px' }}>
                     <div style={{ color: b.color, fontSize: 11, fontWeight: 700, marginBottom: 6 }}>{b.label}</div>
-                    <ul style={{ margin: 0, paddingLeft: 16, color: '#cbd5e1', fontSize: 11.5, lineHeight: 1.5 }}>
+                    <ul style={{ margin: 0, paddingLeft: 16, color: 'var(--c-cbd5e1)', fontSize: 11.5, lineHeight: 1.5 }}>
                       {(roadmap[b.key] || []).slice(0, 5).map((a, i) => <li key={i} style={{ marginBottom: 4 }}>{a}</li>)}
-                      {!(roadmap[b.key] || []).length && <li style={{ color: '#475569', listStyle: 'none', marginLeft: -12 }}>—</li>}
+                      {!(roadmap[b.key] || []).length && <li style={{ color: 'var(--c-475569)', listStyle: 'none', marginLeft: -12 }}>—</li>}
                     </ul>
                   </div>
                 ))}
@@ -234,12 +234,12 @@ function ExecutiveBriefing({ briefing, loading, error, canGenerate, analyzedCoun
           )}
 
           {briefing.biggest_opportunity && (
-            <div style={{ background: '#052e1633', border: '1px solid #16653455', borderRadius: 8, padding: '8px 12px', color: '#86efac', fontSize: 12 }}>
+            <div style={{ background: '#052e1633', border: '1px solid #16653455', borderRadius: 8, padding: '8px 12px', color: 'var(--c-86efac)', fontSize: 12 }}>
               <span style={{ fontWeight: 700 }}>Biggest opportunity: </span>{briefing.biggest_opportunity}
             </div>
           )}
           {briefing._meta?.generated_at && (
-            <div style={{ color: '#475569', fontSize: 10.5 }}>
+            <div style={{ color: 'var(--c-475569)', fontSize: 10.5 }}>
               Synthesized {timeAgo(briefing._meta.generated_at)} · {briefing._meta.model} · {briefing._meta.analyzed_count} categories
             </div>
           )}
@@ -351,23 +351,23 @@ export default function AIInsightsDashboard({ onNavigate }) {
   const missingCount = modules.filter((m) => !m.available).length;
 
   return (
-    <div style={{ ...panel, padding: 18, background: 'linear-gradient(180deg,#0b1220,#0f172a)' }}>
+    <div style={{ ...panel, padding: 18, background: 'linear-gradient(180deg,var(--c-0b1220),var(--c-0f172a))' }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
         <div style={{ width: 38, height: 38, borderRadius: 10, background: 'linear-gradient(135deg,#6366f1,#a855f7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Brain size={20} style={{ color: '#fff' }} />
         </div>
         <div style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ color: '#f8fafc', fontWeight: 800, fontSize: 17 }}>AI Insights — Estate-wide Intelligence</div>
-          <div style={{ color: '#94a3b8', fontSize: 12 }}>Latest AI analysis from every category, synthesized into one view</div>
+          <div style={{ color: 'var(--c-f8fafc)', fontWeight: 800, fontSize: 17 }}>AI Insights — Estate-wide Intelligence</div>
+          <div style={{ color: 'var(--c-94a3b8)', fontSize: 12 }}>Latest AI analysis from every category, synthesized into one view</div>
         </div>
 
         {/* Estate AI health */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#0b1220', border: '1px solid #1e293b', borderRadius: 12, padding: '8px 14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--c-0b1220)', border: '1px solid var(--c-1e293b)', borderRadius: 12, padding: '8px 14px' }}>
           <ScoreRing score={eh.score ?? null} color={scoreColor(eh.score)} size={50} />
           <div>
-            <div style={{ color: '#f1f5f9', fontSize: 12, fontWeight: 700 }}>Estate AI Health</div>
-            <div style={{ color: '#94a3b8', fontSize: 11 }}>{eh.analyzed_count || 0}/{eh.total_count || 0} categories analyzed</div>
+            <div style={{ color: 'var(--c-f1f5f9)', fontSize: 12, fontWeight: 700 }}>Estate AI Health</div>
+            <div style={{ color: 'var(--c-94a3b8)', fontSize: 11 }}>{eh.analyzed_count || 0}/{eh.total_count || 0} categories analyzed</div>
             {eh.high_risk_count > 0 && (
               <div style={{ color: '#f97316', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
                 <AlertTriangle size={11} /> {eh.high_risk_count} high-risk
@@ -380,21 +380,21 @@ export default function AIInsightsDashboard({ onNavigate }) {
           <button
             onClick={generateAll}
             disabled={!!genAll || missingCount === 0}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, background: genAll || missingCount === 0 ? '#1e293b' : '#6366f1', color: genAll || missingCount === 0 ? '#64748b' : '#fff', border: 'none', borderRadius: 8, padding: '8px 12px', fontSize: 12, fontWeight: 700, cursor: genAll || missingCount === 0 ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, background: genAll || missingCount === 0 ? 'var(--c-1e293b)' : '#6366f1', color: genAll || missingCount === 0 ? 'var(--c-64748b)' : '#fff', border: 'none', borderRadius: 8, padding: '8px 12px', fontSize: 12, fontWeight: 700, cursor: genAll || missingCount === 0 ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
           >
             {genAll ? <><Loader2 size={14} className="animate-spin" /> {genAll.done}/{genAll.total}…</> : <><Sparkles size={14} /> Analyze all{missingCount ? ` (${missingCount})` : ''}</>}
           </button>
           {genAll && (
-            <button onClick={() => { cancelRef.current = true; }} style={{ background: '#1e293b', color: '#94a3b8', border: '1px solid #334155', borderRadius: 8, padding: '8px 10px', fontSize: 12, cursor: 'pointer' }}>Stop</button>
+            <button onClick={() => { cancelRef.current = true; }} style={{ background: 'var(--c-1e293b)', color: 'var(--c-94a3b8)', border: '1px solid var(--c-334155)', borderRadius: 8, padding: '8px 10px', fontSize: 12, cursor: 'pointer' }}>Stop</button>
           )}
-          <button onClick={() => { setLoading(true); load(); }} title="Refresh" style={{ background: '#1e293b', color: '#94a3b8', border: '1px solid #334155', borderRadius: 8, padding: '8px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+          <button onClick={() => { setLoading(true); load(); }} title="Refresh" style={{ background: 'var(--c-1e293b)', color: 'var(--c-94a3b8)', border: '1px solid var(--c-334155)', borderRadius: 8, padding: '8px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
             <RefreshCw size={14} />
           </button>
         </div>
       </div>
 
       {error && (
-        <div style={{ color: '#fca5a5', fontSize: 12, background: '#7f1d1d33', border: '1px solid #7f1d1d', borderRadius: 8, padding: '8px 12px', marginBottom: 12 }}>
+        <div style={{ color: 'var(--c-fca5a5)', fontSize: 12, background: '#7f1d1d33', border: '1px solid var(--c-7f1d1d)', borderRadius: 8, padding: '8px 12px', marginBottom: 12 }}>
           Couldn't load AI insights: {error}
         </div>
       )}
@@ -413,7 +413,7 @@ export default function AIInsightsDashboard({ onNavigate }) {
 
       {/* Category cards */}
       {loading && !data ? (
-        <div style={{ color: '#64748b', fontSize: 13, padding: '20px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ color: 'var(--c-64748b)', fontSize: 13, padding: '20px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
           <Loader2 size={16} className="animate-spin" /> Loading AI insights…
         </div>
       ) : (

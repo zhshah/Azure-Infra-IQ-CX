@@ -83,7 +83,7 @@ function TagRow({ tag, index, tagKeyOptions, onUpdate, onRemove }) {
           compact
         />
       </div>
-      <span style={{ color: '#475569', fontSize: 13, fontWeight: 600, paddingBottom: 8 }}>=</span>
+      <span style={{ color: 'var(--c-475569)', fontSize: 13, fontWeight: 600, paddingBottom: 8 }}>=</span>
       <div style={{ flex: 3, minWidth: 0 }}>
         <SearchableSelect
           value={tag.value}
@@ -98,11 +98,11 @@ function TagRow({ tag, index, tagKeyOptions, onUpdate, onRemove }) {
       <button
         onClick={() => onRemove(index)}
         style={{
-          background: 'none', border: 'none', color: '#475569', cursor: 'pointer',
+          background: 'none', border: 'none', color: 'var(--c-475569)', cursor: 'pointer',
           padding: 4, display: 'flex', alignItems: 'center', flexShrink: 0, marginBottom: 4,
         }}
         onMouseEnter={e => e.currentTarget.style.color = '#ef4444'}
-        onMouseLeave={e => e.currentTarget.style.color = '#475569'}
+        onMouseLeave={e => e.currentTarget.style.color = 'var(--c-475569)'}
       >
         <X size={14} />
       </button>
@@ -247,18 +247,18 @@ export default function AdvancedFilterBar({ filters = EMPTY_FILTERS, onChange, f
     .map(e => ({ value: e, label: e }))
 
   return (
-    <div style={{ background: '#111827', border: '1px solid rgba(30, 41, 59, 0.7)', borderRadius: 10, marginBottom: 16, overflow: 'hidden' }}>
+    <div style={{ background: 'var(--c-111827)', border: '1px solid rgba(var(--rgb-slate), 0.7)', borderRadius: 10, marginBottom: 16, overflow: 'hidden' }}>
       {/* Header row */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '10px 16px',
-        borderBottom: collapsed ? 'none' : '1px solid rgba(30, 41, 59, 0.5)',
+        borderBottom: collapsed ? 'none' : '1px solid rgba(var(--rgb-slate), 0.5)',
       }}>
         <button
           onClick={() => setCollapsed(c => !c)}
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
-            background: 'none', border: 'none', color: '#94a3b8',
+            background: 'none', border: 'none', color: 'var(--c-94a3b8)',
             cursor: 'pointer', fontSize: 13, fontWeight: 600,
           }}
         >
@@ -284,8 +284,8 @@ export default function AdvancedFilterBar({ filters = EMPTY_FILTERS, onChange, f
               style={{
                 display: 'flex', alignItems: 'center', gap: 5,
                 padding: '5px 12px', borderRadius: 7, fontSize: 11, fontWeight: 500,
-                background: 'transparent', border: '1px solid #1e293b',
-                color: '#94a3b8', cursor: 'pointer', transition: 'all 0.15s',
+                background: 'transparent', border: '1px solid var(--c-1e293b)',
+                color: 'var(--c-94a3b8)', cursor: 'pointer', transition: 'all 0.15s',
               }}
             >
               <FolderOpen size={12} /> Presets
@@ -293,18 +293,18 @@ export default function AdvancedFilterBar({ filters = EMPTY_FILTERS, onChange, f
             {showPresetMenu && (
               <div style={{
                 position: 'absolute', top: '100%', right: 0, zIndex: 300,
-                background: '#111827', border: '1px solid rgba(30, 41, 59, 0.7)',
+                background: 'var(--c-111827)', border: '1px solid rgba(var(--rgb-slate), 0.7)',
                 borderRadius: 8, minWidth: 200,
                 boxShadow: '0 8px 32px rgba(0,0,0,0.5)', marginTop: 4,
                 animation: 'dropdown-in 0.15s ease-out',
               }}>
                 {Object.keys(presets).length === 0 && (
-                  <div style={{ padding: '10px 14px', color: '#475569', fontSize: 12 }}>No saved presets</div>
+                  <div style={{ padding: '10px 14px', color: 'var(--c-475569)', fontSize: 12 }}>No saved presets</div>
                 )}
                 {Object.keys(presets).map(name => (
                   <div key={name} style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '7px 14px', cursor: 'pointer', borderBottom: '1px solid rgba(30, 41, 59, 0.3)',
+                    padding: '7px 14px', cursor: 'pointer', borderBottom: '1px solid rgba(var(--rgb-slate), 0.3)',
                   }}>
                     <span onClick={() => loadPreset(name)} style={{ color: '#0078d4', fontSize: 12, flex: 1, cursor: 'pointer' }}>{name}</span>
                     <button onClick={() => deletePreset(name)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 2, display: 'flex' }}>
@@ -312,7 +312,7 @@ export default function AdvancedFilterBar({ filters = EMPTY_FILTERS, onChange, f
                     </button>
                   </div>
                 ))}
-                <div style={{ borderTop: '1px solid rgba(30, 41, 59, 0.5)', padding: '8px 14px' }}>
+                <div style={{ borderTop: '1px solid rgba(var(--rgb-slate), 0.5)', padding: '8px 14px' }}>
                   {showSaveInput ? (
                     <div style={{ display: 'flex', gap: 6 }}>
                       <input
@@ -320,8 +320,8 @@ export default function AdvancedFilterBar({ filters = EMPTY_FILTERS, onChange, f
                         placeholder="Preset name…"
                         onKeyDown={e => { if (e.key === 'Enter') savePreset() }}
                         style={{
-                          flex: 1, background: '#0c1220', border: '1px solid #1e293b',
-                          borderRadius: 6, color: '#e2e8f0', padding: '5px 10px', fontSize: 12,
+                          flex: 1, background: 'var(--c-0c1220)', border: '1px solid var(--c-1e293b)',
+                          borderRadius: 6, color: 'var(--c-e2e8f0)', padding: '5px 10px', fontSize: 12,
                         }}
                         autoFocus
                       />
@@ -350,7 +350,7 @@ export default function AdvancedFilterBar({ filters = EMPTY_FILTERS, onChange, f
                 display: 'flex', alignItems: 'center', gap: 5,
                 padding: '5px 12px', borderRadius: 7, fontSize: 11, fontWeight: 500,
                 background: 'transparent', border: '1px solid rgba(239, 68, 68, 0.3)',
-                color: '#f87171', cursor: 'pointer', transition: 'all 0.15s',
+                color: 'var(--c-f87171)', cursor: 'pointer', transition: 'all 0.15s',
               }}
             >
               <X size={12} /> Clear All
@@ -379,7 +379,7 @@ export default function AdvancedFilterBar({ filters = EMPTY_FILTERS, onChange, f
         <div style={{
           display: 'flex', flexWrap: 'wrap', gap: 6,
           padding: '8px 16px',
-          borderBottom: collapsed ? 'none' : '1px solid rgba(30, 41, 59, 0.4)',
+          borderBottom: collapsed ? 'none' : '1px solid rgba(var(--rgb-slate), 0.4)',
         }}>
           {pills.map((p, i) => <FilterPill key={i} label={p.label} onRemove={p.clear} color={p.color} />)}
         </div>
@@ -450,16 +450,16 @@ export default function AdvancedFilterBar({ filters = EMPTY_FILTERS, onChange, f
           {/* Row 2: text search + environment + cost range */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12, marginBottom: 14 }}>
             <div>
-              <label style={{ color: '#64748b', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 4 }}>Resource Name</label>
+              <label style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 4 }}>Resource Name</label>
               <div style={{ position: 'relative' }}>
-                <Search size={12} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#475569', pointerEvents: 'none' }} />
+                <Search size={12} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--c-475569)', pointerEvents: 'none' }} />
                 <input
                   type="text" value={pending.resource_name || ''}
                   onChange={e => update('resource_name', e.target.value)}
                   placeholder="Search by name…"
                   style={{
-                    width: '100%', background: '#0c1220', border: '1px solid #1e293b',
-                    borderRadius: 7, color: '#e2e8f0', padding: '7px 10px 7px 28px',
+                    width: '100%', background: 'var(--c-0c1220)', border: '1px solid var(--c-1e293b)',
+                    borderRadius: 7, color: 'var(--c-e2e8f0)', padding: '7px 10px 7px 28px',
                     fontSize: 12, boxSizing: 'border-box', outline: 'none',
                   }}
                 />
@@ -474,27 +474,27 @@ export default function AdvancedFilterBar({ filters = EMPTY_FILTERS, onChange, f
               compact
             />
             <div>
-              <label style={{ color: '#64748b', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 4 }}>Cost Min ($)</label>
+              <label style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 4 }}>Cost Min ($)</label>
               <input
                 type="number" min="0" value={pending.cost_min || ''}
                 onChange={e => update('cost_min', e.target.value)}
                 placeholder="0"
                 style={{
-                  width: '100%', background: '#0c1220', border: '1px solid #1e293b',
-                  borderRadius: 7, color: '#e2e8f0', padding: '7px 10px',
+                  width: '100%', background: 'var(--c-0c1220)', border: '1px solid var(--c-1e293b)',
+                  borderRadius: 7, color: 'var(--c-e2e8f0)', padding: '7px 10px',
                   fontSize: 12, boxSizing: 'border-box', outline: 'none',
                 }}
               />
             </div>
             <div>
-              <label style={{ color: '#64748b', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 4 }}>Cost Max ($)</label>
+              <label style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 4 }}>Cost Max ($)</label>
               <input
                 type="number" min="0" value={pending.cost_max || ''}
                 onChange={e => update('cost_max', e.target.value)}
                 placeholder="No limit"
                 style={{
-                  width: '100%', background: '#0c1220', border: '1px solid #1e293b',
-                  borderRadius: 7, color: '#e2e8f0', padding: '7px 10px',
+                  width: '100%', background: 'var(--c-0c1220)', border: '1px solid var(--c-1e293b)',
+                  borderRadius: 7, color: 'var(--c-e2e8f0)', padding: '7px 10px',
                   fontSize: 12, boxSizing: 'border-box', outline: 'none',
                 }}
               />
@@ -505,7 +505,7 @@ export default function AdvancedFilterBar({ filters = EMPTY_FILTERS, onChange, f
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
               <Tag size={13} style={{ color: '#a855f7' }} />
-              <label style={{ color: '#64748b', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Tag Filters</label>
+              <label style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Tag Filters</label>
               <button
                 onClick={addTagRow}
                 style={{
@@ -532,7 +532,7 @@ export default function AdvancedFilterBar({ filters = EMPTY_FILTERS, onChange, f
               />
             ))}
             {(pending.tags || []).length === 0 && (
-              <div style={{ color: '#475569', fontSize: 11, fontStyle: 'italic', paddingLeft: 23 }}>
+              <div style={{ color: 'var(--c-475569)', fontSize: 11, fontStyle: 'italic', paddingLeft: 23 }}>
                 No tag filters active — click "Add Tag" to filter by Azure resource tags
               </div>
             )}

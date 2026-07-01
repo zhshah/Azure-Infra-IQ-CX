@@ -103,8 +103,8 @@ p, span, div, li, td, th, .mat-cell, .mat-header-cell {
 
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #111827; }
-::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+::-webkit-scrollbar-track { background: var(--c-111827); }
+::-webkit-scrollbar-thumb { background: var(--c-374151); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
 
 /* ── Angular Material dark-mode specific ── */

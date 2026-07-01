@@ -21,13 +21,13 @@ export const RADIUS = {
 
 // ─── Background Colors (Enterprise dark palette) ──────────────────────────────
 export const BG = {
-  page:     '#080c14',   // deepest page background
-  sidebar:  '#0c1220',   // sidebar — slightly lighter than page
-  card:     '#111827',   // primary card (gray-900)
-  cardAlt:  '#0f172a',   // nested/alternative surface (slate-900)
-  surface:  '#1a2332',   // elevated surface (hover states)
-  header:   '#0c1220',   // header bar — matches sidebar
-  modal:    '#111827',   // modal/drawer bg
+  page:     'var(--c-080c14)',   // deepest page background
+  sidebar:  'var(--c-0c1220)',   // sidebar — slightly lighter than page
+  card:     'var(--c-111827)',   // primary card (gray-900)
+  cardAlt:  'var(--c-0f172a)',   // nested/alternative surface (slate-900)
+  surface:  'var(--c-1a2332)',   // elevated surface (hover states)
+  header:   'var(--c-0c1220)',   // header bar — matches sidebar
+  modal:    'var(--c-111827)',   // modal/drawer bg
 };
 
 // ─── Brand Colors ─────────────────────────────────────────────────────────────
@@ -42,19 +42,19 @@ export const BRAND = {
 
 // ─── Border Colors ────────────────────────────────────────────────────────────
 export const BORDER = {
-  default:  '#1e293b',   // standard border (slate-800)
+  default:  'var(--c-1e293b)',   // standard border (slate-800)
   subtle:   '#1e293b80', // 50% opacity variant
-  strong:   '#334155',   // emphasized border (slate-700)
+  strong:   'var(--c-334155)',   // emphasized border (slate-700)
   accent:   (color) => `${color}40`, // 25% opacity accent
 };
 
 // ─── Text Colors ──────────────────────────────────────────────────────────────
 export const TEXT = {
-  primary:   '#f1f5f9',  // headings, primary text (slate-100)
-  secondary: '#94a3b8',  // body text, descriptions (slate-400)
-  muted:     '#64748b',  // secondary labels (slate-500)
-  dim:       '#475569',  // tertiary, taglines (slate-600)
-  disabled:  '#334155',  // disabled state (slate-700)
+  primary:   'var(--c-f1f5f9)',  // headings, primary text (slate-100)
+  secondary: 'var(--c-94a3b8)',  // body text, descriptions (slate-400)
+  muted:     'var(--c-64748b)',  // secondary labels (slate-500)
+  dim:       'var(--c-475569)',  // tertiary, taglines (slate-600)
+  disabled:  'var(--c-334155)',  // disabled state (slate-700)
 };
 
 // ─── Status / Severity Colors ─────────────────────────────────────────────────
@@ -82,6 +82,6 @@ export const KPI = {
 export const BUTTON = {
   primaryBg:      '#0078d4',  // Azure blue
   primaryHover:   '#2b88d8',  // Azure lighter
-  ghostBg:       '#1e293b',  // slate-800
-  ghostHover:    '#334155',  // slate-700
+  ghostBg:       'var(--c-1e293b)',  // slate-800
+  ghostHover:    'var(--c-334155)',  // slate-700
 };

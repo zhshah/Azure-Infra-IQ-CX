@@ -36,12 +36,12 @@ import FinOpsAIPanel from './FinOpsAIPanel'
 
 // ── Design tokens (consistent with rest of app) ───────────────────────────────
 const C = {
-  bg:        '#0a0f1e',
-  surface:   '#111827',
-  border:    '#1e293b',
+  bg:        'var(--c-0a0f1e)',
+  surface:   'var(--c-111827)',
+  border:    'var(--c-1e293b)',
   accent:    '#3b82f6',
-  text:      '#f1f5f9',
-  muted:     '#64748b',
+  text:      'var(--c-f1f5f9)',
+  muted:     'var(--c-64748b)',
   green:     '#10b981',
   red:       '#ef4444',
   orange:    '#f97316',
@@ -140,7 +140,7 @@ function DateTick({ x, y, payload }) {
 function CostTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null
   return (
-    <div style={{ background: '#0f172a', border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>
+    <div style={{ background: 'var(--c-0f172a)', border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>
       <div style={{ color: C.muted, marginBottom: 6, fontWeight: 600 }}>{label}</div>
       {payload.map((p, i) => (
         <div key={i} style={{ color: p.color, marginBottom: 2 }}>
@@ -209,7 +209,7 @@ function AnomalyList({ anomalies }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 280, overflowY: 'auto' }}>
       {anomalies.map(a => (
         <div key={a.anomaly_id} style={{
-          background: '#0f172a', border: `1px solid ${severityColor(a.severity)}33`,
+          background: 'var(--c-0f172a)', border: `1px solid ${severityColor(a.severity)}33`,
           borderLeft: `3px solid ${severityColor(a.severity)}`,
           borderRadius: 8, padding: '10px 14px',
         }}>
@@ -255,7 +255,7 @@ function ResourceTable({ items, total, page, totalPages, onPageChange, onSort, s
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
-            <tr style={{ background: '#0f172a' }}>
+            <tr style={{ background: 'var(--c-0f172a)' }}>
               <Th col="name">Resource</Th>
               <Th col="group">Resource Group</Th>
               <th style={{ padding: '10px 12px', color: C.muted, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', borderBottom: `1px solid ${C.border}` }}>Type</th>
@@ -446,8 +446,8 @@ export default function FinOpsWarehouse() {
 
       {/* ── Freshness Banner ─────────────────────────────────────────── */}
       <div style={{
-        background: isNeverRun ? '#1c1a0a' : isRunning ? '#0a1a2e' : freshness.data_age_hours > 26 ? '#1c100a' : '#0a1a0e',
-        border: `1px solid ${isNeverRun ? '#5c4700' : isRunning ? C.accent : freshness.data_age_hours > 26 ? '#7c3a00' : '#166534'}`,
+        background: isNeverRun ? 'var(--c-1c1a0a)' : isRunning ? 'var(--c-0a1a2e)' : freshness.data_age_hours > 26 ? 'var(--c-1c100a)' : 'var(--c-0a1a0e)',
+        border: `1px solid ${isNeverRun ? 'var(--c-5c4700)' : isRunning ? C.accent : freshness.data_age_hours > 26 ? 'var(--c-7c3a00)' : 'var(--c-166534)'}`,
         borderRadius: 10, padding: '12px 20px', marginBottom: 20,
         display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10,
       }}>
@@ -491,7 +491,7 @@ export default function FinOpsWarehouse() {
 
       {/* ── Error state ───────────────────────────────────────────────── */}
       {error && (
-        <div style={{ background: '#2a0a0a', border: `1px solid ${C.red}44`, borderRadius: 8, padding: '12px 16px', marginBottom: 16, color: C.red, fontSize: 13 }}>
+        <div style={{ background: 'var(--c-2a0a0a)', border: `1px solid ${C.red}44`, borderRadius: 8, padding: '12px 16px', marginBottom: 16, color: C.red, fontSize: 13 }}>
           <AlertCircle size={14} style={{ marginRight: 8 }} /> {error}
         </div>
       )}
@@ -503,7 +503,7 @@ export default function FinOpsWarehouse() {
       {loading && !dashboard ? (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12, marginBottom: 24 }}>
           {[0, 1, 2, 3, 4].map(i => (
-            <Card key={i} style={{ height: 90, background: '#0f172a', animation: 'pulse 1.5s ease-in-out infinite' }} />
+            <Card key={i} style={{ height: 90, background: 'var(--c-0f172a)', animation: 'pulse 1.5s ease-in-out infinite' }} />
           ))}
         </div>
       ) : (
@@ -641,7 +641,7 @@ export default function FinOpsWarehouse() {
                       width={100} axisLine={false} tickLine={false}
                       tick={{ fill: C.muted, fontSize: 10 }}
                     />
-                    <Tooltip formatter={(v) => [fmtUsd(v), 'Cost']} contentStyle={{ background: '#0f172a', border: `1px solid ${C.border}` }} />
+                    <Tooltip formatter={(v) => [fmtUsd(v), 'Cost']} contentStyle={{ background: 'var(--c-0f172a)', border: `1px solid ${C.border}` }} />
                     <Bar dataKey="cost" radius={[0, 4, 4, 0]}>
                       {byService.map((entry, i) => (
                         <Cell key={i} fill={serviceColor(entry.service_family)} />
@@ -685,7 +685,7 @@ export default function FinOpsWarehouse() {
                       tick={{ fill: C.muted, fontSize: 9 }}
                       width={50}
                     />
-                    <Tooltip formatter={(v) => [fmtUsd(v), 'Cost']} contentStyle={{ background: '#0f172a', border: `1px solid ${C.border}` }} />
+                    <Tooltip formatter={(v) => [fmtUsd(v), 'Cost']} contentStyle={{ background: 'var(--c-0f172a)', border: `1px solid ${C.border}` }} />
                     <Bar dataKey="cost" radius={[4, 4, 0, 0]}>
                       {envData.map((_, i) => (
                         <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
@@ -713,7 +713,7 @@ export default function FinOpsWarehouse() {
                   />
                   <Tooltip
                     formatter={(v, n) => [fmtUsd(v), n]}
-                    contentStyle={{ background: '#0f172a', border: `1px solid ${C.border}` }}
+                    contentStyle={{ background: 'var(--c-0f172a)', border: `1px solid ${C.border}` }}
                   />
                   <Legend wrapperStyle={{ fontSize: 11, color: C.muted }} />
                   {svcFamilies.map((svc, i) => (

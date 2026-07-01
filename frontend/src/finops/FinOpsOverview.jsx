@@ -26,15 +26,15 @@ const fmtDate = d => (d ? d.slice(5) : '')   // "MM-DD" from "YYYY-MM-DD"
 function KPICard({ label, value, sub, icon: Icon, color = '#3b82f6', accent }) {
   return (
     <div style={{
-      background: '#111827', border: `1px solid ${accent || '#1e293b'}`,
+      background: 'var(--c-111827)', border: `1px solid ${accent || 'var(--c-1e293b)'}`,
       borderRadius: 10, padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 5,
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ color: '#64748b', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</span>
+        <span style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</span>
         {Icon && <Icon size={15} style={{ color }} />}
       </div>
-      <div style={{ color: '#f1f5f9', fontSize: 20, fontWeight: 700 }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: '#64748b' }}>{sub}</div>}
+      <div style={{ color: 'var(--c-f1f5f9)', fontSize: 20, fontWeight: 700 }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: 'var(--c-64748b)' }}>{sub}</div>}
     </div>
   )
 }
@@ -43,8 +43,8 @@ function KPICard({ label, value, sub, icon: Icon, color = '#3b82f6', accent }) {
 function SectionHeader({ title, sub }) {
   return (
     <div style={{ marginBottom: 12 }}>
-      <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 700 }}>{title}</div>
-      {sub && <div style={{ color: '#475569', fontSize: 11, marginTop: 2 }}>{sub}</div>}
+      <div style={{ color: 'var(--c-e2e8f0)', fontSize: 13, fontWeight: 700 }}>{title}</div>
+      {sub && <div style={{ color: 'var(--c-475569)', fontSize: 11, marginTop: 2 }}>{sub}</div>}
     </div>
   )
 }
@@ -52,18 +52,18 @@ function SectionHeader({ title, sub }) {
 /* ── Mini loading spinner ── */
 function Spinner() {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '16px 0', color: '#475569', fontSize: 12 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '16px 0', color: 'var(--c-475569)', fontSize: 12 }}>
       <RefreshCw size={14} className="animate-spin" style={{ color: '#3b82f6' }} /> Loading…
     </div>
   )
 }
 
 /* ── Impact badge ── */
-const IMPACT_COLOR = { High: '#ef4444', Medium: '#f59e0b', Low: '#94a3b8' }
+const IMPACT_COLOR = { High: '#ef4444', Medium: '#f59e0b', Low: 'var(--c-94a3b8)' }
 function ImpactBadge({ impact }) {
   return (
     <span style={{
-      background: IMPACT_COLOR[impact] + '22', color: IMPACT_COLOR[impact] || '#94a3b8',
+      background: IMPACT_COLOR[impact] + '22', color: IMPACT_COLOR[impact] || 'var(--c-94a3b8)',
       borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 600,
     }}>{impact || '—'}</span>
   )
@@ -194,10 +194,10 @@ export default function FinOpsOverview() {
     return (
       <div style={{ marginBottom: 10 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-          <span style={{ color: '#94a3b8', fontSize: 11 }}>{label}</span>
+          <span style={{ color: 'var(--c-94a3b8)', fontSize: 11 }}>{label}</span>
           <span style={{ color: c, fontSize: 11, fontWeight: 700 }}>{fmtPct(pct)}</span>
         </div>
-        <div style={{ height: 5, background: '#1e293b', borderRadius: 4, overflow: 'hidden' }}>
+        <div style={{ height: 5, background: 'var(--c-1e293b)', borderRadius: 4, overflow: 'hidden' }}>
           <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: c, borderRadius: 4, transition: 'width 0.6s' }} />
         </div>
       </div>
@@ -208,7 +208,7 @@ export default function FinOpsOverview() {
   if (loading) return <OverviewSkeleton />
 
   if (error) return (
-    <div style={{ background: '#1a0e0e', border: '1px solid #7f1d1d', borderRadius: 10, padding: 20, color: '#fca5a5', display: 'flex', gap: 10 }}>
+    <div style={{ background: '#1a0e0e', border: '1px solid var(--c-7f1d1d)', borderRadius: 10, padding: 20, color: 'var(--c-fca5a5)', display: 'flex', gap: 10 }}>
       <AlertCircle size={18} />
       <div>
         <div style={{ fontWeight: 600 }}>Failed to load overview</div>
@@ -260,23 +260,23 @@ export default function FinOpsOverview() {
       {/* ══ HEADER ══ */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h2 style={{ color: '#f1f5f9', fontSize: 20, fontWeight: 700, margin: 0 }}>FinOps Overview</h2>
-          <p style={{ color: '#64748b', fontSize: 12, margin: 0 }}>
+          <h2 style={{ color: 'var(--c-f1f5f9)', fontSize: 20, fontWeight: 700, margin: 0 }}>FinOps Overview</h2>
+          <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: 0 }}>
             {kpi?.subscription_count} subscriptions · {kpi?.total_resource_count} resources · All data from Azure Cost Management
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 10, color: '#475569', background: '#0f172a', border: '1px solid #1e293b', borderRadius: 4, padding: '2px 6px' }}>
+          <span style={{ fontSize: 10, color: 'var(--c-475569)', background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 4, padding: '2px 6px' }}>
             {kpi?.data_source === 'dashboard_cache' ? '⚡ cached' : '☁ live'}
           </span>
           {snapAsOf && (
-            <span title="Latest persisted cost snapshot" style={{ fontSize: 10, color: '#64748b' }}>
+            <span title="Latest persisted cost snapshot" style={{ fontSize: 10, color: 'var(--c-64748b)' }}>
               as of {new Date(snapAsOf).toLocaleString()}
             </span>
           )}
           <button onClick={refreshLive} disabled={liveRefreshing} style={{
-            background: liveRefreshing ? '#1e293b' : '#0c1f33', border: `1px solid ${liveRefreshing ? '#334155' : '#1d4ed8'}`, borderRadius: 6,
-            padding: '6px 12px', cursor: liveRefreshing ? 'not-allowed' : 'pointer', color: liveRefreshing ? '#94a3b8' : '#60a5fa', fontSize: 11,
+            background: liveRefreshing ? 'var(--c-1e293b)' : 'var(--c-0c1f33)', border: `1px solid ${liveRefreshing ? 'var(--c-334155)' : '#1d4ed8'}`, borderRadius: 6,
+            padding: '6px 12px', cursor: liveRefreshing ? 'not-allowed' : 'pointer', color: liveRefreshing ? 'var(--c-94a3b8)' : '#60a5fa', fontSize: 11,
             display: 'flex', alignItems: 'center', gap: 5, opacity: liveRefreshing ? 0.7 : 1,
           }}>
             {liveRefreshing ? <RefreshCw size={12} className="animate-spin" /> : <RefreshCw size={12} />}
@@ -286,8 +286,8 @@ export default function FinOpsOverview() {
             onXlsx={() => finopsApi.downloadReport()}
             report={aiReport} />
           <button onClick={load} style={{
-            background: '#1e293b', border: '1px solid #334155', borderRadius: 6,
-            padding: '6px 10px', cursor: 'pointer', color: '#94a3b8', fontSize: 11,
+            background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6,
+            padding: '6px 10px', cursor: 'pointer', color: 'var(--c-94a3b8)', fontSize: 11,
             display: 'flex', alignItems: 'center', gap: 5,
           }}>
             <RefreshCw size={12} /> Refresh
@@ -298,26 +298,26 @@ export default function FinOpsOverview() {
       {/* ── Download Error Banner ── */}
       {downloadErr && (
         <div style={{
-          background: '#1a0e0e', border: '1px solid #7f1d1d', borderRadius: 8,
+          background: '#1a0e0e', border: '1px solid var(--c-7f1d1d)', borderRadius: 8,
           padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10,
         }}>
-          <AlertCircle size={15} style={{ color: '#f87171' }} />
-          <span style={{ color: '#fca5a5', fontSize: 12 }}>{downloadErr}</span>
-          <button onClick={() => setDownloadErr(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 11 }}>✕</button>
+          <AlertCircle size={15} style={{ color: 'var(--c-f87171)' }} />
+          <span style={{ color: 'var(--c-fca5a5)', fontSize: 12 }}>{downloadErr}</span>
+          <button onClick={() => setDownloadErr(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--c-64748b)', cursor: 'pointer', fontSize: 11 }}>✕</button>
         </div>
       )}
 
       {/* ── Anomaly Banner ── */}
       {(kpi?.anomaly_count > 0) && (
         <div style={{
-          background: '#1a0e0e', border: '1px solid #7f1d1d', borderRadius: 8,
+          background: '#1a0e0e', border: '1px solid var(--c-7f1d1d)', borderRadius: 8,
           padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10,
         }}>
-          <AlertTriangle size={15} style={{ color: '#f87171' }} />
-          <span style={{ color: '#fca5a5', fontWeight: 600, fontSize: 13 }}>
+          <AlertTriangle size={15} style={{ color: 'var(--c-f87171)' }} />
+          <span style={{ color: 'var(--c-fca5a5)', fontWeight: 600, fontSize: 13 }}>
             {kpi.anomaly_count} cost anomal{kpi.anomaly_count === 1 ? 'y' : 'ies'} detected
           </span>
-          <span style={{ color: '#64748b', fontSize: 12 }}>— check FinOps Alerts for details</span>
+          <span style={{ color: 'var(--c-64748b)', fontSize: 12 }}>— check FinOps Alerts for details</span>
         </div>
       )}
 
@@ -329,7 +329,7 @@ export default function FinOpsOverview() {
         <KPICard label="MTD Spend" icon={DollarSign} color="#3b82f6"
           value={fmtUsd(kpi?.total_spend_mtd)}
           sub={<span style={{ color: momColor }}>{momArrow} {Math.abs(kpi?.mom_delta_pct ?? 0).toFixed(1)}% vs last month</span>}
-          accent={(kpi?.mom_delta_pct ?? 0) > 20 ? '#7f1d1d' : undefined}
+          accent={(kpi?.mom_delta_pct ?? 0) > 20 ? 'var(--c-7f1d1d)' : undefined}
         />
         <KPICard label="EOM Forecast" icon={TrendingUp} color="#8b5cf6"
           value={fmtUsd(kpi?.forecast_eom_usd)}
@@ -365,14 +365,14 @@ export default function FinOpsOverview() {
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16 }}>
 
         {/* Spend Trend */}
-        <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <SectionHeader title="30-Day Spend Trend" />
             <button onClick={() => setAccumulated(a => !a)} style={{
-              background: accumulated ? '#1e3a5f' : '#1e293b',
-              border: `1px solid ${accumulated ? '#1d4ed8' : '#334155'}`,
+              background: accumulated ? 'var(--c-1e3a5f)' : 'var(--c-1e293b)',
+              border: `1px solid ${accumulated ? '#1d4ed8' : 'var(--c-334155)'}`,
               borderRadius: 6, padding: '3px 10px', cursor: 'pointer',
-              color: accumulated ? '#93c5fd' : '#64748b', fontSize: 11,
+              color: accumulated ? '#93c5fd' : 'var(--c-64748b)', fontSize: 11,
             }}>∑ Cumulative</button>
           </div>
           {trendData.length > 0 ? (
@@ -388,18 +388,18 @@ export default function FinOpsOverview() {
                 <XAxis dataKey="date" tick={{ fill: '#475569', fontSize: 9 }} tickFormatter={fmtDate}
                   interval={Math.floor(trendData.length / 5)} />
                 <YAxis tick={{ fill: '#475569', fontSize: 9 }} tickFormatter={v => '$' + (v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v)} width={48} />
-                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 11 }}
+                <Tooltip contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }}
                   formatter={v => [fmtUsd(v, 2), accumulated ? 'Cumulative' : 'Daily']} labelFormatter={d => `Date: ${d}`} />
                 <Area type="monotone" dataKey="cost" stroke="#3b82f6" fill="url(#ovGrad)" strokeWidth={2} dot={false} />
               </AreaChart>
             </ResponsiveContainer>
           ) : (
-            <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#334155', fontSize: 12 }}>No trend data</div>
+            <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--c-334155)', fontSize: 12 }}>No trend data</div>
           )}
         </div>
 
         {/* 90-day Forecast */}
-        <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
           <SectionHeader title="90-Day Forecast"
             sub={forecast ? `Projected EOM: ${fmtUsd(forecast.forecast_eom_usd)}` : undefined} />
           {fcastData.length > 0 ? (
@@ -409,7 +409,7 @@ export default function FinOpsOverview() {
                 <XAxis dataKey="date" tick={{ fill: '#475569', fontSize: 9 }} tickFormatter={fmtDate}
                   interval={Math.floor(fcastData.length / 5)} />
                 <YAxis tick={{ fill: '#475569', fontSize: 9 }} tickFormatter={v => '$' + (v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v)} width={48} />
-                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 11 }}
+                <Tooltip contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }}
                   formatter={v => [fmtUsd(v, 2)]} labelFormatter={d => `Date: ${d}`} />
                 <Line type="monotone" dataKey="actual" stroke="#3b82f6" strokeWidth={2} dot={false} name="Actual" />
                 <Line type="monotone" dataKey="projected" stroke="#8b5cf6" strokeWidth={2} dot={false}
@@ -417,7 +417,7 @@ export default function FinOpsOverview() {
               </LineChart>
             </ResponsiveContainer>
           ) : (
-            <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#334155', fontSize: 12 }}>No forecast data</div>
+            <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--c-334155)', fontSize: 12 }}>No forecast data</div>
           )}
         </div>
       </div>
@@ -426,7 +426,7 @@ export default function FinOpsOverview() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
 
         {/* Utilization health bars */}
-        <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
           <SectionHeader title="Utilization & Health" />
           <HealthBar label="Budget Utilization" pct={budgetUtil}
             color={budgetUtil >= 90 ? '#ef4444' : budgetUtil >= 75 ? '#f97316' : '#22c55e'} />
@@ -444,9 +444,9 @@ export default function FinOpsOverview() {
                 { l: 'Expiring 30d', v: commitments.expiring_30d ?? '—' },
                 { l: 'Active RIs', v: commitments.active_ri_count ?? '—' },
               ].map(({ l, v }) => (
-                <div key={l} style={{ background: '#0f172a', borderRadius: 6, padding: '8px 10px' }}>
-                  <div style={{ color: '#64748b', fontSize: 10 }}>{l}</div>
-                  <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600 }}>{v}</div>
+                <div key={l} style={{ background: 'var(--c-0f172a)', borderRadius: 6, padding: '8px 10px' }}>
+                  <div style={{ color: 'var(--c-64748b)', fontSize: 10 }}>{l}</div>
+                  <div style={{ color: 'var(--c-e2e8f0)', fontSize: 13, fontWeight: 600 }}>{v}</div>
                 </div>
               ))}
             </div>
@@ -454,7 +454,7 @@ export default function FinOpsOverview() {
         </div>
 
         {/* Budget Alerts */}
-        <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
           <SectionHeader title="Budget Alerts"
             sub={budgetAlerts.length > 0 ? `${budgetAlerts.length} active alert${budgetAlerts.length > 1 ? 's' : ''}` : 'All budgets healthy'} />
           {budgetAlerts.length === 0 && (
@@ -467,14 +467,14 @@ export default function FinOpsOverview() {
               const pct = al.current_pct ?? al.utilization_pct ?? 0
               const color = pct >= 100 ? '#ef4444' : pct >= 90 ? '#f97316' : '#f59e0b'
               return (
-                <div key={i} style={{ background: '#0f172a', borderRadius: 6, padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div key={i} style={{ background: 'var(--c-0f172a)', borderRadius: 6, padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <div style={{ color: '#e2e8f0', fontSize: 11, fontWeight: 600 }}>{al.budget_name || al.name || 'Budget'}</div>
-                    <div style={{ color: '#64748b', fontSize: 10 }}>{al.scope || ''}</div>
+                    <div style={{ color: 'var(--c-e2e8f0)', fontSize: 11, fontWeight: 600 }}>{al.budget_name || al.name || 'Budget'}</div>
+                    <div style={{ color: 'var(--c-64748b)', fontSize: 10 }}>{al.scope || ''}</div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ color, fontSize: 12, fontWeight: 700 }}>{pct.toFixed(0)}%</div>
-                    <div style={{ color: '#475569', fontSize: 10 }}>{fmtUsd(al.current_spend)} / {fmtUsd(al.budget_amount)}</div>
+                    <div style={{ color: 'var(--c-475569)', fontSize: 10 }}>{fmtUsd(al.current_spend)} / {fmtUsd(al.budget_amount)}</div>
                   </div>
                 </div>
               )
@@ -492,31 +492,31 @@ export default function FinOpsOverview() {
       </div>
 
       {/* ══ SECTION 4: AZURE ADVISOR COST RECOMMENDATIONS ══ */}
-      <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
+      <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <SectionHeader title="Azure Advisor — Cost Recommendations"
             sub={advisorItems.length > 0 ? `${advisorItems.length} recommendations · ${fmtUsd(advisor?.total_savings_monthly)}/mo potential savings` : 'No cost recommendations found'} />
         </div>
         {advisorItems.length === 0 ? (
-          <div style={{ color: '#475569', fontSize: 12, padding: '8px 0' }}>No cost advisory items in current data.</div>
+          <div style={{ color: 'var(--c-475569)', fontSize: 12, padding: '8px 0' }}>No cost advisory items in current data.</div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
               <thead>
                 <tr>{['Resource', 'Type', 'Impact', 'Recommendation', 'Est. Savings/mo'].map(h => (
-                  <th key={h} style={{ textAlign: 'left', color: '#475569', padding: '5px 8px', borderBottom: '1px solid #1e293b', whiteSpace: 'nowrap' }}>{h}</th>
+                  <th key={h} style={{ textAlign: 'left', color: 'var(--c-475569)', padding: '5px 8px', borderBottom: '1px solid var(--c-1e293b)', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}</tr>
               </thead>
               <tbody>
                 {advisorItems.slice(0, 8).map((item, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid #0f172a' }}>
-                    <td style={{ padding: '6px 8px', color: '#e2e8f0', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  <tr key={i} style={{ borderBottom: '1px solid var(--c-0f172a)' }}>
+                    <td style={{ padding: '6px 8px', color: 'var(--c-e2e8f0)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                       title={item.resource_name}>{item.resource_name}</td>
-                    <td style={{ padding: '6px 8px', color: '#64748b' }}>{(item.resource_type || '').split('/').pop()}</td>
+                    <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{(item.resource_type || '').split('/').pop()}</td>
                     <td style={{ padding: '6px 8px' }}><ImpactBadge impact={item.impact} /></td>
-                    <td style={{ padding: '6px 8px', color: '#94a3b8', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    <td style={{ padding: '6px 8px', color: 'var(--c-94a3b8)', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                       title={asText(item.recommendation)}>{asText(item.recommendation)}</td>
-                    <td style={{ padding: '6px 8px', color: '#4ade80', fontWeight: 600 }}>
+                    <td style={{ padding: '6px 8px', color: 'var(--c-4ade80)', fontWeight: 600 }}>
                       {item.potential_savings_monthly > 0 ? fmtUsd(item.potential_savings_monthly) : '—'}
                     </td>
                   </tr>
@@ -528,22 +528,22 @@ export default function FinOpsOverview() {
       </div>
 
       {/* ══ SECTION 5: TOP SAVINGS ══ */}
-      <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
+      <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
         <SectionHeader title="Top Savings Opportunities"
           sub={topSavings.length > 0 ? `Showing top ${topSavings.length} of ${savings?.opportunities?.length || 0}` : ''} />
         {topSavings.length === 0 ? (
-          <div style={{ color: '#475569', fontSize: 12 }}>No savings opportunities found.</div>
+          <div style={{ color: 'var(--c-475569)', fontSize: 12 }}>No savings opportunities found.</div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
             {topSavings.map((op, i) => (
-              <div key={i} style={{ background: '#0f172a', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div key={i} style={{ background: 'var(--c-0f172a)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <span style={{ color: '#e2e8f0', fontSize: 11, fontWeight: 600, flex: 1, paddingRight: 8 }}>{op.resource_name || op.title || '—'}</span>
-                  <span style={{ color: '#4ade80', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtUsd(op.savings_usd ?? op.monthly_savings ?? 0)}/mo</span>
+                  <span style={{ color: 'var(--c-e2e8f0)', fontSize: 11, fontWeight: 600, flex: 1, paddingRight: 8 }}>{op.resource_name || op.title || '—'}</span>
+                  <span style={{ color: 'var(--c-4ade80)', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtUsd(op.savings_usd ?? op.monthly_savings ?? 0)}/mo</span>
                 </div>
-                <div style={{ color: '#64748b', fontSize: 10 }}>{op.recommendation || op.action || '—'}</div>
+                <div style={{ color: 'var(--c-64748b)', fontSize: 10 }}>{op.recommendation || op.action || '—'}</div>
                 {op.current_sku && op.rightsize_sku && (
-                  <div style={{ color: '#475569', fontSize: 10 }}>
+                  <div style={{ color: 'var(--c-475569)', fontSize: 10 }}>
                     {op.current_sku} <ChevronRight size={10} style={{ display: 'inline' }} /> {op.rightsize_sku}
                   </div>
                 )}
@@ -554,7 +554,7 @@ export default function FinOpsOverview() {
       </div>
 
       {/* ══ SECTION 6: RESOURCE OPTIMIZATION ══ */}
-      <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
+      <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <SectionHeader title="Resource Optimization"
             sub={optim ? `${optim.oversized_count ?? 0} oversized · ${optim.underutilized_count ?? 0} underutilized · ${optim.orphaned_count ?? 0} orphaned` : ''} />
@@ -562,13 +562,13 @@ export default function FinOpsOverview() {
             {[
               { key: 'oversized', label: `Oversized (${optim?.oversized_count ?? 0})`, color: '#ef4444' },
               { key: 'underutilized', label: `Low Util (${optim?.underutilized_count ?? 0})`, color: '#f59e0b' },
-              { key: 'orphaned', label: `Orphaned (${optim?.orphaned_count ?? 0})`, color: '#64748b' },
+              { key: 'orphaned', label: `Orphaned (${optim?.orphaned_count ?? 0})`, color: 'var(--c-64748b)' },
             ].map(tab => (
               <button key={tab.key} onClick={() => setOptimTab(tab.key)} style={{
-                background: optimTab === tab.key ? '#0f172a' : 'none',
-                border: `1px solid ${optimTab === tab.key ? tab.color + '55' : '#1e293b'}`,
+                background: optimTab === tab.key ? 'var(--c-0f172a)' : 'none',
+                border: `1px solid ${optimTab === tab.key ? tab.color + '55' : 'var(--c-1e293b)'}`,
                 borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
-                color: optimTab === tab.key ? tab.color : '#475569', fontSize: 11,
+                color: optimTab === tab.key ? tab.color : 'var(--c-475569)', fontSize: 11,
               }}>{tab.label}</button>
             ))}
           </div>
@@ -580,7 +580,7 @@ export default function FinOpsOverview() {
             : optimTab === 'underutilized' ? optimUnderutilized
             : optimOrphaned
           if (!rows || rows.length === 0) return (
-            <div style={{ color: '#475569', fontSize: 12, padding: '8px 0' }}>
+            <div style={{ color: 'var(--c-475569)', fontSize: 12, padding: '8px 0' }}>
               No {optimTab} resources found.
             </div>
           )
@@ -593,7 +593,7 @@ export default function FinOpsOverview() {
                       optimTab === 'oversized' ? 'Current SKU → Recommended' : optimTab === 'underutilized' ? 'Avg CPU %' : 'Days Inactive',
                       'Monthly Cost', optimTab !== 'orphaned' ? 'Savings %' : 'Recommendation',
                     ].map(h => (
-                      <th key={h} style={{ textAlign: 'left', color: '#475569', padding: '5px 8px', borderBottom: '1px solid #1e293b', whiteSpace: 'nowrap' }}>{h}</th>
+                      <th key={h} style={{ textAlign: 'left', color: 'var(--c-475569)', padding: '5px 8px', borderBottom: '1px solid var(--c-1e293b)', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -602,23 +602,23 @@ export default function FinOpsOverview() {
                     <tr key={i}
                       onClick={() => drillToExplorer({ groupBy: ['ResourceType'], timeRange: 'last_30d', advFilters: r.resource_group ? { resource_groups: [r.resource_group] } : null })}
                       title="Open in Cost Explorer"
-                      style={{ borderBottom: '1px solid #0f172a', cursor: 'pointer' }}>
-                      <td style={{ padding: '6px 8px', color: '#e2e8f0', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      style={{ borderBottom: '1px solid var(--c-0f172a)', cursor: 'pointer' }}>
+                      <td style={{ padding: '6px 8px', color: 'var(--c-e2e8f0)', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                         title={r.resource_name}>{r.resource_name}</td>
-                      <td style={{ padding: '6px 8px', color: '#64748b' }}>{(r.resource_type || '').split('/').pop()}</td>
-                      <td style={{ padding: '6px 8px', color: '#64748b' }}>{r.resource_group}</td>
-                      <td style={{ padding: '6px 8px', color: '#94a3b8' }}>
+                      <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{(r.resource_type || '').split('/').pop()}</td>
+                      <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{r.resource_group}</td>
+                      <td style={{ padding: '6px 8px', color: 'var(--c-94a3b8)' }}>
                         {optimTab === 'oversized'
-                          ? <span>{r.sku || r.current_sku || '—'} <ChevronRight size={10} style={{ display: 'inline' }} /> <span style={{ color: '#4ade80' }}>{r.rightsize_sku || '—'}</span></span>
+                          ? <span>{r.sku || r.current_sku || '—'} <ChevronRight size={10} style={{ display: 'inline' }} /> <span style={{ color: 'var(--c-4ade80)' }}>{r.rightsize_sku || '—'}</span></span>
                           : optimTab === 'underutilized'
                             ? <span style={{ color: (r.avg_cpu_pct ?? 100) < 10 ? '#ef4444' : '#f59e0b' }}>{r.avg_cpu_pct != null ? r.avg_cpu_pct.toFixed(1) + '%' : '—'}</span>
                             : r.days_since_active != null ? `${r.days_since_active}d` : '—'}
                       </td>
-                      <td style={{ padding: '6px 8px', color: '#e2e8f0' }}>{fmtUsd(r.cost_current_month)}</td>
+                      <td style={{ padding: '6px 8px', color: 'var(--c-e2e8f0)' }}>{fmtUsd(r.cost_current_month)}</td>
                       <td style={{ padding: '6px 8px' }}>
                         {optimTab !== 'orphaned'
-                          ? <span style={{ color: '#4ade80', fontWeight: 600 }}>{r.rightsize_savings_pct != null ? r.rightsize_savings_pct.toFixed(0) + '%' : '—'}</span>
-                          : <span style={{ color: '#94a3b8' }}>{r.recommendation || 'Review & remove'}</span>}
+                          ? <span style={{ color: 'var(--c-4ade80)', fontWeight: 600 }}>{r.rightsize_savings_pct != null ? r.rightsize_savings_pct.toFixed(0) + '%' : '—'}</span>
+                          : <span style={{ color: 'var(--c-94a3b8)' }}>{r.recommendation || 'Review & remove'}</span>}
                       </td>
                     </tr>
                   ))}

@@ -15,7 +15,7 @@ import {
   Loader2, RefreshCw, ExternalLink, Activity, Fingerprint, Server, ArrowRight,
 } from 'lucide-react'
 
-const SEV = { critical: '#ef4444', high: '#f97316', medium: '#eab308', low: '#22c55e', unknown: '#64748b' }
+const SEV = { critical: '#ef4444', high: '#f97316', medium: '#eab308', low: '#22c55e', unknown: 'var(--c-64748b)' }
 const sevColor = (s) => SEV[String(s || '').toLowerCase()] || SEV.unknown
 const fmtTime = (t) => { try { return new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) } catch { return t || '—' } }
 
@@ -23,7 +23,7 @@ function SourceBadge({ source }) {
   const live = source === 'live'
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
-      style={{ background: live ? '#06351f' : '#3a2c08', color: live ? '#4ade80' : '#fbbf24', border: `1px solid ${live ? '#15803d55' : '#a1620855'}` }}>
+      style={{ background: live ? 'var(--c-06351f)' : 'var(--c-3a2c08)', color: live ? '#4ade80' : '#fbbf24', border: `1px solid ${live ? '#15803d55' : '#a1620855'}` }}>
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: live ? '#22c55e' : '#f59e0b' }} />
       {live ? 'Live' : 'Sample data'}
     </span>
@@ -63,11 +63,11 @@ function ScoreRing({ pct = 0, size = 96 }) {
   const col = pct >= 70 ? '#22c55e' : pct >= 45 ? '#eab308' : '#ef4444'
   return (
     <svg width={size} height={size} className="-rotate-90">
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#1e293b" strokeWidth="8" />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" style={{ stroke: 'var(--c-1e293b)' }} strokeWidth="8" />
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={col} strokeWidth="8" strokeLinecap="round"
         strokeDasharray={`${c}`} strokeDashoffset={`${c * (1 - pct / 100)}`} />
       <text x="50%" y="50%" dy="0.1em" textAnchor="middle" className="rotate-90" style={{ transformOrigin: 'center' }}
-        fill="#f1f5f9" fontSize="20" fontWeight="700">{pct}%</text>
+        style={{ fill: 'var(--c-f1f5f9)' }} fontSize="20" fontWeight="700">{pct}%</text>
     </svg>
   )
 }
@@ -310,7 +310,7 @@ export default function M365SecurityDashboard({ compact = false, onOpen }) {
           <div className="space-y-1 max-h-72 overflow-auto">
             {(ca.policies || []).map((p, i) => (
               <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-gray-950/40 text-xs">
-                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: p.state === 'enabled' ? '#22c55e' : p.state === 'report_only' ? '#eab308' : '#64748b' }} />
+                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: p.state === 'enabled' ? '#22c55e' : p.state === 'report_only' ? '#eab308' : 'var(--c-64748b)' }} />
                 <span className="text-gray-200 truncate flex-1" title={p.name}>{p.name}</span>
                 <span className="text-gray-600 capitalize">{String(p.state).replace('_', '-')}</span>
               </div>

@@ -44,7 +44,7 @@ export default function SparkLine({ data = [], width = 60, height = 22, color, a
           y={0}
           width={unsettledWidth}
           height={height}
-          fill="#78350f"
+          style={{ fill: 'var(--c-78350f)' }}
           fillOpacity={0.18}
           rx={1}
         />

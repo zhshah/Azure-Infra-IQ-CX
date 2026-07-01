@@ -1,6 +1,19 @@
 import React, { useState } from 'react'
 import { AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
 import clsx from 'clsx'
+import { useDrill } from '../drill/DrillContext'
+
+const toResource = (o) => ({
+  resource_id: o.resource_id,
+  resource_name: o.resource_name,
+  resource_type: o.resource_type,
+  resource_group: o.resource_group,
+  location: o.location,
+  subscription_id: o.subscription_id,
+  cost_current_month: o.cost_current_month ?? o.monthly_cost ?? 0,
+  estimated_monthly_savings: o.estimated_savings,
+  is_orphan: true,
+})
 
 function fmt(n) {
   if (!n) return '$0'
@@ -17,6 +30,7 @@ const TYPE_ICONS = {
 
 export default function OrphanPanel({ orphans }) {
   const [expanded, setExpanded] = useState(true)
+  const { openResourceDrill, openResourceDetail } = useDrill()
 
   if (!orphans?.length) {
     return (
@@ -45,7 +59,11 @@ export default function OrphanPanel({ orphans }) {
           <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
             Orphaned Resources
           </h2>
-          <span className="badge bg-orange-900/50 text-orange-400">{orphans.length}</span>
+          <span
+            className="badge bg-orange-900/50 text-orange-400 cursor-pointer hover:bg-orange-800/60"
+            title="Click to view all orphaned resources"
+            onClick={(e) => { e.stopPropagation(); openResourceDrill('Orphaned resources', orphans.map(toResource)) }}
+          >{orphans.length}</span>
         </div>
         <div className="flex items-center gap-4 text-sm">
           <span className="text-gray-500">
@@ -63,7 +81,9 @@ export default function OrphanPanel({ orphans }) {
           {orphans.map((o) => (
             <div
               key={o.resource_id}
-              className="flex items-start justify-between gap-3 p-3 bg-gray-800/50 rounded-lg border border-orange-900/30 hover:border-orange-800/50 transition-colors"
+              onClick={() => openResourceDetail(toResource(o))}
+              title="Open full resource details"
+              className="flex items-start justify-between gap-3 p-3 bg-gray-800/50 rounded-lg border border-orange-900/30 hover:border-orange-800/50 transition-colors cursor-pointer"
             >
               <div className="flex items-start gap-2 min-w-0">
                 <span className="text-base mt-0.5 shrink-0">

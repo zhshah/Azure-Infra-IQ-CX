@@ -10,16 +10,16 @@ const CAT_LABEL = { regional_vcpu: 'Regional vCPU total', vm_family: 'VM family'
 function RegionBar({ r, subName }) {
   const pct = r.vcpu_pct || 0;
   return (
-    <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 10, padding: '12px 14px' }}>
+    <div style={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: '12px 14px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <MapPin size={13} style={{ color: '#38bdf8' }} /> {r.region}
-          {r.is_strategic && <span style={{ background: '#3730a3', color: '#c7d2fe', borderRadius: 5, padding: '1px 7px', fontSize: 10, fontWeight: 700 }}>capacity-restricted</span>}
+        <span style={{ color: 'var(--c-e2e8f0)', fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <MapPin size={13} style={{ color: 'var(--c-38bdf8)' }} /> {r.region}
+          {r.is_strategic && <span style={{ background: 'var(--c-3730a3)', color: 'var(--c-c7d2fe)', borderRadius: 5, padding: '1px 7px', fontSize: 10, fontWeight: 700 }}>capacity-restricted</span>}
         </span>
-        <span style={{ color: '#64748b', fontSize: 11 }}>{subName}</span>
+        <span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>{subName}</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ flex: 1, height: 8, background: '#1e293b', borderRadius: 5, overflow: 'hidden' }}>
+        <div style={{ flex: 1, height: 8, background: 'var(--c-1e293b)', borderRadius: 5, overflow: 'hidden' }}>
           <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', background: barColor(pct) }} />
         </div>
         <span style={{ color: barColor(pct), fontSize: 12, fontWeight: 700, minWidth: 96, textAlign: 'right' }}>
@@ -80,29 +80,29 @@ function QuotaView() {
           </div>
 
           {d.note && (d.items || []).length === 0 && (
-            <div style={{ ...card, color: '#94a3b8', fontSize: 13 }}>{d.note}</div>
+            <div style={{ ...card, color: 'var(--c-94a3b8)', fontSize: 13 }}>{d.note}</div>
           )}
 
           {/* Action required — blocked families that need a quota request (Qatar workflow) */}
           {blocked.length > 0 && (
-            <div style={{ ...card, border: '1px solid #7f1d1d', background: 'linear-gradient(180deg,#1a0e0e,#0f172a)' }}>
-              <div style={{ color: '#fca5a5', fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <div style={{ ...card, border: '1px solid var(--c-7f1d1d)', background: 'linear-gradient(180deg,#1a0e0e,var(--c-0f172a))' }}>
+              <div style={{ color: 'var(--c-fca5a5)', fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <TicketCheck size={16} /> Quota request needed — {blocked.length} blocked famil{blocked.length === 1 ? 'y' : 'ies'}
               </div>
-              <p style={{ color: '#94a3b8', fontSize: 12, margin: '0 0 12px' }}>
+              <p style={{ color: 'var(--c-94a3b8)', fontSize: 12, margin: '0 0 12px' }}>
                 These VM families have a limit of <b>0</b> in capacity-restricted regions — you must raise an Azure support ticket to whitelist quota before any resource can be created here.
               </p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 10 }}>
                 {Object.entries(blockedByRegion).slice(0, 8).map(([region, fams]) => (
-                  <div key={region} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: 10 }}>
-                    <div style={{ color: '#e2e8f0', fontSize: 12, fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <MapPin size={12} style={{ color: '#f87171' }} /> {region} <span style={{ color: '#64748b', fontWeight: 400 }}>· {fams.length}</span>
+                  <div key={region} style={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 8, padding: 10 }}>
+                    <div style={{ color: 'var(--c-e2e8f0)', fontSize: 12, fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <MapPin size={12} style={{ color: 'var(--c-f87171)' }} /> {region} <span style={{ color: 'var(--c-64748b)', fontWeight: 400 }}>· {fams.length}</span>
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
                       {fams.slice(0, 12).map((f, i) => (
-                        <span key={i} title={f.quota} style={{ background: '#7f1d1d33', color: '#fca5a5', border: '1px solid #7f1d1d', borderRadius: 5, padding: '2px 7px', fontSize: 10, fontWeight: 600 }}>{f.family || f.quota}</span>
+                        <span key={i} title={f.quota} style={{ background: '#7f1d1d33', color: 'var(--c-fca5a5)', border: '1px solid var(--c-7f1d1d)', borderRadius: 5, padding: '2px 7px', fontSize: 10, fontWeight: 600 }}>{f.family || f.quota}</span>
                       ))}
-                      {fams.length > 12 && <span style={{ color: '#64748b', fontSize: 10 }}>+{fams.length - 12} more</span>}
+                      {fams.length > 12 && <span style={{ color: 'var(--c-64748b)', fontSize: 10 }}>+{fams.length - 12} more</span>}
                     </div>
                   </div>
                 ))}
@@ -113,7 +113,7 @@ function QuotaView() {
           {/* Per-region vCPU capacity */}
           {regions.length > 0 && (
             <div style={{ ...card }}>
-              <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Per-region vCPU capacity</div>
+              <div style={{ color: 'var(--c-e2e8f0)', fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Per-region vCPU capacity</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 10 }}>
                 {regions.slice(0, 12).map((r, i) => <RegionBar key={i} r={r} subName={subName(r.subscription_id)} />)}
               </div>
@@ -145,7 +145,7 @@ function QuotaView() {
                     ? <span style={{ color: '#ef4444', fontWeight: 700 }}>BLOCKED · request quota</span>
                     : (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <div style={{ width: 80, height: 7, background: '#1e293b', borderRadius: 5, overflow: 'hidden' }}>
+                        <div style={{ width: 80, height: 7, background: 'var(--c-1e293b)', borderRadius: 5, overflow: 'hidden' }}>
                           <div style={{ width: `${Math.min(100, v)}%`, height: '100%', background: barColor(v) }} />
                         </div>
                         <span style={{ color: barColor(v), fontWeight: 600 }}>{v}%</span>

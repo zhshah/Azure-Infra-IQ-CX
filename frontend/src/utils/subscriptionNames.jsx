@@ -93,7 +93,7 @@ export function severityBadgeRenderer(value) {
   if (!value) return '—';
   const COLORS = { critical: '#ef4444', high: '#f97316', medium: '#eab308', low: '#22c55e', informational: '#38bdf8' };
   const sev = String(value).toLowerCase();
-  const color = COLORS[sev] || '#94a3b8';
+  const color = COLORS[sev] || 'var(--c-94a3b8)';
   return (
     <span style={{
       display: 'inline-flex', padding: '1px 7px', borderRadius: 10,

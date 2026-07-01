@@ -128,12 +128,12 @@ export default function VersionWatcher() {
     <div style={{
       position: 'fixed', bottom: 18, left: '50%', transform: 'translateX(-50%)',
       zIndex: 99999, display: 'flex', alignItems: 'center', gap: 12,
-      background: '#0f172a', border: '1px solid #1d4ed8', borderRadius: 10,
+      background: 'var(--c-0f172a)', border: '1px solid #1d4ed8', borderRadius: 10,
       padding: '10px 14px', boxShadow: '0 8px 30px rgba(0,0,0,0.5)',
       fontFamily: 'system-ui, sans-serif',
     }}>
-      <RefreshCw size={15} style={{ color: '#60a5fa' }} />
-      <span style={{ color: '#e2e8f0', fontSize: 13 }}>
+      <RefreshCw size={15} style={{ color: 'var(--c-60a5fa)' }} />
+      <span style={{ color: 'var(--c-e2e8f0)', fontSize: 13 }}>
         A new version of the portal is available.
       </span>
       <button onClick={hardReload} style={{
@@ -143,7 +143,7 @@ export default function VersionWatcher() {
         Reload now
       </button>
       <button onClick={() => setDismissed(true)} title="Dismiss" style={{
-        background: 'none', border: 'none', color: '#64748b', cursor: 'pointer',
+        background: 'none', border: 'none', color: 'var(--c-64748b)', cursor: 'pointer',
         display: 'flex', alignItems: 'center',
       }}>
         <X size={15} />

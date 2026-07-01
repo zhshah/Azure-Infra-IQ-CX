@@ -40,6 +40,11 @@ from services.ai_module_analysis_service import (
     _resolve_affected_resources,
     RESOURCE_ATTRIBUTION_INSTRUCTION,
 )
+from services.qatar_bcdr_policy import (
+    QATAR_POLICY_SYSTEM_RULES,
+    build_qatar_grounding_block,
+    build_service_playbook_prompt_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +323,9 @@ def _score_label(score) -> str:
     return "Critical"
 
 
-def _build_system_prompt(cat: Dict[str, Any]) -> str:
+def _build_system_prompt(cat: Dict[str, Any], cat_key: str = "") -> str:
+    cat_key = (cat_key or "").lower()
+    qatar_addendum = ("\n\n" + QATAR_POLICY_SYSTEM_RULES) if cat_key in ("bcdr", "backup", "resilience") else ""
     return (
         f"You are {cat['role']}. You assess a SPECIFIC, user-defined PROJECT — a curated subset of "
         f"Azure resources — for the '{cat['label']}' category and return a structured, board-ready "
@@ -374,6 +381,7 @@ def _build_system_prompt(cat: Dict[str, Any]) -> str:
         "from missing data. Use each resource's 'data_confidence' and 'telemetry_source' to gauge how much "
         "real evidence backs your conclusions.\n\n"
         + RESOURCE_ATTRIBUTION_INSTRUCTION
+        + qatar_addendum
         + "\n\nReturn ONLY compact JSON (no markdown fences) with EXACTLY this shape:\n"
         "{\n"
         '  "overall_score": <int 0-100, or null when applicability is "not_applicable">,\n'
@@ -421,14 +429,27 @@ def _build_project_context_block(project: Dict[str, Any]) -> str:
     )
 
 
-def _build_user_prompt(project: Dict[str, Any], cat: Dict[str, Any], tag_summary: str, resources_json: str, resource_count: int) -> str:
+def _build_user_prompt(project: Dict[str, Any], cat: Dict[str, Any], tag_summary: str, resources_json: str, resource_count: int, resources_full: Optional[List[Dict[str, Any]]] = None, cat_key: str = "") -> str:
     name = project.get("name", "Untitled project")
     desc = (project.get("description") or "").strip()
+    cat_key = (cat_key or "").lower()
+    qatar_block = ""
+    playbook_block = ""
+    if cat_key in ("bcdr", "backup", "resilience") and resources_full:
+        ci = {
+            "customer_name": project.get("name"),
+            "primary_region": project.get("primary_region"),
+            "secondary_region": project.get("secondary_region") or project.get("target_region"),
+        }
+        qatar_block = build_qatar_grounding_block(resources_full, ci)
+        playbook_block = build_service_playbook_prompt_block(resources_full)
     return (
         f"PROJECT: {name}\n"
         f"{('DESCRIPTION: ' + desc) if desc else ''}\n"
         f"RESOURCES IN PROJECT: {resource_count}\n\n"
         + _build_project_context_block(project)
+        + qatar_block
+        + playbook_block
         + f"ASSESSMENT CATEGORY: {cat['label']}\n"
         f"FOCUS: {cat['focus']}\n\n"
         + (f"CATEGORY-SPECIFIC OUTPUT REQUIREMENTS:\n{cat['emphasis']}\n\n" if cat.get('emphasis') else "")
@@ -492,8 +513,9 @@ def assess_project(project: Dict[str, Any], resources: List[Any], category: str)
     resources_json = _serialize_for_ai(compressed)
 
     # 2. Build prompts and call the model (reuses the shared retry/backoff client).
-    system_prompt = _build_system_prompt(cat)
-    user_prompt = _build_user_prompt(project, cat, tag_summary, resources_json, len(compressed)) + attach_block
+    system_prompt = _build_system_prompt(cat, cat_key=cat_key)
+    user_prompt = _build_user_prompt(project, cat, tag_summary, resources_json, len(compressed),
+                                      resources_full=resource_dicts, cat_key=cat_key) + attach_block
     raw = _call_ai(system_prompt, user_prompt, max_tokens=MAX_TOKENS_PROJECT_ASSESSMENT)
 
     # 3. Parse robustly (handles token-cap truncation gracefully).

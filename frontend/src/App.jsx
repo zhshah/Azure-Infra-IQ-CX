@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { RefreshCw, AlertCircle, AlertTriangle, Settings, FlaskConical, Brain, X, Lock, Loader, Clock, LayoutGrid, List, ChevronLeft, ChevronRight, ChevronDown, Shield, Zap, Rocket, DollarSign, Lightbulb, Globe, Target, Search, BarChart2, Monitor, Database, HardDrive, Cloud, CloudSun, Hammer, TrendingUp, ClipboardList, Map as MapIcon, Bot, Network, Tag, Compass, Download } from 'lucide-react'
 import clsx from 'clsx'
 import { DataTable, KPICard as SharedKPI, SeverityBadge } from './components/shared/ModuleWidgets'
+import ThemeToggle from './components/ThemeToggle'
 
 // ── Sidebar navigation items with Azure icon paths ─────────────────────────
 const NAV_SECTIONS = [
@@ -103,11 +104,11 @@ function SidebarNav({ view, onNavigate, collapsed, onToggle, badges }) {
   const sidebarW = collapsed ? 60 : 240
 
   return (
-    <aside style={{
+    <aside data-app-sidebar style={{
       width: sidebarW, minWidth: sidebarW,
       height: '100vh', position: 'sticky', top: 0, zIndex: 30,
-      background: '#0c1220',
-      borderRight: '1px solid rgba(30, 41, 59, 0.6)',
+      background: 'var(--c-0c1220)',
+      borderRight: '1px solid rgba(var(--rgb-slate), 0.6)',
       display: 'flex', flexDirection: 'column',
       transition: 'width 0.25s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
       overflowX: 'hidden',
@@ -116,7 +117,7 @@ function SidebarNav({ view, onNavigate, collapsed, onToggle, badges }) {
       <div style={{
         height: 52, minHeight: 52, maxHeight: 52,
         padding: collapsed ? '0 8px' : '0 16px',
-        borderBottom: '1px solid rgba(30, 41, 59, 0.6)',
+        borderBottom: '1px solid rgba(var(--rgb-slate), 0.6)',
         display: 'flex', alignItems: 'center',
         gap: 12,
       }}>
@@ -130,8 +131,8 @@ function SidebarNav({ view, onNavigate, collapsed, onToggle, badges }) {
         />
         {!collapsed && (
           <div style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
-            <div style={{ color: '#f1f5f9', fontSize: 13, fontWeight: 700, lineHeight: 1.3, letterSpacing: '-0.01em' }}>Azure Infra IQ</div>
-            <div style={{ color: '#64748b', fontSize: 10, fontWeight: 500, letterSpacing: '0.02em' }}>AI-Powered Insights</div>
+            <div style={{ color: 'var(--c-f1f5f9)', fontSize: 13, fontWeight: 700, lineHeight: 1.3, letterSpacing: '-0.01em' }}>Azure Infra IQ</div>
+            <div style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 500, letterSpacing: '0.02em' }}>AI-Powered Insights</div>
           </div>
         )}
       </div>
@@ -139,7 +140,7 @@ function SidebarNav({ view, onNavigate, collapsed, onToggle, badges }) {
       {/* Navigation sections */}
       <div className="sidebar-scroll" style={{
         flex: 1, padding: '12px 0 8px', overflowY: 'auto',
-        scrollbarWidth: 'thin', scrollbarColor: '#1e293b transparent',
+        scrollbarWidth: 'thin', scrollbarColor: 'var(--c-1e293b) transparent',
       }}>
         {NAV_SECTIONS.map((section, si) => {
           const isCollapsible = section.collapsible
@@ -150,15 +151,15 @@ function SidebarNav({ view, onNavigate, collapsed, onToggle, badges }) {
             <div key={section.heading} style={{ marginBottom: 2 }}>
               {/* Section divider line (after first section) */}
               {si > 0 && !collapsed && (
-                <div style={{ height: 1, background: 'rgba(30, 41, 59, 0.4)', margin: '8px 16px 8px' }} />
+                <div style={{ height: 1, background: 'rgba(var(--rgb-slate), 0.4)', margin: '8px 16px 8px' }} />
               )}
-              {si > 0 && collapsed && <div style={{ height: 1, background: 'rgba(30, 41, 59, 0.4)', margin: '6px 10px' }} />}
+              {si > 0 && collapsed && <div style={{ height: 1, background: 'rgba(var(--rgb-slate), 0.4)', margin: '6px 10px' }} />}
 
               {!collapsed && (
                 <div
                   onClick={isCollapsible ? () => toggleSection(section.heading) : undefined}
                   style={{
-                    color: hasActiveChild ? '#94a3b8' : '#475569',
+                    color: hasActiveChild ? 'var(--c-94a3b8)' : 'var(--c-475569)',
                     fontSize: 10, fontWeight: 600, textTransform: 'uppercase',
                     letterSpacing: '0.06em', padding: '8px 18px 6px',
                     cursor: isCollapsible ? 'pointer' : 'default',
@@ -195,13 +196,13 @@ function SidebarNav({ view, onNavigate, collapsed, onToggle, badges }) {
                       justifyContent: collapsed ? 'center' : 'flex-start',
                       background: active
                         ? 'rgba(0, 120, 212, 0.12)'
-                        : hovered ? 'rgba(30, 41, 59, 0.5)' : 'transparent',
+                        : hovered ? 'rgba(var(--rgb-slate), 0.5)' : 'transparent',
                       border: 'none',
                       borderLeft: collapsed ? 'none' : (active ? '3px solid #0078d4' : '3px solid transparent'),
                       borderRadius: collapsed ? 8 : 0,
                       margin: collapsed ? '1px 8px' : 0,
                       cursor: 'pointer',
-                      color: active ? '#e2e8f0' : hovered ? '#cbd5e1' : '#94a3b8',
+                      color: active ? 'var(--c-e2e8f0)' : hovered ? 'var(--c-cbd5e1)' : 'var(--c-94a3b8)',
                     }}
                   >
                     <img src={item.icon} alt="" style={{
@@ -242,13 +243,13 @@ function SidebarNav({ view, onNavigate, collapsed, onToggle, badges }) {
         style={{
           height: 40, padding: '0 12px',
           background: 'transparent',
-          border: 'none', borderTop: '1px solid rgba(30, 41, 59, 0.5)',
-          cursor: 'pointer', color: '#475569',
+          border: 'none', borderTop: '1px solid rgba(var(--rgb-slate), 0.5)',
+          cursor: 'pointer', color: 'var(--c-475569)',
           display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-end',
           transition: 'color 0.15s',
         }}
-        onMouseEnter={e => e.currentTarget.style.color = '#94a3b8'}
-        onMouseLeave={e => e.currentTarget.style.color = '#475569'}
+        onMouseEnter={e => e.currentTarget.style.color = 'var(--c-94a3b8)'}
+        onMouseLeave={e => e.currentTarget.style.color = 'var(--c-475569)'}
         title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
       >
         {collapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
@@ -328,15 +329,15 @@ class ViewErrorBoundary extends React.Component {
   }
   render() {
     if (this.state.error) return (
-      <div style={{ background: '#1a0e0e', border: '1px solid #7f1d1d', borderRadius: 10, padding: 20, margin: 16, color: '#fca5a5', display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 720 }}>
+      <div style={{ background: '#1a0e0e', border: '1px solid var(--c-7f1d1d)', borderRadius: 10, padding: 20, margin: 16, color: 'var(--c-fca5a5)', display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 720 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <AlertCircle size={18} />
           <span style={{ fontWeight: 600 }}>This section hit an error and was isolated so the rest of the portal keeps working.</span>
         </div>
         <pre style={{ color: '#ef4444', fontSize: 12, whiteSpace: 'pre-wrap' }}>{this.state.error?.message}</pre>
         <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={() => this.setState({ error: null })} style={{ fontSize: 12, color: '#60a5fa', background: 'none', border: '1px solid #1d4ed8', borderRadius: 6, padding: '5px 12px', cursor: 'pointer' }}>↺ Try again</button>
-          <button onClick={() => { this.setState({ error: null }); this.props.onReset?.() }} style={{ fontSize: 12, color: '#94a3b8', background: 'none', border: '1px solid #334155', borderRadius: 6, padding: '5px 12px', cursor: 'pointer' }}>← Back to Overview</button>
+          <button onClick={() => this.setState({ error: null })} style={{ fontSize: 12, color: 'var(--c-60a5fa)', background: 'none', border: '1px solid #1d4ed8', borderRadius: 6, padding: '5px 12px', cursor: 'pointer' }}>↺ Try again</button>
+          <button onClick={() => { this.setState({ error: null }); this.props.onReset?.() }} style={{ fontSize: 12, color: 'var(--c-94a3b8)', background: 'none', border: '1px solid var(--c-334155)', borderRadius: 6, padding: '5px 12px', cursor: 'pointer' }}>← Back to Overview</button>
         </div>
       </div>
     )
@@ -376,6 +377,7 @@ import AIInsightsDashboard from './components/AIInsightsDashboard'
 import AssessmentView      from './components/AssessmentView'
 import BenchmarkPanel    from './components/BenchmarkPanel'
 import DrillDownDrawer   from './components/DrillDownDrawer'
+import { DrillProvider } from './drill/DrillContext'
 import HealthScoreWidget from './components/HealthScoreWidget'
 import About             from './components/About'
 import ResourceMap       from './components/ResourceMap'
@@ -672,9 +674,9 @@ function CrossModuleLinks({ links, onNavigate }) {
     <div style={{
       display: 'flex', gap: 8, flexWrap: 'wrap',
       padding: '12px 16px', marginTop: 16,
-      background: '#0f172a', border: '1px solid #1e293b', borderRadius: 10,
+      background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 10,
     }}>
-      <span style={{ color: '#475569', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', alignSelf: 'center', marginRight: 4 }}>
+      <span style={{ color: 'var(--c-475569)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', alignSelf: 'center', marginRight: 4 }}>
         Explore further
       </span>
       {links.map(l => (
@@ -776,7 +778,7 @@ function TopRecommendations({ data, resources, onNavigate }) {
   return (
     <div style={{ marginBottom: 4 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <div style={{ color: '#475569', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        <div style={{ color: 'var(--c-475569)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
           Top Recommendations
         </div>
         {totalSavings > 0 && (
@@ -790,32 +792,32 @@ function TopRecommendations({ data, resources, onNavigate }) {
         {recs.map((r, i) => (
           <button key={i} onClick={() => onNavigate(r.nav)} style={{
             display: 'flex', alignItems: 'center', gap: 12,
-            background: '#0f172a', border: '1px solid #1e293b', borderRadius: 10,
+            background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 10,
             padding: '10px 14px', cursor: 'pointer', textAlign: 'left',
             borderLeft: `3px solid ${sevColors[r.severity] || '#3b82f6'}`,
             transition: 'all 0.15s', width: '100%',
           }}
-          onMouseEnter={e => { e.currentTarget.style.background = '#1e293b' }}
-          onMouseLeave={e => { e.currentTarget.style.background = '#0f172a' }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'var(--c-1e293b)' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'var(--c-0f172a)' }}
           >
             <img src={r.icon} alt="" style={{ width: 20, height: 20, flexShrink: 0 }} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ color: '#e2e8f0', fontSize: 12, fontWeight: 600 }}>{r.category}</span>
+                <span style={{ color: 'var(--c-e2e8f0)', fontSize: 12, fontWeight: 600 }}>{r.category}</span>
                 <span style={{
                   fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 6,
                   background: `${sevColors[r.severity]}20`, color: sevColors[r.severity],
                   textTransform: 'uppercase',
                 }}>{r.severity}</span>
               </div>
-              <div style={{ color: '#64748b', fontSize: 11, marginTop: 2 }}>{r.desc}</div>
+              <div style={{ color: 'var(--c-64748b)', fontSize: 11, marginTop: 2 }}>{r.desc}</div>
             </div>
             {r.savings > 0 && (
               <div style={{ color: '#22c55e', fontSize: 13, fontWeight: 700, flexShrink: 0 }}>
                 ${Math.round(r.savings).toLocaleString()}/mo
               </div>
             )}
-            <ChevronRight size={14} style={{ color: '#475569', flexShrink: 0 }} />
+            <ChevronRight size={14} style={{ color: 'var(--c-475569)', flexShrink: 0 }} />
           </button>
         ))}
       </div>
@@ -868,7 +870,7 @@ function EstateOverview({ resources, backupCoverage, onNavigate }) {
         { label: 'Storage Accounts', value: typeCount('storageaccounts') },
         { label: 'Key Vaults', value: typeCount('keyvault') },
       ].filter(s => s.value > 0),
-      color: '#a78bfa',
+      color: 'var(--c-a78bfa)',
       nav: 'resources',
     },
     {
@@ -921,28 +923,28 @@ function EstateOverview({ resources, backupCoverage, onNavigate }) {
 
   return (
     <div style={{ marginBottom: 4 }}>
-      <div style={{ color: '#475569', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
+      <div style={{ color: 'var(--c-475569)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
         Azure Estate at a Glance
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
         {widgets.map(w => (
           <button key={w.title} onClick={() => onNavigate(w.nav)} style={{
-            background: '#0f172a', border: `1px solid ${w.color}20`, borderRadius: 12,
+            background: 'var(--c-0f172a)', border: `1px solid ${w.color}20`, borderRadius: 12,
             padding: '14px 16px', cursor: 'pointer', textAlign: 'left',
             borderTop: `3px solid ${w.color}`, transition: 'all 0.15s',
           }}
-          onMouseEnter={e => { e.currentTarget.style.background = '#1e293b'; e.currentTarget.style.borderColor = `${w.color}60` }}
-          onMouseLeave={e => { e.currentTarget.style.background = '#0f172a'; e.currentTarget.style.borderColor = `${w.color}20`; e.currentTarget.style.borderTop = `3px solid ${w.color}` }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'var(--c-1e293b)'; e.currentTarget.style.borderColor = `${w.color}60` }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'var(--c-0f172a)'; e.currentTarget.style.borderColor = `${w.color}20`; e.currentTarget.style.borderTop = `3px solid ${w.color}` }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
               <img src={w.icon} alt="" style={{ width: 22, height: 22 }} />
-              <span style={{ color: '#e2e8f0', fontSize: 12, fontWeight: 700 }}>{w.title}</span>
+              <span style={{ color: 'var(--c-e2e8f0)', fontSize: 12, fontWeight: 700 }}>{w.title}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {w.stats.slice(0, 4).map(s => (
                 <div key={s.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ color: '#64748b', fontSize: 10 }}>{s.label}</span>
-                  <span style={{ color: typeof s.value === 'string' ? w.color : '#e2e8f0', fontSize: 12, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{s.value}</span>
+                  <span style={{ color: 'var(--c-64748b)', fontSize: 10 }}>{s.label}</span>
+                  <span style={{ color: typeof s.value === 'string' ? w.color : 'var(--c-e2e8f0)', fontSize: 12, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{s.value}</span>
                 </div>
               ))}
             </div>
@@ -979,7 +981,7 @@ function StrategicNav({ data, resources, onNavigate }) {
   const ahbEligible = winVMs + sqlAhb
 
   const secAccent = critSec > 0 ? '#ef4444' : highSec > 0 ? '#f97316' : '#22c55e'
-  const matAccent = cm ? (cm.overall_score >= 65 ? '#22c55e' : cm.overall_score >= 40 ? '#eab308' : '#ef4444') : '#64748b'
+  const matAccent = cm ? (cm.overall_score >= 65 ? '#22c55e' : cm.overall_score >= 40 ? '#eab308' : '#ef4444') : 'var(--c-64748b)'
 
   const cards = [
     {
@@ -1058,7 +1060,7 @@ function StrategicNav({ data, resources, onNavigate }) {
 
   return (
     <div className="space-y-2">
-      <div style={{ color: '#475569', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+      <div style={{ color: 'var(--c-475569)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
         Strategic Analysis — click any card to deep-dive
       </div>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -1068,18 +1070,18 @@ function StrategicNav({ data, resources, onNavigate }) {
             onClick={() => onNavigate(c.nav || c.key)}
             className="text-left"
             style={{
-              background: '#0f172a', border: `1px solid ${c.accent}25`,
+              background: 'var(--c-0f172a)', border: `1px solid ${c.accent}25`,
               borderRadius: 12, padding: '14px 16px',
               cursor: 'pointer', transition: 'all 0.15s',
               borderLeft: `3px solid ${c.accent}`,
             }}
-            onMouseEnter={e => { e.currentTarget.style.background = '#1e293b'; e.currentTarget.style.borderColor = c.accent }}
-            onMouseLeave={e => { e.currentTarget.style.background = '#0f172a'; e.currentTarget.style.borderColor = `${c.accent}25`; e.currentTarget.style.borderLeft = `3px solid ${c.accent}` }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--c-1e293b)'; e.currentTarget.style.borderColor = c.accent }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'var(--c-0f172a)'; e.currentTarget.style.borderColor = `${c.accent}25`; e.currentTarget.style.borderLeft = `3px solid ${c.accent}` }}
           >
             <div style={{ marginBottom: 4 }}>{React.createElement(c.Icon, { size: 20, style: { color: c.accent } })}</div>
-            <div style={{ color: '#64748b', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 4 }}>{c.title}</div>
-            <div style={{ color: '#f1f5f9', fontSize: 16, fontWeight: 700, marginBottom: 2 }}>{c.primary}</div>
-            <div style={{ color: '#475569', fontSize: 10, marginBottom: 6 }}>{c.secondary}</div>
+            <div style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 4 }}>{c.title}</div>
+            <div style={{ color: 'var(--c-f1f5f9)', fontSize: 16, fontWeight: 700, marginBottom: 2 }}>{c.primary}</div>
+            <div style={{ color: 'var(--c-475569)', fontSize: 10, marginBottom: 6 }}>{c.secondary}</div>
             <div style={{ color: c.accent, fontSize: 10, fontWeight: 600 }}>{c.cta}</div>
           </button>
         ))}
@@ -1128,21 +1130,21 @@ function MaturityHero({ cm }) {
   const next    = STAGES[idx + 1]
 
   return (
-    <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 16, padding: '24px' }}>
+    <div style={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 16, padding: '24px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16, marginBottom: 24 }}>
         <div>
-          <div style={{ color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6 }}>Cloud Maturity Index</div>
+          <div style={{ color: 'var(--c-64748b)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6 }}>Cloud Maturity Index</div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
-            <span style={{ color: '#f1f5f9', fontSize: 48, fontWeight: 800, lineHeight: 1 }}>{cm.overall_score}</span>
-            <span style={{ color: '#475569', fontSize: 20 }}>/100</span>
+            <span style={{ color: 'var(--c-f1f5f9)', fontSize: 48, fontWeight: 800, lineHeight: 1 }}>{cm.overall_score}</span>
+            <span style={{ color: 'var(--c-475569)', fontSize: 20 }}>/100</span>
             <span style={{ background: `${color}15`, color, fontSize: 14, fontWeight: 700, padding: '4px 14px', borderRadius: 20, border: `1px solid ${color}40` }}>
               {cm.overall_label}
             </span>
           </div>
-          {next && <div style={{ color: '#64748b', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>{React.createElement(Target, { size: 12, style: { color: '#64748b' } })} Next milestone: <span style={{ color: '#94a3b8', fontWeight: 600 }}>{next}</span> — improve your lowest-scoring pillars to advance</div>}
+          {next && <div style={{ color: 'var(--c-64748b)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>{React.createElement(Target, { size: 12, style: { color: 'var(--c-64748b)' } })} Next milestone: <span style={{ color: 'var(--c-94a3b8)', fontWeight: 600 }}>{next}</span> — improve your lowest-scoring pillars to advance</div>}
         </div>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ color: '#475569', fontSize: 10, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Grade</div>
+          <div style={{ color: 'var(--c-475569)', fontSize: 10, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Grade</div>
           <div style={{ width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 14, background: `${color}12`, border: `2px solid ${color}35`, fontSize: 26, fontWeight: 800, color }}>
             {cm.overall_grade}
           </div>
@@ -1151,7 +1153,7 @@ function MaturityHero({ cm }) {
 
       {/* Transformation journey */}
       <div style={{ marginBottom: 20 }}>
-        <div style={{ color: '#475569', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10 }}>Transformation Journey</div>
+        <div style={{ color: 'var(--c-475569)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10 }}>Transformation Journey</div>
         <div style={{ display: 'flex', alignItems: 'center', overflowX: 'auto', paddingBottom: 4 }}>
           {STAGES.map((stage, i) => {
             const active = i === idx
@@ -1165,12 +1167,12 @@ function MaturityHero({ cm }) {
                   background: active ? `${sc}12` : 'transparent',
                   border: active ? `1px solid ${sc}35` : '1px solid transparent',
                 }}>
-                  <span style={{ fontSize: 20 }}>{React.createElement(STAGE_ICONS[i], { size: 20, style: { color: active ? sc : past ? '#475569' : '#334155' } })}</span>
-                  <span style={{ fontSize: 10, fontWeight: active ? 700 : 500, color: active ? sc : past ? '#475569' : '#334155', textAlign: 'center', lineHeight: 1.3 }}>{stage}</span>
+                  <span style={{ fontSize: 20 }}>{React.createElement(STAGE_ICONS[i], { size: 20, style: { color: active ? sc : past ? 'var(--c-475569)' : 'var(--c-334155)' } })}</span>
+                  <span style={{ fontSize: 10, fontWeight: active ? 700 : 500, color: active ? sc : past ? 'var(--c-475569)' : 'var(--c-334155)', textAlign: 'center', lineHeight: 1.3 }}>{stage}</span>
                   {active && <span style={{ fontSize: 8, fontWeight: 700, color: sc, textTransform: 'uppercase', letterSpacing: '0.3px' }}>YOU ARE HERE</span>}
                 </div>
                 {i < STAGES.length - 1 && (
-                  <div style={{ flex: 1, height: 2, minWidth: 12, background: i < idx ? COLORS[i] : '#1e293b', flexShrink: 0 }} />
+                  <div style={{ flex: 1, height: 2, minWidth: 12, background: i < idx ? COLORS[i] : 'var(--c-1e293b)', flexShrink: 0 }} />
                 )}
               </React.Fragment>
             )
@@ -1180,14 +1182,14 @@ function MaturityHero({ cm }) {
 
       {/* Priority improvements */}
       {cm.dimensions?.length > 0 && (
-        <div style={{ borderTop: '1px solid #1e293b', paddingTop: 16 }}>
-          <div style={{ color: '#475569', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10 }}>Priority Improvements</div>
+        <div style={{ borderTop: '1px solid var(--c-1e293b)', paddingTop: 16 }}>
+          <div style={{ color: 'var(--c-475569)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10 }}>Priority Improvements</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {[...cm.dimensions].sort((a, b) => a.score - b.score).slice(0, 3).map((d, i) => (
-              <div key={d.key} style={{ background: '#1e293b', borderRadius: 8, padding: '8px 12px', border: '1px solid #334155' }}>
-                <span style={{ color: '#64748b', fontSize: 12 }}>#{i + 1} </span>
-                <span style={{ color: '#e2e8f0', fontSize: 12, fontWeight: 600 }}>{d.name}</span>
-                <span style={{ color: '#64748b', fontSize: 11 }}> — {d.score}%</span>
+              <div key={d.key} style={{ background: 'var(--c-1e293b)', borderRadius: 8, padding: '8px 12px', border: '1px solid var(--c-334155)' }}>
+                <span style={{ color: 'var(--c-64748b)', fontSize: 12 }}>#{i + 1} </span>
+                <span style={{ color: 'var(--c-e2e8f0)', fontSize: 12, fontWeight: 600 }}>{d.name}</span>
+                <span style={{ color: 'var(--c-64748b)', fontSize: 11 }}> — {d.score}%</span>
                 {d.gaps?.[0] && <div style={{ color: '#f97316', fontSize: 10, marginTop: 3, display: 'flex', alignItems: 'center', gap: 3 }}>{React.createElement(AlertTriangle, { size: 10 })} {d.gaps[0]}</div>}
               </div>
             ))}
@@ -1210,18 +1212,18 @@ function SecurityHero({ gaps, waf }) {
     .sort((a, b) => b[1] - a[1]).slice(0, 3)
 
   return (
-    <div style={{ background: '#0f172a', border: `1px solid ${urgency.color}25`, borderRadius: 16, padding: '24px', borderLeft: `4px solid ${urgency.color}` }}>
+    <div style={{ background: 'var(--c-0f172a)', border: `1px solid ${urgency.color}25`, borderRadius: 16, padding: '24px', borderLeft: `4px solid ${urgency.color}` }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16, marginBottom: 20 }}>
         <div>
-          <div style={{ color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6 }}>Security & Governance — Defender for Cloud + Advisor + Arc</div>
+          <div style={{ color: 'var(--c-64748b)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6 }}>Security & Governance — Defender for Cloud + Advisor + Arc</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
-            <span style={{ color: '#f1f5f9', fontSize: 42, fontWeight: 800, lineHeight: 1 }}>{gaps.length}</span>
-            <span style={{ color: '#475569', fontSize: 18 }}>coverage gaps</span>
+            <span style={{ color: 'var(--c-f1f5f9)', fontSize: 42, fontWeight: 800, lineHeight: 1 }}>{gaps.length}</span>
+            <span style={{ color: 'var(--c-475569)', fontSize: 18 }}>coverage gaps</span>
             <span style={{ background: `${urgency.color}15`, color: urgency.color, fontSize: 12, fontWeight: 700, padding: '3px 12px', borderRadius: 20, border: `1px solid ${urgency.color}35` }}>
               {urgency.label}
             </span>
           </div>
-          <div style={{ color: '#475569', fontSize: 11 }}>
+          <div style={{ color: 'var(--c-475569)', fontSize: 11 }}>
             Additional findings from Microsoft Defender for Cloud, Azure Advisor Security, and Azure Arc will load below
           </div>
         </div>
@@ -1231,19 +1233,19 @@ function SecurityHero({ gaps, waf }) {
           { sev: 'critical', label: 'Critical', color: '#ef4444', count: bySev.critical },
           { sev: 'high',     label: 'High',     color: '#f97316', count: bySev.high     },
           { sev: 'medium',   label: 'Medium',   color: '#eab308', count: bySev.medium   },
-          { sev: 'low',      label: 'Low',      color: '#64748b', count: bySev.low      },
+          { sev: 'low',      label: 'Low',      color: 'var(--c-64748b)', count: bySev.low      },
         ].map(s => (
           <div key={s.sev} style={{ background: `${s.color}10`, border: `1px solid ${s.color}25`, borderRadius: 10, padding: '10px 18px', textAlign: 'center', minWidth: 70 }}>
             <div style={{ color: s.color, fontSize: 24, fontWeight: 800 }}>{s.count}</div>
-            <div style={{ color: '#64748b', fontSize: 10, fontWeight: 600, textTransform: 'uppercase' }}>{s.label}</div>
+            <div style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase' }}>{s.label}</div>
           </div>
         ))}
         {topTypes.length > 0 && (
-          <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 10, padding: '10px 14px', flex: 1, minWidth: 160 }}>
-            <div style={{ color: '#64748b', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', marginBottom: 6 }}>Most Common Gap Types</div>
+          <div style={{ background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 10, padding: '10px 14px', flex: 1, minWidth: 160 }}>
+            <div style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', marginBottom: 6 }}>Most Common Gap Types</div>
             {topTypes.map(([t, c]) => (
-              <div key={t} style={{ color: '#94a3b8', fontSize: 11, marginBottom: 2 }}>
-                • {t.replace(/_/g, ' ')} <span style={{ color: '#475569' }}>({c})</span>
+              <div key={t} style={{ color: 'var(--c-94a3b8)', fontSize: 11, marginBottom: 2 }}>
+                • {t.replace(/_/g, ' ')} <span style={{ color: 'var(--c-475569)' }}>({c})</span>
               </div>
             ))}
           </div>
@@ -1261,15 +1263,15 @@ function InnovationHero({ gaps, scores }) {
   const total   = scores.length || 8
 
   return (
-    <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 16, padding: '24px' }}>
+    <div style={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 16, padding: '24px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16, marginBottom: 20 }}>
         <div>
-          <div style={{ color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6 }}>Innovation Gap Analysis</div>
+          <div style={{ color: 'var(--c-64748b)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6 }}>Innovation Gap Analysis</div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
-            <span style={{ color: '#f1f5f9', fontSize: 48, fontWeight: 800, lineHeight: 1 }}>{gaps.length}</span>
-            <span style={{ color: '#475569', fontSize: 20 }}>capability gaps</span>
+            <span style={{ color: 'var(--c-f1f5f9)', fontSize: 48, fontWeight: 800, lineHeight: 1 }}>{gaps.length}</span>
+            <span style={{ color: 'var(--c-475569)', fontSize: 20 }}>capability gaps</span>
           </div>
-          <div style={{ color: '#64748b', fontSize: 12 }}>
+          <div style={{ color: 'var(--c-64748b)', fontSize: 12 }}>
             {adopted} of {total} Azure capability domains adopted
             {partial > 0 && ` · ${partial} partially`}
             {high > 0 && ` · ${high} high-impact gaps not yet addressed`}
@@ -1283,17 +1285,17 @@ function InnovationHero({ gaps, scores }) {
           ].map(s => (
             <div key={s.label} style={{ background: `${s.color}10`, border: `1px solid ${s.color}25`, borderRadius: 10, padding: '10px 14px', textAlign: 'center' }}>
               <div style={{ color: s.color, fontSize: 22, fontWeight: 800 }}>{s.count}</div>
-              <div style={{ color: '#64748b', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', lineHeight: 1.4 }}>{s.label}</div>
+              <div style={{ color: 'var(--c-64748b)', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', lineHeight: 1.4 }}>{s.label}</div>
             </div>
           ))}
         </div>
       </div>
       {high > 0 && (
-        <div style={{ borderTop: '1px solid #1e293b', paddingTop: 14 }}>
-          <div style={{ color: '#475569', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>High-Impact Opportunities</div>
+        <div style={{ borderTop: '1px solid var(--c-1e293b)', paddingTop: 14 }}>
+          <div style={{ color: 'var(--c-475569)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>High-Impact Opportunities</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {gaps.filter(g => g.business_impact === 'High').map(g => (
-              <span key={g.category_key} style={{ background: '#4c1d9520', color: '#a78bfa', fontSize: 11, padding: '4px 10px', borderRadius: 20, border: '1px solid #7c3aed30', fontWeight: 600 }}>
+              <span key={g.category_key} style={{ background: '#4c1d9520', color: 'var(--c-a78bfa)', fontSize: 11, padding: '4px 10px', borderRadius: 20, border: '1px solid #7c3aed30', fontWeight: 600 }}>
                 {g.icon} {g.category}
               </span>
             ))}
@@ -1313,8 +1315,8 @@ function MigrationHero({ opps }) {
   const totalSaving = opps.reduce((s, o) => s + (o.estimated_monthly_saving_usd ?? 0), 0)
 
   return (
-    <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 16, padding: '24px' }}>
-      <div style={{ color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 16 }}>IaaS → PaaS Migration Roadmap</div>
+    <div style={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 16, padding: '24px' }}>
+      <div style={{ color: 'var(--c-64748b)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 16 }}>IaaS → PaaS Migration Roadmap</div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
         {[
           { label: 'Wave 1', sub: 'Quick Wins (≤ 2 wks)', count: w1.length, color: '#22c55e', desc: 'Start immediately' },
@@ -1324,28 +1326,28 @@ function MigrationHero({ opps }) {
           <div key={w.label} style={{ flex: 1, minWidth: 110, background: `${w.color}08`, border: `1px solid ${w.color}25`, borderRadius: 12, padding: '14px 16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
               <span style={{ color: w.color, fontSize: 13, fontWeight: 700 }}>{w.label}</span>
-              <span style={{ color: '#f1f5f9', fontSize: 26, fontWeight: 800 }}>{w.count}</span>
+              <span style={{ color: 'var(--c-f1f5f9)', fontSize: 26, fontWeight: 800 }}>{w.count}</span>
             </div>
-            <div style={{ color: '#64748b', fontSize: 10 }}>{w.sub}</div>
+            <div style={{ color: 'var(--c-64748b)', fontSize: 10 }}>{w.sub}</div>
             <div style={{ color: w.color, fontSize: 10, fontWeight: 600, marginTop: 4 }}>{w.desc}</div>
           </div>
         ))}
-        <div style={{ flex: 1, minWidth: 110, background: '#1e293b', border: '1px solid #334155', borderRadius: 12, padding: '14px 16px' }}>
-          <div style={{ color: '#475569', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>Est. Effort</div>
-          <div style={{ color: '#f1f5f9', fontSize: 24, fontWeight: 800 }}>{totalDays}d</div>
+        <div style={{ flex: 1, minWidth: 110, background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 12, padding: '14px 16px' }}>
+          <div style={{ color: 'var(--c-475569)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>Est. Effort</div>
+          <div style={{ color: 'var(--c-f1f5f9)', fontSize: 24, fontWeight: 800 }}>{totalDays}d</div>
           {totalSaving > 0 && <div style={{ color: '#22c55e', fontSize: 11, fontWeight: 600, marginTop: 4 }}>${Math.round(totalSaving).toLocaleString()}/mo savings</div>}
         </div>
       </div>
       {w1.length > 0 && (
-        <div style={{ borderTop: '1px solid #1e293b', paddingTop: 14 }}>
-          <div style={{ color: '#475569', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>Wave 1 — Ready Now</div>
+        <div style={{ borderTop: '1px solid var(--c-1e293b)', paddingTop: 14 }}>
+          <div style={{ color: 'var(--c-475569)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>Wave 1 — Ready Now</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {w1.slice(0, 6).map((o, i) => (
-              <span key={i} style={{ background: '#05280f20', color: '#86efac', fontSize: 11, padding: '3px 10px', borderRadius: 20, border: '1px solid #16a34a30' }}>
+              <span key={i} style={{ background: '#05280f20', color: 'var(--c-86efac)', fontSize: 11, padding: '3px 10px', borderRadius: 20, border: '1px solid #16a34a30' }}>
                 {o.resource_name ?? o.resource_type}
               </span>
             ))}
-            {w1.length > 6 && <span style={{ color: '#475569', fontSize: 11, alignSelf: 'center' }}>+{w1.length - 6} more</span>}
+            {w1.length > 6 && <span style={{ color: 'var(--c-475569)', fontSize: 11, alignSelf: 'center' }}>+{w1.length - 6} more</span>}
           </div>
         </div>
       )}
@@ -1374,8 +1376,8 @@ function LicensingHero({ opps }) {
   }
 
   return (
-    <div style={{ background: '#0f172a', border: '1px solid #16a34a25', borderRadius: 16, padding: '24px', borderLeft: '4px solid #22c55e' }}>
-      <div style={{ color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 16 }}>Licensing, Reservation & Commercial Optimization</div>
+    <div style={{ background: 'var(--c-0f172a)', border: '1px solid #16a34a25', borderRadius: 16, padding: '24px', borderLeft: '4px solid #22c55e' }}>
+      <div style={{ color: 'var(--c-64748b)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 16 }}>Licensing, Reservation & Commercial Optimization</div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
         {[
           { label: 'Monthly Potential', value: `$${Math.round(monthly).toLocaleString()}`,  sub: 'estimated saving',    color: '#22c55e' },
@@ -1384,18 +1386,18 @@ function LicensingHero({ opps }) {
           { label: 'Opportunities',     value: String(opps.length),                         sub: `${highConf} high confidence`, color: '#3b82f6' },
         ].map(m => (
           <div key={m.label} style={{ flex: 1, minWidth: 110, background: `${m.color}08`, border: `1px solid ${m.color}20`, borderRadius: 12, padding: '14px 16px' }}>
-            <div style={{ color: '#64748b', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', marginBottom: 6 }}>{m.label}</div>
+            <div style={{ color: 'var(--c-64748b)', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', marginBottom: 6 }}>{m.label}</div>
             <div style={{ color: m.color, fontSize: 22, fontWeight: 800 }}>{m.value}</div>
-            <div style={{ color: '#475569', fontSize: 10, marginTop: 2 }}>{m.sub}</div>
+            <div style={{ color: 'var(--c-475569)', fontSize: 10, marginTop: 2 }}>{m.sub}</div>
           </div>
         ))}
       </div>
       {Object.keys(byType).length > 0 && (
-        <div style={{ borderTop: '1px solid #1e293b', paddingTop: 14 }}>
-          <div style={{ color: '#475569', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>Opportunity Breakdown</div>
+        <div style={{ borderTop: '1px solid var(--c-1e293b)', paddingTop: 14 }}>
+          <div style={{ color: 'var(--c-475569)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>Opportunity Breakdown</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {Object.entries(byType).map(([type, count]) => {
-              const meta = TYPE_META[type] || { label: type, color: '#64748b' }
+              const meta = TYPE_META[type] || { label: type, color: 'var(--c-64748b)' }
               return (
                 <span key={type} style={{ background: `${meta.color}12`, color: meta.color, fontSize: 11, padding: '4px 10px', borderRadius: 20, border: `1px solid ${meta.color}30`, fontWeight: 600 }}>
                   {meta.label}: {count}
@@ -2067,7 +2069,7 @@ function AppInner() {
   if (error && !data) return <ErrorView message={error} onRetry={() => load()} />
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: '#080c14' }}>
+    <div data-app-shell style={{ display: 'flex', minHeight: '100vh', background: 'var(--c-080c14)' }}>
       <ToastHost />
       <SidebarNav
         view={view}
@@ -2102,7 +2104,7 @@ function AppInner() {
       {!isDemoMode && data?.inventory_only && (
         <div style={{ background: 'rgba(2,132,199,0.10)', borderBottom: '1px solid rgba(2,132,199,0.30)', padding: '8px 24px' }}>
           <div style={{ maxWidth: 1536, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, fontSize: 13 }}>
-            <span style={{ color: '#7dd3fc', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ color: 'var(--c-7dd3fc)', display: 'flex', alignItems: 'center', gap: 8 }}>
               <Database size={14} />
               <span><strong>Inventory loaded</strong> — {data.resources?.length || 0} resources. Cost, scores and AI analysis load on demand.</span>
             </span>
@@ -2141,18 +2143,18 @@ function AppInner() {
       />
 
       {/* Header — enterprise top bar aligned with sidebar (52px) */}
-      <header style={{
+      <header data-app-header style={{
         height: 52, minHeight: 52,
         position: 'sticky', top: 0, zIndex: 20,
-        background: '#0c1220',
-        borderBottom: '1px solid rgba(30, 41, 59, 0.6)',
+        background: 'var(--c-0c1220)',
+        borderBottom: '1px solid rgba(var(--rgb-slate), 0.6)',
         padding: '0 24px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         backdropFilter: 'blur(12px)',
         gap: 12,
       }}>
         <div className="flex items-center gap-3 min-w-0">
-          <h1 style={{ fontSize: 15, fontWeight: 700, color: '#f1f5f9', letterSpacing: '-0.01em', lineHeight: 1, margin: 0, whiteSpace: 'nowrap' }}>Azure Infra IQ</h1>
+          <h1 style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-f1f5f9)', letterSpacing: '-0.01em', lineHeight: 1, margin: 0, whiteSpace: 'nowrap' }}>Azure Infra IQ</h1>
           <span style={{
             fontSize: 10, fontWeight: 600, color: '#0078d4',
             background: 'rgba(0, 120, 212, 0.12)',
@@ -2173,7 +2175,7 @@ function AppInner() {
             onCreateClick={() => setSaveProjectModalOpen(true)}
           />
         </div>
-        <div className="flex items-center gap-2 shrink-0" style={{ position: 'relative', zIndex: 1, background: '#0c1220', paddingLeft: 8 }}>
+        <div className="flex items-center gap-2 shrink-0" style={{ position: 'relative', zIndex: 1, background: 'var(--c-0c1220)', paddingLeft: 8 }}>
           {error && (
             <span style={{
               fontSize: 11, fontWeight: 500, color: '#f97316',
@@ -2187,27 +2189,28 @@ function AppInner() {
           <ReadOnlyBadge />
           <AIStatusBadge provider={aiProvider} onOpenSettings={() => setSettingsOpen(true)} />
           <React.Suspense fallback={null}><ExportPDFButton data={pdfData} /></React.Suspense>
+          <ThemeToggle />
           <button
             onClick={() => setSettingsOpen(true)}
             style={{
               width: 32, height: 32,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              borderRadius: 8, border: '1px solid rgba(30, 41, 59, 0.6)',
-              background: 'rgba(30, 41, 59, 0.3)',
-              color: '#64748b', cursor: 'pointer',
+              borderRadius: 8, border: '1px solid rgba(var(--rgb-slate), 0.6)',
+              background: 'rgba(var(--rgb-slate), 0.3)',
+              color: 'var(--c-64748b)', cursor: 'pointer',
               transition: 'all 0.15s',
             }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(30, 41, 59, 0.6)'; e.currentTarget.style.color = '#94a3b8' }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(30, 41, 59, 0.3)'; e.currentTarget.style.color = '#64748b' }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(var(--rgb-slate), 0.6)'; e.currentTarget.style.color = 'var(--c-94a3b8)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(var(--rgb-slate), 0.3)'; e.currentTarget.style.color = 'var(--c-64748b)' }}
             title="Settings"
           >
             <Settings size={15} />
           </button>
           {data?.last_refreshed && !refreshing && (
-            <span className="hidden sm:flex items-center gap-1.5" style={{ fontSize: 11, color: '#64748b' }} title={new Date(data.last_refreshed).toLocaleString()}>
+            <span className="hidden sm:flex items-center gap-1.5" style={{ fontSize: 11, color: 'var(--c-64748b)' }} title={new Date(data.last_refreshed).toLocaleString()}>
               <Clock size={12} className={clsx(
                 cacheStatus?.is_refreshing ? 'text-blue-400 animate-pulse' : ''
-              )} style={{ color: cacheStatus?.is_refreshing ? '#3b82f6' : '#475569' }} />
+              )} style={{ color: cacheStatus?.is_refreshing ? '#3b82f6' : 'var(--c-475569)' }} />
               {cacheStatus?.is_refreshing
                 ? <span style={{ color: '#3b82f6' }}>Refreshing…</span>
                 : new Date(data.last_refreshed).toLocaleTimeString()
@@ -2234,7 +2237,7 @@ function AppInner() {
             {isRefreshing ? 'Refreshing…' : 'Refresh'}
           </button>
           {/* Signed-in user — profile photo + name/email + Logout (renders nothing in open/local mode) */}
-          <div style={{ width: 1, height: 22, background: 'rgba(30, 41, 59, 0.8)', margin: '0 2px' }} />
+          <div style={{ width: 1, height: 22, background: 'rgba(var(--rgb-slate), 0.8)', margin: '0 2px' }} />
           <HeaderAccount />
         </div>
       </header>
@@ -2538,17 +2541,17 @@ function AppInner() {
               <Cloud size={32} style={{ color: '#3b9bf0' }} />
             </div>
             <div style={{ maxWidth: 460 }}>
-              <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', margin: 0 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-e2e8f0)', margin: 0 }}>
                 {(loading || refreshing) ? 'Loading your Azure resources…' : 'No Azure data loaded'}
               </h2>
-              <p style={{ fontSize: 13, color: '#94a3b8', marginTop: 8, lineHeight: 1.6 }}>
+              <p style={{ fontSize: 13, color: 'var(--c-94a3b8)', marginTop: 8, lineHeight: 1.6 }}>
                 {(loading || refreshing)
                   ? (progressMsg || 'Connecting to Azure… your resources will appear here as they load.')
                   : 'This tool does not scan your subscription on startup. When you\u2019re ready, load live cost, utilisation and resource data on demand \u2014 or open the assessment modules in the sidebar, which load their own data independently.'}
               </p>
             </div>
             {(loading || refreshing) && (
-              <div style={{ width: 320, height: 4, background: '#1e293b', borderRadius: 999, overflow: 'hidden' }}>
+              <div style={{ width: 320, height: 4, background: 'var(--c-1e293b)', borderRadius: 999, overflow: 'hidden' }}>
                 <div style={{ width: `${progressPct || 5}%`, height: '100%', background: '#0078d4', borderRadius: 999, transition: 'width 0.4s' }} />
               </div>
             )}
@@ -2793,7 +2796,7 @@ function AIBCDRPanel() {
     return (
       <div className="flex flex-col items-center gap-4 py-16">
         <div className="p-4 rounded-full bg-blue-900/20">
-          <span className="text-3xl">{React.createElement(Brain, { size: 28, style: { color: '#a78bfa' } })}</span>
+          <span className="text-3xl">{React.createElement(Brain, { size: 28, style: { color: 'var(--c-a78bfa)' } })}</span>
         </div>
         <p className="text-sm text-gray-400 text-center max-w-sm">
           Claude AI will analyze all resources against Qatar Central BCDR constraints and generate a
@@ -2936,7 +2939,7 @@ function AIBCDRPanel() {
           {/* Executive Summary Card */}
           <div className="rounded-xl border border-blue-700/30 bg-gradient-to-br from-blue-950/40 to-blue-900/20 p-6">
             <div className="flex items-center gap-3 mb-4">
-              <span className="text-2xl">{React.createElement(BarChart2, { size: 22, style: { color: '#60a5fa' } })}</span>
+              <span className="text-2xl">{React.createElement(BarChart2, { size: 22, style: { color: 'var(--c-60a5fa)' } })}</span>
               <h3 className="text-lg font-semibold text-white">Executive Summary</h3>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -3114,7 +3117,7 @@ function AIBCDRPanel() {
           {data.implementation_roadmap && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
-                {React.createElement(Clock, { size: 16, style: { color: '#60a5fa' } })}
+                {React.createElement(Clock, { size: 16, style: { color: 'var(--c-60a5fa)' } })}
                 <h3 className="text-base font-semibold text-white">Implementation Roadmap</h3>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -3171,7 +3174,7 @@ function AIBCDRPanel() {
           {data.regional_analysis && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
-                {React.createElement(Globe, { size: 16, style: { color: '#60a5fa' } })}
+                {React.createElement(Globe, { size: 16, style: { color: 'var(--c-60a5fa)' } })}
                 <h3 className="text-base font-semibold text-white">Regional Analysis</h3>
               </div>
               <div className="rounded-lg border border-blue-800/50 bg-blue-950/10 p-4 space-y-3">
@@ -3492,26 +3495,26 @@ function SecurityView({ data, filteredResources, moduleListMode, setModuleListMo
           {moduleListMode ? (
             <div className="space-y-3">
               {/* Security filter context banner */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 8, padding: '10px 14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--c-0f172a)', border: '1px solid var(--c-1e3a5f)', borderRadius: 8, padding: '10px 14px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <Shield size={14} style={{ color: '#3b82f6' }} />
-                  <span style={{ color: '#93c5fd', fontSize: 13, fontWeight: 600 }}>
+                  <span style={{ color: 'var(--c-93c5fd)', fontSize: 13, fontWeight: 600 }}>
                     {securityFilteredResources.length} resource{securityFilteredResources.length !== 1 ? 's' : ''} with security gaps
-                    {activeSecFilter && <span style={{ color: '#64748b', fontWeight: 400 }}> — {filterLabel} severity</span>}
+                    {activeSecFilter && <span style={{ color: 'var(--c-64748b)', fontWeight: 400 }}> — {filterLabel} severity</span>}
                   </span>
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
                   {['critical', 'medium', 'low'].map(sev => (
                     <button key={sev} onClick={() => setActiveSecFilter(activeSecFilter === sev ? null : sev)} style={{
                       padding: '3px 10px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: 'none',
-                      background: activeSecFilter === sev ? '#3b82f6' : '#1e293b',
-                      color: activeSecFilter === sev ? '#fff' : '#94a3b8',
+                      background: activeSecFilter === sev ? '#3b82f6' : 'var(--c-1e293b)',
+                      color: activeSecFilter === sev ? '#fff' : 'var(--c-94a3b8)',
                     }}>
                       {sev === 'critical' ? 'Critical/High' : sev === 'medium' ? 'Medium' : 'Low'}
                     </button>
                   ))}
                   {activeSecFilter && (
-                    <button onClick={() => setActiveSecFilter(null)} style={{ padding: '3px 8px', borderRadius: 5, fontSize: 11, background: 'none', border: '1px solid #334155', color: '#64748b', cursor: 'pointer' }}>
+                    <button onClick={() => setActiveSecFilter(null)} style={{ padding: '3px 8px', borderRadius: 5, fontSize: 11, background: 'none', border: '1px solid var(--c-334155)', color: 'var(--c-64748b)', cursor: 'pointer' }}>
                       Clear
                     </button>
                   )}
@@ -3636,12 +3639,12 @@ function MigrationView({ data, filteredResources, moduleListMode, setModuleListM
   const opps  = (assess?.opportunities?.length ? assess.opportunities : data?.modernization_opportunities) ?? []
   const fiveR = assess?.five_r_summary ?? []
 
-  const SIXR_COLOR = { Rehost: '#60a5fa', Refactor: '#34d399', Rearchitect: '#a78bfa', Rebuild: '#f472b6', Replace: '#fbbf24', Retain: '#94a3b8' }
+  const SIXR_COLOR = { Rehost: '#60a5fa', Refactor: '#34d399', Rearchitect: '#a78bfa', Rebuild: '#f472b6', Replace: '#fbbf24', Retain: 'var(--c-94a3b8)' }
   const migColumns = [
     { key: 'resource_name', label: 'Resource' },
     { key: 'resource_type', label: 'Current Type', kind: 'resourceType', filterable: true },
     { key: 'five_r', label: '6R Strategy', filterable: true,
-      render: v => v ? <span className="px-1.5 py-0.5 rounded text-xs font-medium" style={{ background: (SIXR_COLOR[v] || '#64748b') + '22', color: SIXR_COLOR[v] || '#94a3b8' }}>{v}</span> : '—' },
+      render: v => v ? <span className="px-1.5 py-0.5 rounded text-xs font-medium" style={{ background: (SIXR_COLOR[v] || 'var(--c-64748b)') + '22', color: SIXR_COLOR[v] || 'var(--c-94a3b8)' }}>{v}</span> : '—' },
     { key: 'target_service', label: 'Target Service' },
     { key: 'complexity', label: 'Complexity', filterable: true },
     { key: 'estimated_savings_pct', label: 'Est. Savings', render: v => v ? `${Math.round(v)}%` : '—' },
@@ -3663,7 +3666,7 @@ function MigrationView({ data, filteredResources, moduleListMode, setModuleListM
       {fiveR.map(r => (
         <div key={r.category} className="rounded-xl border border-gray-800 bg-gray-900/40 p-3" title={r.description}>
           <div className="text-xs text-gray-400">{r.category}</div>
-          <div className="text-2xl font-bold" style={{ color: SIXR_COLOR[r.category] || '#94a3b8' }}>{r.count}</div>
+          <div className="text-2xl font-bold" style={{ color: SIXR_COLOR[r.category] || 'var(--c-94a3b8)' }}>{r.count}</div>
           <div className="text-[10px] text-gray-600 truncate">{r.description}</div>
         </div>
       ))}
@@ -3705,8 +3708,8 @@ function BackupView({ data, filteredResources, moduleListMode, setModuleListMode
   const [tab, setTab] = React.useState('dashboard')
   const bc = data?.backup_coverage
   const gaps = bc?.gaps ?? []
-  const SEV = { Critical: '#ef4444', High: '#f97316', Medium: '#f59e0b', Low: '#94a3b8' }
-  const sevBadge = v => v ? <span className="px-1.5 py-0.5 rounded text-xs font-medium" style={{ background: (SEV[v] || '#64748b') + '22', color: SEV[v] || '#94a3b8' }}>{v}</span> : '—'
+  const SEV = { Critical: '#ef4444', High: '#f97316', Medium: '#f59e0b', Low: 'var(--c-94a3b8)' }
+  const sevBadge = v => v ? <span className="px-1.5 py-0.5 rounded text-xs font-medium" style={{ background: (SEV[v] || 'var(--c-64748b)') + '22', color: SEV[v] || 'var(--c-94a3b8)' }}>{v}</span> : '—'
   const bkCols = [
     { key: 'resource_name', label: 'Resource' },
     { key: 'resource_type', label: 'Type', kind: 'resourceType', filterable: true },
@@ -3755,8 +3758,8 @@ function ResilienceView({ data, filteredResources, moduleListMode, setModuleList
     return () => { a = false }
   }, [])
   const findings = resil?.findings ?? []
-  const RISK = { Critical: '#ef4444', High: '#f97316', Medium: '#f59e0b', Low: '#94a3b8' }
-  const riskBadge = v => v ? <span className="px-1.5 py-0.5 rounded text-xs font-medium" style={{ background: (RISK[v] || '#64748b') + '22', color: RISK[v] || '#94a3b8' }}>{v}</span> : '—'
+  const RISK = { Critical: '#ef4444', High: '#f97316', Medium: '#f59e0b', Low: 'var(--c-94a3b8)' }
+  const riskBadge = v => v ? <span className="px-1.5 py-0.5 rounded text-xs font-medium" style={{ background: (RISK[v] || 'var(--c-64748b)') + '22', color: RISK[v] || 'var(--c-94a3b8)' }}>{v}</span> : '—'
   const rsCols = [
     { key: 'resource_name', label: 'Resource' },
     { key: 'resource_type', label: 'Type', kind: 'resourceType', filterable: true },
@@ -3934,7 +3937,7 @@ function BCDRView({ resources = [] }) {
 export default function App() {
   return (
     <>
-      <ErrorBoundary><AppInner /></ErrorBoundary>
+      <ErrorBoundary><DrillProvider><AppInner /></DrillProvider></ErrorBoundary>
       {/* Outside the boundary on purpose: if the app has crashed to the fallback,
           VersionWatcher keeps polling and can auto-reload the tab into a fixed
           build, self-healing the crash without user action. */}

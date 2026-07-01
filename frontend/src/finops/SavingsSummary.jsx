@@ -41,11 +41,11 @@ export default function SavingsSummary() {
 
   if (loading) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300, gap: 10 }}>
-      <RefreshCw size={18} className="animate-spin" style={{ color: '#3b82f6' }} /><span style={{ color: '#94a3b8' }}>Loading savings analysis…</span>
+      <RefreshCw size={18} className="animate-spin" style={{ color: '#3b82f6' }} /><span style={{ color: 'var(--c-94a3b8)' }}>Loading savings analysis…</span>
     </div>
   )
   if (error) return (
-    <div style={{ background: '#1a0e0e', border: '1px solid #7f1d1d', borderRadius: 10, padding: 16, color: '#fca5a5', display: 'flex', gap: 8 }}>
+    <div style={{ background: '#1a0e0e', border: '1px solid var(--c-7f1d1d)', borderRadius: 10, padding: 16, color: 'var(--c-fca5a5)', display: 'flex', gap: 8 }}>
       <AlertCircle size={16} /><span style={{ fontSize: 12 }}>{error}</span>
     </div>
   )
@@ -77,14 +77,14 @@ export default function SavingsSummary() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h2 style={{ color: '#f1f5f9', fontSize: 18, fontWeight: 700, margin: 0 }}>Savings Optimizer</h2>
-          <p style={{ color: '#64748b', fontSize: 12, margin: 0 }}>
+          <h2 style={{ color: 'var(--c-f1f5f9)', fontSize: 18, fontWeight: 700, margin: 0 }}>Savings Optimizer</h2>
+          <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: 0 }}>
             Azure-native RI recommendations + rightsize + waste analysis
           </p>
         </div>
         <button onClick={load} style={{
-          background: '#1e293b', border: '1px solid #334155', borderRadius: 6,
-          padding: '5px 10px', cursor: 'pointer', color: '#94a3b8', fontSize: 11,
+          background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6,
+          padding: '5px 10px', cursor: 'pointer', color: 'var(--c-94a3b8)', fontSize: 11,
           display: 'flex', alignItems: 'center', gap: 5,
         }}>
           <RefreshCw size={12} /> Refresh
@@ -92,10 +92,10 @@ export default function SavingsSummary() {
       </div>
 
       {/* Total savings hero */}
-      <div style={{ background: 'linear-gradient(135deg, #052e16 0%, #0f172a 100%)', border: '1px solid #166534', borderRadius: 12, padding: 20, textAlign: 'center' }}>
-        <div style={{ color: '#86efac', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Identified Savings</div>
-        <div style={{ color: '#4ade80', fontSize: 36, fontWeight: 800, margin: '8px 0' }}>{fmtUsd(data.total_identified_usd)}</div>
-        <div style={{ color: '#64748b', fontSize: 12 }}>{data.opportunity_count} opportunities across {catSummary.length} categories</div>
+      <div style={{ background: 'linear-gradient(135deg, var(--c-052e16) 0%, var(--c-0f172a) 100%)', border: '1px solid var(--c-166534)', borderRadius: 12, padding: 20, textAlign: 'center' }}>
+        <div style={{ color: 'var(--c-86efac)', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Identified Savings</div>
+        <div style={{ color: 'var(--c-4ade80)', fontSize: 36, fontWeight: 800, margin: '8px 0' }}>{fmtUsd(data.total_identified_usd)}</div>
+        <div style={{ color: 'var(--c-64748b)', fontSize: 12 }}>{data.opportunity_count} opportunities across {catSummary.length} categories</div>
       </div>
 
       {/* Category breakdown */}
@@ -105,25 +105,25 @@ export default function SavingsSummary() {
             key={cat}
             onClick={() => setFilter(filter === cat ? 'all' : cat)}
             style={{
-              background: filter === cat ? '#1e293b' : '#111827',
-              border: `1px solid ${filter === cat ? (CATEGORY_COLORS[cat] || '#334155') : '#1e293b'}`,
+              background: filter === cat ? 'var(--c-1e293b)' : 'var(--c-111827)',
+              border: `1px solid ${filter === cat ? (CATEGORY_COLORS[cat] || 'var(--c-334155)') : 'var(--c-1e293b)'}`,
               borderRadius: 8, padding: '12px 14px', cursor: 'pointer', textAlign: 'left',
             }}
           >
-            <div style={{ width: 8, height: 8, borderRadius: '50%', background: CATEGORY_COLORS[cat] || '#64748b', marginBottom: 6 }} />
-            <div style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, textTransform: 'uppercase' }}>{CATEGORY_LABELS[cat] || cat}</div>
-            <div style={{ color: '#4ade80', fontSize: 16, fontWeight: 700, marginTop: 4 }}>{fmtUsd(savings)}</div>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: CATEGORY_COLORS[cat] || 'var(--c-64748b)', marginBottom: 6 }} />
+            <div style={{ color: 'var(--c-94a3b8)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase' }}>{CATEGORY_LABELS[cat] || cat}</div>
+            <div style={{ color: 'var(--c-4ade80)', fontSize: 16, fontWeight: 700, marginTop: 4 }}>{fmtUsd(savings)}</div>
           </button>
         ))}
       </div>
 
       {/* Effort vs Savings scatter */}
       {scatterData.length > 0 && (
-        <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
-          <div style={{ color: '#94a3b8', fontSize: 12, fontWeight: 600, marginBottom: 10 }}>
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
+          <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, fontWeight: 600, marginBottom: 10 }}>
             Opportunity Matrix — Effort vs Savings (size = savings magnitude)
           </div>
-          <div style={{ fontSize: 10, color: '#475569', marginBottom: 10 }}>X: Low effort → High effort · Y: Monthly savings (USD)</div>
+          <div style={{ fontSize: 10, color: 'var(--c-475569)', marginBottom: 10 }}>X: Low effort → High effort · Y: Monthly savings (USD)</div>
           <ResponsiveContainer width="100%" height={200}>
             <ScatterChart>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -138,9 +138,9 @@ export default function SavingsSummary() {
                   if (!active || !payload?.length) return null
                   const d = payload[0]?.payload
                   return (
-                    <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, padding: '8px 10px', fontSize: 11 }}>
-                      <div style={{ color: '#e2e8f0', fontWeight: 600 }}>{d.name || 'Resource'}</div>
-                      <div style={{ color: '#4ade80' }}>Savings: {fmtUsd(d.savings, 2)}</div>
+                    <div style={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, padding: '8px 10px', fontSize: 11 }}>
+                      <div style={{ color: 'var(--c-e2e8f0)', fontWeight: 600 }}>{d.name || 'Resource'}</div>
+                      <div style={{ color: 'var(--c-4ade80)' }}>Savings: {fmtUsd(d.savings, 2)}</div>
                     </div>
                   )
                 }}
@@ -156,37 +156,37 @@ export default function SavingsSummary() {
       )}
 
       {/* Opportunities table */}
-      <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
+      <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <div style={{ color: '#94a3b8', fontSize: 12, fontWeight: 600 }}>
+          <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, fontWeight: 600 }}>
             {filter === 'all' ? 'All Opportunities' : CATEGORY_LABELS[filter]} ({visible.length})
           </div>
           {filter !== 'all' && (
-            <button onClick={() => setFilter('all')} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 11 }}>Clear filter</button>
+            <button onClick={() => setFilter('all')} style={{ background: 'none', border: 'none', color: 'var(--c-475569)', cursor: 'pointer', fontSize: 11 }}>Clear filter</button>
           )}
         </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr>{['Resource', 'Category', 'Monthly Savings', 'Savings %', 'Effort', 'Confidence', 'Action'].map(h => (
-              <th key={h} style={{ textAlign: 'left', color: '#475569', padding: '5px 8px', borderBottom: '1px solid #1e293b' }}>{h}</th>
+              <th key={h} style={{ textAlign: 'left', color: 'var(--c-475569)', padding: '5px 8px', borderBottom: '1px solid var(--c-1e293b)' }}>{h}</th>
             ))}</tr>
           </thead>
           <tbody>
             {visible.slice(0, 50).map((o, i) => (
-              <tr key={i} style={{ borderBottom: '1px solid #0f172a' }}>
-                <td style={{ padding: '6px 8px', color: '#e2e8f0', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <tr key={i} style={{ borderBottom: '1px solid var(--c-0f172a)' }}>
+                <td style={{ padding: '6px 8px', color: 'var(--c-e2e8f0)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {o.resource_name || o.resource_type}
                 </td>
                 <td style={{ padding: '6px 8px' }}>
-                  <span style={{ color: CATEGORY_COLORS[o.category] || '#94a3b8', fontSize: 10 }}>
+                  <span style={{ color: CATEGORY_COLORS[o.category] || 'var(--c-94a3b8)', fontSize: 10 }}>
                     {CATEGORY_LABELS[o.category] || o.category}
                   </span>
                 </td>
-                <td style={{ padding: '6px 8px', color: '#4ade80', fontWeight: 600 }}>{fmtUsd(o.potential_savings_usd, 2)}</td>
-                <td style={{ padding: '6px 8px', color: '#4ade80' }}>{fmtPct(o.savings_pct)}</td>
-                <td style={{ padding: '6px 8px', color: EFFORT_COLORS[o.effort] || '#94a3b8', fontSize: 10 }}>{o.effort}</td>
-                <td style={{ padding: '6px 8px', color: o.confidence === 'high' ? '#4ade80' : o.confidence === 'medium' ? '#f59e0b' : '#94a3b8', fontSize: 10 }}>{o.confidence}</td>
-                <td style={{ padding: '6px 8px', color: '#64748b', fontSize: 11, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.action}>
+                <td style={{ padding: '6px 8px', color: 'var(--c-4ade80)', fontWeight: 600 }}>{fmtUsd(o.potential_savings_usd, 2)}</td>
+                <td style={{ padding: '6px 8px', color: 'var(--c-4ade80)' }}>{fmtPct(o.savings_pct)}</td>
+                <td style={{ padding: '6px 8px', color: EFFORT_COLORS[o.effort] || 'var(--c-94a3b8)', fontSize: 10 }}>{o.effort}</td>
+                <td style={{ padding: '6px 8px', color: o.confidence === 'high' ? '#4ade80' : o.confidence === 'medium' ? '#f59e0b' : 'var(--c-94a3b8)', fontSize: 10 }}>{o.confidence}</td>
+                <td style={{ padding: '6px 8px', color: 'var(--c-64748b)', fontSize: 11, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.action}>
                   {o.action}
                 </td>
               </tr>
@@ -194,7 +194,7 @@ export default function SavingsSummary() {
           </tbody>
         </table>
         {visible.length > 50 && (
-          <div style={{ color: '#475569', fontSize: 11, marginTop: 8, textAlign: 'center' }}>Showing top 50 of {visible.length}</div>
+          <div style={{ color: 'var(--c-475569)', fontSize: 11, marginTop: 8, textAlign: 'center' }}>Showing top 50 of {visible.length}</div>
         )}
       </div>
     </div>

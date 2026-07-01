@@ -1299,11 +1299,11 @@ const AssessmentWizard = ({ resumeAssessmentId }) => {
 
       {/* Running-in-background info banner */}
       {apexWorkflowId && apexStatus?.status === 'running' && (
-        <div style={{ background: '#0f2a1f', border: '1px solid #16a34a40', borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ background: 'var(--c-0f2a1f)', border: '1px solid #16a34a40', borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
           <Loader2 className="w-4 h-4 text-green-400 animate-spin flex-shrink-0" />
           <div>
-            <span style={{ color: '#86efac', fontSize: 13, fontWeight: 600 }}>Running in background — safe to navigate away</span>
-            <span style={{ color: '#4ade80', fontSize: 12, marginLeft: 8 }}>
+            <span style={{ color: 'var(--c-86efac)', fontSize: 13, fontWeight: 600 }}>Running in background — safe to navigate away</span>
+            <span style={{ color: 'var(--c-4ade80)', fontSize: 12, marginLeft: 8 }}>
               {(apexStatus.agents_completed || []).length}/{apexStatus.total_agents} agents completed
             </span>
           </div>

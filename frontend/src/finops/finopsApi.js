@@ -286,10 +286,10 @@ export function budgetStatusColor(status) {
 
 /** Trend arrow + color */
 export function trendBadge(pct) {
-  if (pct == null) return { arrow: '→', color: '#64748b' }
+  if (pct == null) return { arrow: '→', color: 'var(--c-64748b)' }
   if (pct >  5)   return { arrow: '↑', color: '#ef4444' }
   if (pct < -5)   return { arrow: '↓', color: '#22c55e' }
-  return { arrow: '→', color: '#64748b' }
+  return { arrow: '→', color: 'var(--c-64748b)' }
 }
 
 /** Chart color palette */

@@ -1,6 +1,18 @@
 import React, { useState } from 'react'
 import { ChevronDown, ChevronRight, ArrowRight, Cpu } from 'lucide-react'
 import clsx from 'clsx'
+import { useDrill } from '../drill/DrillContext'
+
+const oppToResource = (r) => ({
+  resource_id: r.resource_id,
+  resource_name: r.resource_name,
+  resource_type: r.resource_type,
+  resource_group: r.resource_group,
+  location: r.location,
+  subscription_id: r.subscription_id,
+  cost_current_month: r.current_cost ?? 0,
+  estimated_monthly_savings: r.estimated_savings ?? 0,
+})
 
 function fmt(n) {
   return `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -8,6 +20,7 @@ function fmt(n) {
 
 export default function RightSizePanel({ opportunities = [] }) {
   const [expanded, setExpanded] = useState(true)
+  const { openResourceDrill, openResourceDetail } = useDrill()
 
   if (!opportunities?.length) return null
 
@@ -24,7 +37,11 @@ export default function RightSizePanel({ opportunities = [] }) {
           <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
             Right-Sizing Opportunities
           </h2>
-          <span className="badge bg-blue-900/50 text-blue-400">{opportunities.length}</span>
+          <span
+            className="badge bg-blue-900/50 text-blue-400 cursor-pointer hover:bg-blue-800/60"
+            title="Click to view the right-sizing candidate resources"
+            onClick={(e) => { e.stopPropagation(); openResourceDrill('Right-sizing opportunities', opportunities.map(oppToResource)) }}
+          >{opportunities.length}</span>
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm text-gray-500">
@@ -39,7 +56,9 @@ export default function RightSizePanel({ opportunities = [] }) {
           {opportunities.map(r => (
             <div
               key={r.resource_id}
-              className="p-3 bg-gray-800/50 rounded-lg border border-gray-800 hover:border-gray-700 transition-colors"
+              onClick={() => openResourceDetail(oppToResource(r))}
+              title="Open full resource details"
+              className="p-3 bg-gray-800/50 rounded-lg border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">

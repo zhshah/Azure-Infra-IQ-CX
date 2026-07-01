@@ -97,7 +97,7 @@ export default function CostByTypeBar({ data, onBarClick }) {
             />
             <Tooltip content={<CustomTooltip />} />
             <Legend
-              wrapperStyle={{ paddingTop: '8px', fontSize: '12px', color: '#9ca3af' }}
+              wrapperStyle={{ paddingTop: '8px', fontSize: '12px', color: 'var(--c-9ca3af)' }}
             />
             <Bar
               dataKey="This Month"

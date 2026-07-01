@@ -362,16 +362,16 @@ const AssessmentModule = () => {
                         return (
                           <div style={{ marginTop: 10 }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                              <span style={{ color: '#86efac', fontSize: 11, fontWeight: 600 }}>
+                              <span style={{ color: 'var(--c-86efac)', fontSize: 11, fontWeight: 600 }}>
                                 ⚙ {completed}/{total} agents completed
                               </span>
                               {wf?.status === 'running' && currentAgent && (
-                                <span style={{ color: '#60a5fa', fontSize: 11 }}>
+                                <span style={{ color: 'var(--c-60a5fa)', fontSize: 11 }}>
                                   Running: {agentLabels[currentAgent] || currentAgent}
                                 </span>
                               )}
                             </div>
-                            <div style={{ background: '#1e293b', borderRadius: 4, height: 6, overflow: 'hidden' }}>
+                            <div style={{ background: 'var(--c-1e293b)', borderRadius: 4, height: 6, overflow: 'hidden' }}>
                               <div style={{ background: '#22c55e', height: '100%', width: `${pct}%`, transition: 'width 0.6s ease', borderRadius: 4 }} />
                             </div>
                           </div>

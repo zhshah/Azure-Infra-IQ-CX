@@ -46,7 +46,7 @@ function ProgressRing({ value, size = 64, label, color }) {
     <div className="flex flex-col items-center gap-1">
       <div className="relative inline-flex items-center justify-center" style={{ width: size, height: size }}>
         <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
-          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#1f2937" strokeWidth="5" />
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" style={{ stroke: 'var(--c-1f2937)' }} strokeWidth="5" />
           <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={ringColor} strokeWidth="5"
             strokeDasharray={`${dash} ${circ - dash}`} strokeLinecap="round" />
         </svg>

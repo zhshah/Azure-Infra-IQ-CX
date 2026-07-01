@@ -40,7 +40,7 @@ function ScoreRing({ score, label, size = 90 }) {
   return (
     <div className="flex flex-col items-center">
       <svg width={size} height={size} className="transform -rotate-90">
-        <circle cx={size/2} cy={size/2} r={r} fill="none" strokeWidth={sw} stroke="#374151" opacity={0.5} />
+        <circle cx={size/2} cy={size/2} r={r} fill="none" strokeWidth={sw} style={{ stroke: 'var(--c-374151)' }} opacity={0.5} />
         <circle cx={size/2} cy={size/2} r={r} fill="none" strokeWidth={sw} stroke={color}
           strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round" />
       </svg>

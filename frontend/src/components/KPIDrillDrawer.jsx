@@ -52,18 +52,18 @@ export default function KPIDrillDrawer({ open, onClose, title, subtitle, accent 
       {/* Drawer */}
       <div style={{
         position: "relative", width: "min(560px, 90vw)", height: "100vh",
-        background: "#0d1117", borderLeft: `2px solid ${accent}30`,
+        background: "var(--c-0d1117)", borderLeft: `2px solid ${accent}30`,
         display: "flex", flexDirection: "column", overflow: "hidden",
         animation: "slideIn 0.2s ease-out",
       }}>
         {/* Header */}
-        <div style={{ padding: "16px 20px", borderBottom: "1px solid #1e293b", flexShrink: 0 }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--c-1e293b)", flexShrink: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
               <h3 style={{ color: accent, margin: 0, fontSize: 16, fontWeight: 700 }}>{title}</h3>
-              {subtitle && <p style={{ color: "#64748b", margin: "2px 0 0", fontSize: 12 }}>{subtitle}</p>}
+              {subtitle && <p style={{ color: "var(--c-64748b)", margin: "2px 0 0", fontSize: 12 }}>{subtitle}</p>}
             </div>
-            <button onClick={onClose} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 4 }}>
+            <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--c-64748b)", cursor: "pointer", padding: 4 }}>
               <X size={18} />
             </button>
           </div>
@@ -71,26 +71,26 @@ export default function KPIDrillDrawer({ open, onClose, title, subtitle, accent 
           {/* Search + Export */}
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
             <div style={{ flex: 1, position: "relative" }}>
-              <Search size={13} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#475569" }} />
+              <Search size={13} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--c-475569)" }} />
               <input
                 value={search} onChange={e => setSearch(e.target.value)}
                 placeholder="Filter items..."
                 style={{
-                  width: "100%", background: "#1e293b", border: "1px solid #334155", borderRadius: 8,
-                  color: "#e2e8f0", fontSize: 12, padding: "6px 10px 6px 30px", outline: "none",
+                  width: "100%", background: "var(--c-1e293b)", border: "1px solid var(--c-334155)", borderRadius: 8,
+                  color: "var(--c-e2e8f0)", fontSize: 12, padding: "6px 10px 6px 30px", outline: "none",
                 }}
               />
             </div>
             <button onClick={exportCSV} style={{
               display: "flex", alignItems: "center", gap: 4,
-              background: "#1e293b", border: "1px solid #334155", borderRadius: 8,
-              color: "#94a3b8", fontSize: 11, padding: "6px 10px", cursor: "pointer",
+              background: "var(--c-1e293b)", border: "1px solid var(--c-334155)", borderRadius: 8,
+              color: "var(--c-94a3b8)", fontSize: 11, padding: "6px 10px", cursor: "pointer",
             }}>
               <Download size={12} /> CSV
             </button>
           </div>
 
-          <div style={{ color: "#475569", fontSize: 11, marginTop: 8 }}>
+          <div style={{ color: "var(--c-475569)", fontSize: 11, marginTop: 8 }}>
             {sorted.length} item{sorted.length !== 1 ? "s" : ""}
           </div>
         </div>
@@ -98,13 +98,13 @@ export default function KPIDrillDrawer({ open, onClose, title, subtitle, accent 
         {/* Table Header */}
         <div style={{
           display: "grid", gridTemplateColumns: columns.map(c => c.width || "1fr").join(" "),
-          padding: "8px 20px", borderBottom: "1px solid #1e293b", background: "#0f172a", flexShrink: 0,
+          padding: "8px 20px", borderBottom: "1px solid var(--c-1e293b)", background: "var(--c-0f172a)", flexShrink: 0,
         }}>
           {columns.map(c => (
             <div key={c.key}
               onClick={() => { setSortCol(c.key); setSortDir(d => sortCol === c.key && d === "asc" ? "desc" : "asc"); }}
               style={{
-                color: "#64748b", fontSize: 10, fontWeight: 700, textTransform: "uppercase",
+                color: "var(--c-64748b)", fontSize: 10, fontWeight: 700, textTransform: "uppercase",
                 letterSpacing: "0.5px", cursor: "pointer", userSelect: "none",
                 display: "flex", alignItems: "center", gap: 3,
               }}>
@@ -134,14 +134,14 @@ export default function KPIDrillDrawer({ open, onClose, title, subtitle, accent 
                   const val = c.value(item);
                   return (
                     <div key={c.key} style={{
-                      color: c.color ? c.color(item) : "#e2e8f0",
+                      color: c.color ? c.color(item) : "var(--c-e2e8f0)",
                       fontSize: 12, display: "flex", alignItems: "center", gap: 6,
                       overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                     }}>
                       {c.key === "name" && item.type && <ResourceIconImg type={item.type} size={16} />}
                       {c.render ? c.render(item) : val}
                       {c.key === columns[0]?.key && item.detail && (
-                        <ChevronRight size={11} style={{ color: "#475569", marginLeft: "auto", transform: expandedIdx === idx ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+                        <ChevronRight size={11} style={{ color: "var(--c-475569)", marginLeft: "auto", transform: expandedIdx === idx ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
                       )}
                     </div>
                   );
@@ -149,8 +149,8 @@ export default function KPIDrillDrawer({ open, onClose, title, subtitle, accent 
               </div>
               {/* Expanded detail */}
               {expandedIdx === idx && item.detail && (
-                <div style={{ padding: "8px 20px 12px 36px", borderBottom: "1px solid #1e293b20", background: "#0f172a" }}>
-                  <div style={{ color: "#94a3b8", fontSize: 11, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+                <div style={{ padding: "8px 20px 12px 36px", borderBottom: "1px solid #1e293b20", background: "var(--c-0f172a)" }}>
+                  <div style={{ color: "var(--c-94a3b8)", fontSize: 11, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
                     {item.detail}
                   </div>
                 </div>
@@ -158,7 +158,7 @@ export default function KPIDrillDrawer({ open, onClose, title, subtitle, accent 
             </div>
           ))}
           {sorted.length === 0 && (
-            <div style={{ padding: "40px 20px", textAlign: "center", color: "#475569", fontSize: 13 }}>
+            <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--c-475569)", fontSize: 13 }}>
               No items to show
             </div>
           )}

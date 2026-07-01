@@ -15,12 +15,12 @@ import React from 'react'
 import { TIME_RANGE_OPTIONS } from './finopsApi'
 
 const SEL_STYLE = {
-  background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6,
-  color: '#e2e8f0', padding: '5px 10px', fontSize: 12, cursor: 'pointer',
+  background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 6,
+  color: 'var(--c-e2e8f0)', padding: '5px 10px', fontSize: 12, cursor: 'pointer',
 }
 const DATE_STYLE = {
-  background: '#0f172a', border: '1px solid #334155', borderRadius: 6,
-  color: '#e2e8f0', padding: '5px 8px', fontSize: 12,
+  background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6,
+  color: 'var(--c-e2e8f0)', padding: '5px 8px', fontSize: 12,
   colorScheme: 'dark',
 }
 
@@ -54,7 +54,7 @@ export default function DateRangePicker({
             style={DATE_STYLE}
             title="Start date"
           />
-          <span style={{ color: '#475569', fontSize: 11 }}>→</span>
+          <span style={{ color: 'var(--c-475569)', fontSize: 11 }}>→</span>
           <input
             type="date"
             value={to}

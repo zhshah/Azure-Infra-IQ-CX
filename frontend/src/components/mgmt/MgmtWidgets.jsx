@@ -27,19 +27,19 @@ export function downloadCSV(filename, rows) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export const card = { background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16 };
-export const th = { textAlign: 'left', padding: '8px 10px', color: '#64748b', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, borderBottom: '1px solid #1e293b', position: 'sticky', top: 0, background: '#0b1220' };
-export const td = { padding: '8px 10px', color: '#cbd5e1', fontSize: 12, borderBottom: '1px solid #111a2e' };
+export const card = { background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 12, padding: 16 };
+export const th = { textAlign: 'left', padding: '8px 10px', color: 'var(--c-64748b)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, borderBottom: '1px solid var(--c-1e293b)', position: 'sticky', top: 0, background: 'var(--c-0b1220)' };
+export const td = { padding: '8px 10px', color: 'var(--c-cbd5e1)', fontSize: 12, borderBottom: '1px solid var(--c-111a2e)' };
 
 export function KPI({ label, value, sub, color = '#38bdf8', Icon }) {
   return (
     <div style={{ flex: '1 1 160px', minWidth: 160, ...card }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <span style={{ color: '#64748b', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</span>
+        <span style={{ color: 'var(--c-64748b)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</span>
         {Icon && <Icon size={16} style={{ color }} />}
       </div>
       <div style={{ color, fontSize: 26, fontWeight: 700, lineHeight: 1.1 }}>{value}</div>
-      {sub && <div style={{ color: '#64748b', fontSize: 11, marginTop: 4 }}>{sub}</div>}
+      {sub && <div style={{ color: 'var(--c-64748b)', fontSize: 11, marginTop: 4 }}>{sub}</div>}
     </div>
   );
 }
@@ -48,11 +48,11 @@ export function Bar({ label, value, total, color }) {
   const pct = total ? Math.round((value / total) * 100) : 0;
   return (
     <div style={{ marginBottom: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#94a3b8', marginBottom: 3 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-94a3b8)', marginBottom: 3 }}>
         <span>{label}</span>
-        <span style={{ color: '#e2e8f0' }}>{value}{total ? ` · ${pct}%` : ''}</span>
+        <span style={{ color: 'var(--c-e2e8f0)' }}>{value}{total ? ` · ${pct}%` : ''}</span>
       </div>
-      <div style={{ height: 8, background: '#1e293b', borderRadius: 6, overflow: 'hidden' }}>
+      <div style={{ height: 8, background: 'var(--c-1e293b)', borderRadius: 6, overflow: 'hidden' }}>
         <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 6 }} />
       </div>
     </div>
@@ -61,12 +61,12 @@ export function Bar({ label, value, total, color }) {
 
 export function TabBar({ tabs, active, onChange }) {
   return (
-    <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #1e293b', flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--c-1e293b)', flexWrap: 'wrap' }}>
       {tabs.map(({ key, label, Icon }) => (
         <button key={key} onClick={() => onChange(key)} style={{
           display: 'flex', alignItems: 'center', gap: 6, padding: '9px 14px', fontSize: 13, fontWeight: 600,
           background: 'transparent', border: 'none', cursor: 'pointer',
-          color: active === key ? '#38bdf8' : '#94a3b8',
+          color: active === key ? '#38bdf8' : 'var(--c-94a3b8)',
           borderBottom: active === key ? '2px solid #38bdf8' : '2px solid transparent',
         }}>
           {Icon && <Icon size={14} />} {label}
@@ -78,8 +78,8 @@ export function TabBar({ tabs, active, onChange }) {
 
 export function Spinner({ label = 'Loading…' }) {
   return (
-    <div style={{ ...card, textAlign: 'center', color: '#94a3b8', padding: 40 }}>
-      <div style={{ width: 40, height: 40, border: '3px solid #1e293b', borderTopColor: '#38bdf8', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 14px' }} />
+    <div style={{ ...card, textAlign: 'center', color: 'var(--c-94a3b8)', padding: 40 }}>
+      <div style={{ width: 40, height: 40, border: '3px solid var(--c-1e293b)', borderTopColor: '#38bdf8', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 14px' }} />
       {label}
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
@@ -88,7 +88,7 @@ export function Spinner({ label = 'Loading…' }) {
 
 export function ErrorBox({ error, onRetry }) {
   return (
-    <div style={{ ...card, borderColor: '#dc2626', color: '#fca5a5', fontSize: 13 }}>
+    <div style={{ ...card, borderColor: '#dc2626', color: 'var(--c-fca5a5)', fontSize: 13 }}>
       Failed to load: {error}
       {onRetry && <button onClick={onRetry} style={{ marginLeft: 12, background: '#1e40af', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: 'pointer' }}>Retry</button>}
     </div>
@@ -99,12 +99,12 @@ export function ViewHeader({ title, subtitle, onRefresh, loading }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
       <div>
-        <h2 style={{ color: '#e2e8f0', fontSize: 20, fontWeight: 700, margin: 0 }}>{title}</h2>
-        <p style={{ color: '#64748b', fontSize: 12, margin: '2px 0 0' }}>{subtitle}</p>
+        <h2 style={{ color: 'var(--c-e2e8f0)', fontSize: 20, fontWeight: 700, margin: 0 }}>{title}</h2>
+        <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: '2px 0 0' }}>{subtitle}</p>
       </div>
       {onRefresh && (
-        <button onClick={onRefresh} disabled={loading} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#1e293b', color: '#cbd5e1', border: '1px solid #334155', borderRadius: 8, padding: '7px 12px', fontSize: 12, cursor: loading ? 'default' : 'pointer' }}>
-          <span style={{ display: 'inline-block', width: 13, height: 13, border: '2px solid #475569', borderTopColor: '#38bdf8', borderRadius: '50%', animation: loading ? 'spin 1s linear infinite' : 'none' }} /> Refresh
+        <button onClick={onRefresh} disabled={loading} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--c-1e293b)', color: 'var(--c-cbd5e1)', border: '1px solid var(--c-334155)', borderRadius: 8, padding: '7px 12px', fontSize: 12, cursor: loading ? 'default' : 'pointer' }}>
+          <span style={{ display: 'inline-block', width: 13, height: 13, border: '2px solid var(--c-475569)', borderTopColor: '#38bdf8', borderRadius: '50%', animation: loading ? 'spin 1s linear infinite' : 'none' }} /> Refresh
           <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
         </button>
       )}
@@ -112,7 +112,7 @@ export function ViewHeader({ title, subtitle, onRefresh, loading }) {
   );
 }
 
-const selStyle = { background: '#1e293b', color: '#cbd5e1', border: '1px solid #334155', borderRadius: 7, padding: '5px 8px', fontSize: 12 };
+const selStyle = { background: 'var(--c-1e293b)', color: 'var(--c-cbd5e1)', border: '1px solid var(--c-334155)', borderRadius: 7, padding: '5px 8px', fontSize: 12 };
 
 // Fetch the subscription id->name map once (for friendly subscription filters/columns).
 export function useSubscriptions() {
@@ -218,7 +218,7 @@ export function DataGrid({ rows, columns, subField, rgField, searchFields, subMa
     <div style={{ ...card, padding: 0 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: 12, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {title && <span style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600 }}>{title} ({filtered.length})</span>}
+          {title && <span style={{ color: 'var(--c-e2e8f0)', fontSize: 13, fontWeight: 600 }}>{title} ({filtered.length})</span>}
           {showSub && (
             <select value={sub} onChange={(e) => setSub(e.target.value)} style={selStyle} title="Filter by subscription">
               <option value="all">All subscriptions</option>
@@ -241,7 +241,7 @@ export function DataGrid({ rows, columns, subField, rgField, searchFields, subMa
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" style={{ ...selStyle, minWidth: 160 }} />
           )}
           {anyActive && (
-            <button onClick={clearAll} style={{ ...selStyle, cursor: 'pointer', color: '#94a3b8' }}>Clear</button>
+            <button onClick={clearAll} style={{ ...selStyle, cursor: 'pointer', color: 'var(--c-94a3b8)' }}>Clear</button>
           )}
         </div>
         {csvName && (

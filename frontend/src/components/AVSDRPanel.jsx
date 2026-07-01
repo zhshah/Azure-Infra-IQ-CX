@@ -145,8 +145,8 @@ const CROSS_REGIONAL_DR = {
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const cardStyle = {
-  background: "#0f172a",
-  border: "1px solid #1e293b",
+  background: "var(--c-0f172a)",
+  border: "1px solid var(--c-1e293b)",
   borderRadius: 12,
   padding: 18,
   marginBottom: 14,
@@ -155,15 +155,15 @@ const cardStyle = {
 const phaseHeaderStyle = {
   fontSize: 13,
   fontWeight: 700,
-  color: "#60a5fa",
+  color: 'var(--c-60a5fa)',
   marginBottom: 8,
 };
 
 const stepStyle = {
   fontSize: 11,
-  color: "#cbd5e1",
+  color: "var(--c-cbd5e1)",
   paddingLeft: 14,
-  borderLeft: "2px solid #1e293b",
+  borderLeft: "2px solid var(--c-1e293b)",
   marginBottom: 4,
   lineHeight: 1.6,
 };
@@ -177,13 +177,13 @@ function AvsIcon({ src, size = 20 }) {
 function DRImplementationCard({ data }) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <div style={{ ...cardStyle, border: "1px solid #334155" }}>
+    <div style={{ ...cardStyle, border: "1px solid var(--c-334155)" }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
         <AvsIcon src={data.icon} size={28} />
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "#f1f5f9" }}>{data.title}</div>
-          <div style={{ fontSize: 11, color: "#64748b" }}>{data.subtitle}</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--c-f1f5f9)" }}>{data.title}</div>
+          <div style={{ fontSize: 11, color: "var(--c-64748b)" }}>{data.subtitle}</div>
         </div>
       </div>
 
@@ -194,26 +194,26 @@ function DRImplementationCard({ data }) {
           { label: "RPO", value: data.rpo, color: "#3b82f6" },
           { label: "Cost Impact", value: data.costImpact, color: "#f97316" },
         ].map(k => (
-          <div key={k.label} style={{ background: "#1e293b", borderRadius: 8, padding: "8px 14px", flex: 1, minWidth: 150 }}>
-            <div style={{ fontSize: 9, color: "#64748b", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>{k.label}</div>
+          <div key={k.label} style={{ background: "var(--c-1e293b)", borderRadius: 8, padding: "8px 14px", flex: 1, minWidth: 150 }}>
+            <div style={{ fontSize: 9, color: "var(--c-64748b)", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>{k.label}</div>
             <div style={{ fontSize: 12, color: k.color, fontWeight: 600 }}>{k.value}</div>
           </div>
         ))}
       </div>
 
       {/* Description */}
-      <p style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.7, marginBottom: 14 }}>{data.description}</p>
+      <p style={{ fontSize: 12, color: "var(--c-94a3b8)", lineHeight: 1.7, marginBottom: 14 }}>{data.description}</p>
 
       {/* Architecture Components */}
       <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: "#a78bfa", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>Architecture Components</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-a78bfa)', marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>Architecture Components</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 8 }}>
           {data.architecture.map((a, i) => (
-            <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", background: "#1e293b", borderRadius: 8, padding: 10 }}>
+            <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", background: "var(--c-1e293b)", borderRadius: 8, padding: 10 }}>
               <AvsIcon src={a.icon} size={22} />
               <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#e2e8f0" }}>{a.label}</div>
-                <div style={{ fontSize: 10, color: "#64748b" }}>{a.detail}</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--c-e2e8f0)" }}>{a.label}</div>
+                <div style={{ fontSize: 10, color: "var(--c-64748b)" }}>{a.detail}</div>
               </div>
             </div>
           ))}
@@ -224,8 +224,8 @@ function DRImplementationCard({ data }) {
       <button
         onClick={() => setExpanded(!expanded)}
         style={{
-          background: "#1e293b", border: "1px solid #334155", borderRadius: 8,
-          padding: "8px 16px", color: "#60a5fa", fontSize: 12, fontWeight: 600,
+          background: "var(--c-1e293b)", border: "1px solid var(--c-334155)", borderRadius: 8,
+          padding: "8px 16px", color: 'var(--c-60a5fa)', fontSize: 12, fontWeight: 600,
           cursor: "pointer", width: "100%", textAlign: "left",
         }}
       >
@@ -271,7 +271,7 @@ export default function AVSDRPanel() {
 
   if (loading) {
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 32, color: "#64748b" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 32, color: "var(--c-64748b)" }}>
         <AvsIcon src={AVS_ICON} size={24} />
         <span style={{ fontSize: 13 }}>Checking for Azure VMware Solution resources…</span>
       </div>
@@ -284,8 +284,8 @@ export default function AVSDRPanel() {
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <AvsIcon src={AVS_ICON} size={32} />
         <div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: "#f1f5f9" }}>Azure VMware Solution — DR Planning</div>
-          <div style={{ fontSize: 11, color: "#64748b" }}>Inventory detection, cross-zone and cross-regional disaster recovery implementation</div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: "var(--c-f1f5f9)" }}>Azure VMware Solution — DR Planning</div>
+          <div style={{ fontSize: 11, color: "var(--c-64748b)" }}>Inventory detection, cross-zone and cross-regional disaster recovery implementation</div>
         </div>
       </div>
 
@@ -293,7 +293,7 @@ export default function AVSDRPanel() {
       <div style={cardStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
           <AvsIcon src={AVS_ICON} size={20} />
-          <span style={{ fontSize: 14, fontWeight: 700, color: "#f1f5f9" }}>AVS Inventory</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "var(--c-f1f5f9)" }}>AVS Inventory</span>
           <span style={{
             fontSize: 10, fontWeight: 700, padding: "2px 10px", borderRadius: 20,
             background: inventory.avs_found ? "#22c55e20" : "#f9731620",
@@ -306,29 +306,29 @@ export default function AVSDRPanel() {
 
         {!inventory.avs_found ? (
           <div style={{ padding: "24px 16px", textAlign: "center" }}>
-            <div style={{ fontSize: 13, color: "#64748b", marginBottom: 8 }}>
+            <div style={{ fontSize: 13, color: "var(--c-64748b)", marginBottom: 8 }}>
               No Azure VMware Solution (AVS) private clouds were detected in your environment.
             </div>
-            <div style={{ fontSize: 11, color: "#475569" }}>
+            <div style={{ fontSize: 11, color: "var(--c-475569)" }}>
               The DR implementation guides below are still available for planning purposes if you are considering AVS deployment.
             </div>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {inventory.private_clouds.map((pc, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, background: "#1e293b", borderRadius: 10, padding: "12px 16px" }}>
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--c-1e293b)", borderRadius: 10, padding: "12px 16px" }}>
                 <AvsIcon src={AVS_ICON} size={24} />
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0" }}>{pc.resource_name}</div>
-                  <div style={{ fontSize: 10, color: "#64748b" }}>{pc.resource_type}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--c-e2e8f0)" }}>{pc.resource_name}</div>
+                  <div style={{ fontSize: 10, color: "var(--c-64748b)" }}>{pc.resource_type}</div>
                 </div>
                 <div style={{ textAlign: "right" }}>
-                  <div style={{ fontSize: 11, color: "#94a3b8" }}>{pc.location}</div>
-                  {pc.sku && <div style={{ fontSize: 10, color: "#a78bfa", fontWeight: 600 }}>SKU: {typeof pc.sku === 'object' ? pc.sku.name || JSON.stringify(pc.sku) : pc.sku}</div>}
+                  <div style={{ fontSize: 11, color: "var(--c-94a3b8)" }}>{pc.location}</div>
+                  {pc.sku && <div style={{ fontSize: 10, color: 'var(--c-a78bfa)', fontWeight: 600 }}>SKU: {typeof pc.sku === 'object' ? pc.sku.name || JSON.stringify(pc.sku) : pc.sku}</div>}
                 </div>
                 <div style={{ textAlign: "right", minWidth: 120 }}>
-                  <div style={{ fontSize: 10, color: "#64748b" }}>{pc.resource_group}</div>
-                  <div style={{ fontSize: 10, color: "#475569" }}>{pc.subscription_name}</div>
+                  <div style={{ fontSize: 10, color: "var(--c-64748b)" }}>{pc.resource_group}</div>
+                  <div style={{ fontSize: 10, color: "var(--c-475569)" }}>{pc.subscription_name}</div>
                 </div>
               </div>
             ))}
@@ -336,13 +336,13 @@ export default function AVSDRPanel() {
             {/* Related resources */}
             {inventory.related_resources?.length > 0 && (
               <div style={{ marginTop: 8 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>Related Resources</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--c-64748b)", marginBottom: 6 }}>Related Resources</div>
                 {inventory.related_resources.map((r, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 12px", borderBottom: "1px solid #1e293b" }}>
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 12px", borderBottom: "1px solid var(--c-1e293b)" }}>
                     <ResourceIconImg resourceType={r.resource_type} size={16} />
-                    <span style={{ fontSize: 11, color: "#cbd5e1", flex: 1 }}>{r.resource_name}</span>
-                    <span style={{ fontSize: 10, color: "#64748b" }}>{r.resource_type}</span>
-                    <span style={{ fontSize: 10, color: "#475569" }}>{r.location}</span>
+                    <span style={{ fontSize: 11, color: "var(--c-cbd5e1)", flex: 1 }}>{r.resource_name}</span>
+                    <span style={{ fontSize: 10, color: "var(--c-64748b)" }}>{r.resource_type}</span>
+                    <span style={{ fontSize: 10, color: "var(--c-475569)" }}>{r.location}</span>
                   </div>
                 ))}
               </div>
@@ -360,11 +360,11 @@ export default function AVSDRPanel() {
       {/* ── Optional AI Analysis ────────────────────────────────── */}
       <div style={cardStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-          <span style={{ fontSize: 18, color: '#a78bfa', display: 'flex' }}>{React.createElement(Brain, { size: 18 })}</span>
-          <span style={{ fontSize: 14, fontWeight: 700, color: "#f1f5f9" }}>AI-Powered AVS DR Analysis</span>
-          <span style={{ fontSize: 10, color: "#64748b" }}>(Optional)</span>
+          <span style={{ fontSize: 18, color: 'var(--c-a78bfa)', display: 'flex' }}>{React.createElement(Brain, { size: 18 })}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "var(--c-f1f5f9)" }}>AI-Powered AVS DR Analysis</span>
+          <span style={{ fontSize: 10, color: "var(--c-64748b)" }}>(Optional)</span>
         </div>
-        <p style={{ fontSize: 11, color: "#94a3b8", marginBottom: 12 }}>
+        <p style={{ fontSize: 11, color: "var(--c-94a3b8)", marginBottom: 12 }}>
           Run an AI analysis against your environment to get personalized AVS DR recommendations, gap identification, and a readiness score.
         </p>
         {!aiData ? (
@@ -372,7 +372,7 @@ export default function AVSDRPanel() {
             onClick={runAiAnalysis}
             disabled={aiLoading}
             style={{
-              background: aiLoading ? "#334155" : "#3b82f6",
+              background: aiLoading ? "var(--c-334155)" : "#3b82f6",
               color: "#fff", border: "none", borderRadius: 8,
               padding: "10px 20px", fontSize: 12, fontWeight: 700,
               cursor: aiLoading ? "default" : "pointer",
@@ -386,30 +386,30 @@ export default function AVSDRPanel() {
             {/* AI Results summary */}
             {aiData.readiness_score != null && (
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                <div style={{ background: "#1e293b", borderRadius: 8, padding: 14, minWidth: 140 }}>
-                  <div style={{ fontSize: 9, color: "#64748b", fontWeight: 700, textTransform: "uppercase" }}>DR Readiness</div>
+                <div style={{ background: "var(--c-1e293b)", borderRadius: 8, padding: 14, minWidth: 140 }}>
+                  <div style={{ fontSize: 9, color: "var(--c-64748b)", fontWeight: 700, textTransform: "uppercase" }}>DR Readiness</div>
                   <div style={{ fontSize: 24, fontWeight: 800, color: aiData.readiness_score >= 70 ? "#22c55e" : aiData.readiness_score >= 40 ? "#eab308" : "#ef4444" }}>
                     {aiData.readiness_score}%
                   </div>
                 </div>
                 {aiData.recommended_strategy && (
-                  <div style={{ background: "#1e293b", borderRadius: 8, padding: 14, flex: 1 }}>
-                    <div style={{ fontSize: 9, color: "#64748b", fontWeight: 700, textTransform: "uppercase" }}>Recommended Strategy</div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "#a78bfa", marginTop: 4 }}>{aiData.recommended_strategy}</div>
+                  <div style={{ background: "var(--c-1e293b)", borderRadius: 8, padding: 14, flex: 1 }}>
+                    <div style={{ fontSize: 9, color: "var(--c-64748b)", fontWeight: 700, textTransform: "uppercase" }}>Recommended Strategy</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-a78bfa)', marginTop: 4 }}>{aiData.recommended_strategy}</div>
                   </div>
                 )}
               </div>
             )}
             {aiData.executive_summary && (
-              <div style={{ background: "#1e293b", borderRadius: 8, padding: 14 }}>
-                <p style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.7 }}>{aiData.executive_summary}</p>
+              <div style={{ background: "var(--c-1e293b)", borderRadius: 8, padding: 14 }}>
+                <p style={{ fontSize: 12, color: "var(--c-94a3b8)", lineHeight: 1.7 }}>{aiData.executive_summary}</p>
               </div>
             )}
             {aiData.critical_gaps?.length > 0 && (
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#ef4444", marginBottom: 6 }}>Critical Gaps ({aiData.critical_gaps.length})</div>
                 {aiData.critical_gaps.map((g, i) => (
-                  <div key={i} style={{ fontSize: 11, color: "#fca5a5", paddingLeft: 12, borderLeft: "2px solid #ef4444", marginBottom: 4 }}>
+                  <div key={i} style={{ fontSize: 11, color: 'var(--c-fca5a5)', paddingLeft: 12, borderLeft: "2px solid #ef4444", marginBottom: 4 }}>
                     {typeof g === "string" ? g : g.title || g.description || JSON.stringify(g)}
                   </div>
                 ))}
@@ -417,9 +417,9 @@ export default function AVSDRPanel() {
             )}
             {aiData.recommendations?.length > 0 && (
               <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#60a5fa", marginBottom: 6 }}>Recommendations ({aiData.recommendations.length})</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-60a5fa)', marginBottom: 6 }}>Recommendations ({aiData.recommendations.length})</div>
                 {aiData.recommendations.map((r, i) => (
-                  <div key={i} style={{ fontSize: 11, color: "#cbd5e1", paddingLeft: 12, borderLeft: "2px solid #3b82f6", marginBottom: 4 }}>
+                  <div key={i} style={{ fontSize: 11, color: "var(--c-cbd5e1)", paddingLeft: 12, borderLeft: "2px solid #3b82f6", marginBottom: 4 }}>
                     {typeof r === "string" ? r : r.title || r.description || JSON.stringify(r)}
                   </div>
                 ))}
@@ -429,8 +429,8 @@ export default function AVSDRPanel() {
               onClick={runAiAnalysis}
               disabled={aiLoading}
               style={{
-                background: "#1e293b", border: "1px solid #334155", borderRadius: 8,
-                padding: "8px 16px", fontSize: 11, fontWeight: 600, color: "#60a5fa",
+                background: "var(--c-1e293b)", border: "1px solid var(--c-334155)", borderRadius: 8,
+                padding: "8px 16px", fontSize: 11, fontWeight: 600, color: 'var(--c-60a5fa)',
                 cursor: aiLoading ? "default" : "pointer", alignSelf: "flex-start",
               }}
             >

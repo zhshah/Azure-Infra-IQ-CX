@@ -1,7 +1,7 @@
 /**
  * FinOps layout-matched skeleton loaders.
  * All skeletons use Tailwind's animate-pulse for a smooth shimmer effect
- * that matches the dark theme (`bg-slate-700/50` on `bg-[#111827]`).
+ * that matches the dark theme (`bg-slate-700/50` on `bg-[var(--c-111827)]`).
  *
  * Usage:
  *   if (loading) return <KPISkeleton count={6} />
@@ -34,8 +34,8 @@ export function KPISkeleton({ count = 6 }) {
         <div
           key={i}
           style={{
-            background: '#111827',
-            border: '1px solid #1e293b',
+            background: 'var(--c-111827)',
+            border: '1px solid var(--c-1e293b)',
             borderRadius: 12,
             padding: '20px 18px',
             display: 'flex',
@@ -59,8 +59,8 @@ export function KPISkeleton({ count = 6 }) {
 export function ChartSkeleton({ height = 300, title = true }) {
   return (
     <div style={{
-      background: '#111827',
-      border: '1px solid #1e293b',
+      background: 'var(--c-111827)',
+      border: '1px solid var(--c-1e293b)',
       borderRadius: 12,
       padding: '20px 18px',
     }}>
@@ -84,8 +84,8 @@ export function DualChartSkeleton({ height = 280 }) {
 export function TableSkeleton({ rows = 8, cols = 5 }) {
   return (
     <div style={{
-      background: '#111827',
-      border: '1px solid #1e293b',
+      background: 'var(--c-111827)',
+      border: '1px solid var(--c-1e293b)',
       borderRadius: 12,
       overflow: 'hidden',
     }}>
@@ -95,8 +95,8 @@ export function TableSkeleton({ rows = 8, cols = 5 }) {
         gridTemplateColumns: `repeat(${cols}, 1fr)`,
         gap: 16,
         padding: '12px 16px',
-        borderBottom: '1px solid #1e293b',
-        background: '#0a0f1e',
+        borderBottom: '1px solid var(--c-1e293b)',
+        background: 'var(--c-0a0f1e)',
       }}>
         {Array.from({ length: cols }, (_, i) => (
           <Pulse key={i} style={{ height: 12, width: `${50 + Math.random() * 40}%` }} />
@@ -131,8 +131,8 @@ export function FilterSkeleton({ items = 5 }) {
       gap: 12,
       flexWrap: 'wrap',
       padding: '14px 16px',
-      background: '#111827',
-      border: '1px solid #1e293b',
+      background: 'var(--c-111827)',
+      border: '1px solid var(--c-1e293b)',
       borderRadius: 10,
       marginBottom: 16,
     }}>

@@ -2,8 +2,13 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import './index.css'
+import './theme/theme.css'
+import { initTheme } from './theme/theme.js'
 import { loadAuthConfig, initAuth } from './auth/auth.js'
 import Login from './auth/Login.jsx'
+
+// Apply the saved colour theme before the first render (avoids a flash).
+initTheme()
 
 async function bootstrap() {
   const root = ReactDOM.createRoot(document.getElementById('root'))

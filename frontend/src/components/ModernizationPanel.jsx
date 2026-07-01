@@ -35,12 +35,12 @@ function MigrationSteps({ steps = [] }) {
   if (!steps.length) return null;
   return (
     <div style={{ marginTop: 12 }}>
-      <div style={{ color: "#64748b", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 8 }}>
+      <div style={{ color: "var(--c-64748b)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 8 }}>
         Migration Steps
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {steps.map((step, i) => {
-          const phaseColor = PHASE_COLOR[step.phase] || "#64748b";
+          const phaseColor = PHASE_COLOR[step.phase] || "var(--c-64748b)";
           return (
             <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
               {/* Phase badge + connector */}
@@ -54,7 +54,7 @@ function MigrationSteps({ steps = [] }) {
                   {i + 1}
                 </div>
                 {i < steps.length - 1 && (
-                  <div style={{ width: 1, flex: 1, minHeight: 8, background: "#1e293b", marginTop: 2 }} />
+                  <div style={{ width: 1, flex: 1, minHeight: 8, background: "var(--c-1e293b)", marginTop: 2 }} />
                 )}
               </div>
               <div style={{ flex: 1, paddingBottom: i < steps.length - 1 ? 4 : 0 }}>
@@ -67,20 +67,20 @@ function MigrationSteps({ steps = [] }) {
                     {step.phase}
                   </span>
                   {step.effort_days > 0 && (
-                    <span style={{ fontSize: 9, color: "#475569" }}>{step.effort_days}d</span>
+                    <span style={{ fontSize: 9, color: "var(--c-475569)" }}>{step.effort_days}d</span>
                   )}
                 </div>
-                <div style={{ color: "#e2e8f0", fontSize: 12, fontWeight: 600, marginBottom: 2 }}>{step.title}</div>
+                <div style={{ color: "var(--c-e2e8f0)", fontSize: 12, fontWeight: 600, marginBottom: 2 }}>{step.title}</div>
                 {step.detail && (
-                  <div style={{ color: "#64748b", fontSize: 11, lineHeight: 1.5, marginBottom: step.az_cli ? 4 : 0 }}>
+                  <div style={{ color: "var(--c-64748b)", fontSize: 11, lineHeight: 1.5, marginBottom: step.az_cli ? 4 : 0 }}>
                     {step.detail}
                   </div>
                 )}
                 {step.az_cli && (
                   <div style={{
-                    background: "#020617", border: "1px solid #1e293b",
+                    background: "var(--c-020617)", border: "1px solid var(--c-1e293b)",
                     borderRadius: 6, padding: "6px 10px", marginTop: 4,
-                    fontFamily: "monospace", fontSize: 10, color: "#38bdf8",
+                    fontFamily: "monospace", fontSize: 10, color: 'var(--c-38bdf8)',
                     whiteSpace: "pre-wrap", overflowX: "auto",
                   }}>
                     {step.az_cli}
@@ -99,7 +99,7 @@ function MigrationSteps({ steps = [] }) {
 function OpportunityCard({ opp, showSteps = false }) {
   const [expanded, setExpanded] = useState(false);
   const [stepsOpen, setStepsOpen] = useState(false);
-  const complexColor  = COMPLEXITY_COLOR[opp.complexity] || "#64748b";
+  const complexColor  = COMPLEXITY_COLOR[opp.complexity] || "var(--c-64748b)";
   const targetIcon    = SERVICE_ICONS[opp.target_service_type] || "🔄";
   const monthlySaving = opp.monthly_cost * (opp.estimated_savings_pct / 100);
   const annualSaving  = monthlySaving * 12;
@@ -107,7 +107,7 @@ function OpportunityCard({ opp, showSteps = false }) {
 
   return (
     <div style={{
-      background: "#0f172a", border: "1px solid #1e293b",
+      background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)",
       borderRadius: 12, padding: "14px 16px",
       borderLeft: `3px solid ${complexColor}`,
     }}>
@@ -118,7 +118,7 @@ function OpportunityCard({ opp, showSteps = false }) {
           {/* Name + complexity badge */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
             <ResourceIconImg resourceType={opp.resource_type} size={16} />
-            <span style={{ color: "#f1f5f9", fontWeight: 600, fontSize: 14 }}>
+            <span style={{ color: "var(--c-f1f5f9)", fontWeight: 600, fontSize: 14 }}>
               {opp.resource_name}
             </span>
             <span style={{
@@ -130,7 +130,7 @@ function OpportunityCard({ opp, showSteps = false }) {
               {opp.complexity} effort
             </span>
             {opp.estimated_effort_days > 0 && (
-              <span style={{ fontSize: 10, color: "#475569" }}>
+              <span style={{ fontSize: 10, color: "var(--c-475569)" }}>
                 ~{opp.estimated_effort_days} days
               </span>
             )}
@@ -138,11 +138,11 @@ function OpportunityCard({ opp, showSteps = false }) {
 
           {/* Current → Target */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
-            <span style={{ background: "#1e293b", color: "#94a3b8", fontSize: 11, padding: "3px 8px", borderRadius: 6 }}>
+            <span style={{ background: "var(--c-1e293b)", color: "var(--c-94a3b8)", fontSize: 11, padding: "3px 8px", borderRadius: 6 }}>
               {opp.current_config}
             </span>
-            <span style={{ color: "#475569", fontSize: 13 }}>→</span>
-            <span style={{ background: "#0c1a2e", color: "#38bdf8", fontSize: 11, padding: "3px 8px", borderRadius: 6, border: "1px solid #1e40af60" }}>
+            <span style={{ color: "var(--c-475569)", fontSize: 13 }}>→</span>
+            <span style={{ background: "var(--c-0c1a2e)", color: 'var(--c-38bdf8)', fontSize: 11, padding: "3px 8px", borderRadius: 6, border: "1px solid #1e40af60" }}>
               {opp.target_service}
             </span>
           </div>
@@ -151,15 +151,15 @@ function OpportunityCard({ opp, showSteps = false }) {
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 6 }}>
             {opp.monthly_cost > 0 && (
               <div style={{ fontSize: 12 }}>
-                <span style={{ color: "#64748b" }}>Current: </span>
-                <span style={{ color: "#f1f5f9", fontWeight: 600 }}>
+                <span style={{ color: "var(--c-64748b)" }}>Current: </span>
+                <span style={{ color: "var(--c-f1f5f9)", fontWeight: 600 }}>
                   ${opp.monthly_cost.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo
                 </span>
               </div>
             )}
             {monthlySaving > 0 && (
               <div style={{ fontSize: 12 }}>
-                <span style={{ color: "#64748b" }}>Est. Saving: </span>
+                <span style={{ color: "var(--c-64748b)" }}>Est. Saving: </span>
                 <span style={{ color: "#22c55e", fontWeight: 600 }}>
                   ${monthlySaving.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo
                   {" "}({opp.estimated_savings_pct.toFixed(0)}%)
@@ -168,30 +168,30 @@ function OpportunityCard({ opp, showSteps = false }) {
             )}
             {annualSaving > 0 && (
               <div style={{ fontSize: 12 }}>
-                <span style={{ color: "#64748b" }}>Annual: </span>
-                <span style={{ color: "#86efac", fontWeight: 600 }}>
+                <span style={{ color: "var(--c-64748b)" }}>Annual: </span>
+                <span style={{ color: 'var(--c-86efac)', fontWeight: 600 }}>
                   ${annualSaving.toLocaleString(undefined, { maximumFractionDigits: 0 })}/yr
                 </span>
               </div>
             )}
             <div style={{ fontSize: 12 }}>
-              <span style={{ color: "#64748b" }}>RG: </span>
-              <span style={{ color: "#94a3b8" }}>{opp.resource_group}</span>
+              <span style={{ color: "var(--c-64748b)" }}>RG: </span>
+              <span style={{ color: "var(--c-94a3b8)" }}>{opp.resource_group}</span>
             </div>
           </div>
 
           {/* Action buttons */}
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={() => setExpanded(!expanded)} style={{
-              background: "none", border: "none", color: "#475569",
+              background: "none", border: "none", color: "var(--c-475569)",
               cursor: "pointer", fontSize: 11, padding: "2px 0",
             }}>
               {expanded ? "▲ Hide rationale" : "▼ Show benefits & rationale"}
             </button>
             {hasMigSteps && (
               <button onClick={() => setStepsOpen(!stepsOpen)} style={{
-                background: stepsOpen ? "#1e293b" : "none",
-                border: "1px solid #334155", color: "#38bdf8",
+                background: stepsOpen ? "var(--c-1e293b)" : "none",
+                border: "1px solid var(--c-334155)", color: 'var(--c-38bdf8)',
                 cursor: "pointer", fontSize: 11, padding: "2px 8px", borderRadius: 6,
               }}>
                 {stepsOpen ? "▲ Hide migration plan" : "📋 Migration plan"}
@@ -202,11 +202,11 @@ function OpportunityCard({ opp, showSteps = false }) {
           {/* Expandable: rationale + benefits */}
           {expanded && (
             <div style={{ marginTop: 10 }}>
-              <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>{opp.reason}</div>
+              <div style={{ color: "var(--c-94a3b8)", fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>{opp.reason}</div>
               {opp.benefits.length > 0 && (
                 <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none" }}>
                   {opp.benefits.map((b, i) => (
-                    <li key={i} style={{ color: "#64748b", fontSize: 12, marginBottom: 3, display: "flex", gap: 6 }}>
+                    <li key={i} style={{ color: "var(--c-64748b)", fontSize: 12, marginBottom: 3, display: "flex", gap: 6 }}>
                       <span style={{ color: "#22c55e" }}>✓</span>
                       {b}
                     </li>
@@ -228,7 +228,7 @@ function OpportunityCard({ opp, showSteps = false }) {
 
 // ── Wave section ──────────────────────────────────────────────────────────────
 function WaveSection({ wave, opportunities }) {
-  const meta = WAVE_META[wave] || { label: `Wave ${wave}`, color: "#64748b", icon: "📌", desc: "" };
+  const meta = WAVE_META[wave] || { label: `Wave ${wave}`, color: "var(--c-64748b)", icon: "📌", desc: "" };
   const totalSaving = opportunities.reduce((s, o) => s + o.monthly_cost * o.estimated_savings_pct / 100, 0);
   const totalEffort = opportunities.reduce((s, o) => s + (o.estimated_effort_days || 0), 0);
 
@@ -243,23 +243,23 @@ function WaveSection({ wave, opportunities }) {
         <span style={{ fontSize: 18 }}>{meta.icon}</span>
         <div style={{ flex: 1 }}>
           <div style={{ color: meta.color, fontWeight: 700, fontSize: 14 }}>{meta.label}</div>
-          <div style={{ color: "#64748b", fontSize: 11 }}>{meta.desc}</div>
+          <div style={{ color: "var(--c-64748b)", fontSize: 11 }}>{meta.desc}</div>
         </div>
         <div style={{ display: "flex", gap: 16, flexShrink: 0 }}>
           <div style={{ textAlign: "right" }}>
             <div style={{ color: "#22c55e", fontWeight: 700, fontSize: 14 }}>
               ${totalSaving.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo
             </div>
-            <div style={{ color: "#475569", fontSize: 10 }}>potential savings</div>
+            <div style={{ color: "var(--c-475569)", fontSize: 10 }}>potential savings</div>
           </div>
           <div style={{ textAlign: "right" }}>
-            <div style={{ color: "#f1f5f9", fontWeight: 600, fontSize: 14 }}>{opportunities.length}</div>
-            <div style={{ color: "#475569", fontSize: 10 }}>items</div>
+            <div style={{ color: "var(--c-f1f5f9)", fontWeight: 600, fontSize: 14 }}>{opportunities.length}</div>
+            <div style={{ color: "var(--c-475569)", fontSize: 10 }}>items</div>
           </div>
           {totalEffort > 0 && (
             <div style={{ textAlign: "right" }}>
-              <div style={{ color: "#94a3b8", fontWeight: 600, fontSize: 14 }}>~{totalEffort}d</div>
-              <div style={{ color: "#475569", fontSize: 10 }}>est. effort</div>
+              <div style={{ color: "var(--c-94a3b8)", fontWeight: 600, fontSize: 14 }}>~{totalEffort}d</div>
+              <div style={{ color: "var(--c-475569)", fontSize: 10 }}>est. effort</div>
             </div>
           )}
         </div>
@@ -342,15 +342,15 @@ export default function ModernizationPanel({ modernizationOpportunities = [] }) 
   if (!modernizationOpportunities.length) return null;
 
   return (
-    <div style={{ background: "#0d1117", border: "1px solid #1e293b", borderRadius: 16, padding: "20px 24px" }}>
+    <div style={{ background: "var(--c-0d1117)", border: "1px solid var(--c-1e293b)", borderRadius: 16, padding: "20px 24px" }}>
 
       {/* ── Header ── */}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
         <div>
-          <h2 style={{ color: "#f1f5f9", margin: 0, fontSize: 18, fontWeight: 700 }}>
+          <h2 style={{ color: "var(--c-f1f5f9)", margin: 0, fontSize: 18, fontWeight: 700 }}>
             🔄 IaaS → PaaS Migration Planner
           </h2>
-          <p style={{ color: "#64748b", margin: "4px 0 0", fontSize: 13 }}>
+          <p style={{ color: "var(--c-64748b)", margin: "4px 0 0", fontSize: 13 }}>
             {modernizationOpportunities.length} opportunities identified · up to{" "}
             <span style={{ color: "#22c55e", fontWeight: 600 }}>
               ${totalSavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo
@@ -371,7 +371,7 @@ export default function ModernizationPanel({ modernizationOpportunities = [] }) 
           ))}
           {/* CSV Export */}
           <button onClick={() => exportCSV(modernizationOpportunities)} style={{
-            background: "#1e293b", border: "1px solid #334155", color: "#94a3b8",
+            background: "var(--c-1e293b)", border: "1px solid var(--c-334155)", color: "var(--c-94a3b8)",
             borderRadius: 8, padding: "4px 12px", cursor: "pointer", fontSize: 12,
           }}>
             ⬇ Export CSV
@@ -383,15 +383,15 @@ export default function ModernizationPanel({ modernizationOpportunities = [] }) 
       <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
         {[
           { label: "Monthly Savings", value: `$${totalSavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, color: "#22c55e" },
-          { label: "Annual Savings",  value: `$${(totalSavings * 12).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, color: "#86efac" },
+          { label: "Annual Savings",  value: `$${(totalSavings * 12).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, color: '#86efac' },
           { label: "Quick Wins (Wave 1)", value: (byWave[1] || []).length, color: "#22c55e" },
-          { label: "Est. Total Effort",   value: `${totalEffort} days`, color: "#94a3b8" },
+          { label: "Est. Total Effort",   value: `${totalEffort} days`, color: "var(--c-94a3b8)" },
         ].map((kpi, i) => (
           <div key={i} style={{
-            background: "#0f172a", border: "1px solid #1e293b",
+            background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)",
             borderRadius: 8, padding: "10px 14px", minWidth: 120,
           }}>
-            <div style={{ color: "#475569", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 2 }}>{kpi.label}</div>
+            <div style={{ color: "var(--c-475569)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 2 }}>{kpi.label}</div>
             <div style={{ color: kpi.color, fontWeight: 700, fontSize: 18 }}>{kpi.value}</div>
           </div>
         ))}
@@ -400,11 +400,11 @@ export default function ModernizationPanel({ modernizationOpportunities = [] }) 
       {/* ── View mode + filter bar ── */}
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
         {/* View toggle */}
-        <div style={{ display: "flex", background: "#0f172a", borderRadius: 8, padding: 4, border: "1px solid #1e293b" }}>
+        <div style={{ display: "flex", background: "var(--c-0f172a)", borderRadius: 8, padding: 4, border: "1px solid var(--c-1e293b)" }}>
           {VIEW_MODES.map(vm => (
             <button key={vm.id} onClick={() => setViewMode(vm.id)} style={{
-              background: viewMode === vm.id ? "#1e293b" : "none",
-              border: "none", color: viewMode === vm.id ? "#f1f5f9" : "#64748b",
+              background: viewMode === vm.id ? "var(--c-1e293b)" : "none",
+              border: "none", color: viewMode === vm.id ? "var(--c-f1f5f9)" : "var(--c-64748b)",
               borderRadius: 6, padding: "4px 12px", cursor: "pointer", fontSize: 12,
               fontWeight: viewMode === vm.id ? 700 : 400,
             }}>
@@ -415,11 +415,11 @@ export default function ModernizationPanel({ modernizationOpportunities = [] }) 
 
         {/* Complexity filter (only for list view) */}
         {viewMode === "list" && (
-          <div style={{ display: "flex", gap: 4, background: "#0f172a", borderRadius: 8, padding: 4, border: "1px solid #1e293b" }}>
+          <div style={{ display: "flex", gap: 4, background: "var(--c-0f172a)", borderRadius: 8, padding: 4, border: "1px solid var(--c-1e293b)" }}>
             {COMPLEXITY_FILTERS.map(f => (
               <button key={f} onClick={() => setComplexFilter(f)} style={{
-                background: complexFilter === f ? "#1e293b" : "none", border: "none",
-                color: complexFilter === f ? (COMPLEXITY_COLOR[f] || "#f1f5f9") : "#64748b",
+                background: complexFilter === f ? "var(--c-1e293b)" : "none", border: "none",
+                color: complexFilter === f ? (COMPLEXITY_COLOR[f] || "var(--c-f1f5f9)") : "var(--c-64748b)",
                 borderRadius: 6, padding: "4px 12px", cursor: "pointer", fontSize: 12,
                 fontWeight: complexFilter === f ? 700 : 400,
               }}>

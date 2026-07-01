@@ -57,8 +57,28 @@ _TIER_RTO_HOURS = {
     "Low": 24.0,
 }
 
-# Downtime cost multiplier (fictional $/hour per impact score point)
-_DOWNTIME_COST_PER_POINT = 50.0
+# ── Downtime-cost grounding (REALITY-anchored, not a fictional score multiple) ──
+# An estimated $/hr downtime cost is derived from the resource's ACTUAL Azure
+# run-rate, never from an abstract impact score: hourly_spend = monthly_cost / 730,
+# then estimated_loss = max(tier floor, hourly_spend × tier multiplier). This keeps a
+# cheap test resource from ever showing an enterprise-scale loss it could not plausibly
+# cause, while a genuinely expensive workload scales up. A customer-stated
+# financial_loss_per_hour always overrides this estimate.
+_TIER_COST_MULT: dict[str, float] = {
+    "Mission-Critical": 50.0, "Business-Critical": 20.0, "Business-Operational": 5.0, "Low": 2.0,
+}
+_TIER_HOURLY_FLOOR: dict[str, float] = {
+    "Mission-Critical": 250.0, "Business-Critical": 50.0, "Business-Operational": 5.0, "Low": 0.0,
+}
+# Expected ANNUAL outage hours per tier — a realistic availability budget (a few hours
+# a year), NOT a full year of downtime. Used for annualized exposure so nothing is
+# multiplied by 8,760 hours.
+_TIER_ANNUAL_DT_HRS: dict[str, float] = {
+    "Mission-Critical": 8.0, "Business-Critical": 4.0, "Business-Operational": 2.0, "Low": 1.0,
+}
+# Posture reduces expected outage: real backup + zone redundancy shrink the expected
+# annual downtime (and therefore the annualized exposure).
+_POSTURE_FACTOR: dict[str, float] = {"backup+zone": 0.25, "backup": 0.50, "none": 1.00}
 
 
 def _rt(r: dict) -> str:
@@ -70,7 +90,15 @@ def _attr(r: dict, key: str, default=""):
 
 
 def _monthly_cost(r: dict) -> float:
-    return float(r.get("monthly_cost", 0) or r.get("cost", 0) or 0)
+    # The live resource schema (ResourceMetrics) carries the ACTUAL billed monthly cost in
+    # `cost_current_month` (from Azure Cost Management — already SKU- and region-accurate for
+    # the resource's real usage/region). Earlier keys are kept only as fallbacks.
+    return float(
+        r.get("cost_current_month")
+        or r.get("monthly_cost")
+        or r.get("cost")
+        or 0
+    )
 
 
 def _resource_weight(rtype: str) -> int:
@@ -264,7 +292,10 @@ def build_business_impact_analysis(
         target_rto = parsed_rto if parsed_rto is not None else _TIER_RTO_HOURS.get(bia_tier, 24.0)
         rto_source = "Tagged" if parsed_rto is not None else "Tier default"
 
-        # Downtime cost — prefer the customer's stated financial loss per hour, else estimate
+        # Downtime cost — prefer the customer's stated financial loss per hour, else
+        # GROUND an estimate on the resource's actual Azure run-rate (never a score
+        # multiple): hourly_spend × tier multiplier, floored per tier. Conservative so a
+        # cheap/test resource cannot show an enterprise-scale loss it could not cause.
         stated_loss = _parse_money(meta.get("financial_loss_per_hour"))
         if stated_loss is not None and stated_loss > 0:
             downtime_cost_hr = round(stated_loss, 2)
@@ -272,7 +303,10 @@ def build_business_impact_analysis(
             stated_downtime_count += 1
             total_stated_downtime += stated_loss
         else:
-            downtime_cost_hr = round(impact_score * _DOWNTIME_COST_PER_POINT, 2)
+            hourly_spend = cost / 730.0
+            mult = _TIER_COST_MULT.get(bia_tier, 5.0)
+            floor = _TIER_HOURLY_FLOOR.get(bia_tier, 5.0)
+            downtime_cost_hr = round(max(floor, hourly_spend * mult), 2)
             downtime_cost_source = "Estimated"
 
         matrix.append({
@@ -529,14 +563,55 @@ def build_recovery_sequence_plan(
     all_ids = set(r_map.keys())
     waves_ids = _topological_sort_waves(all_ids, edges)
 
-    # Wave labels by typical content
-    _WAVE_LABELS = [
-        "Foundation — Networking, Identity & Key Vault",
-        "Data Tier — Databases & Storage",
-        "Compute — VMs, Containers & App Services",
-        "Application — APIs, Load Balancers & Gateways",
-        "Edge — CDN, Front Door & DNS",
+    # Wave categorisation — these short labels (in priority order) are matched against the
+    # resource types in each wave to derive a label like "Foundation (network · identity)"
+    # so the label always reflects what is actually in the wave (not a fixed template).
+    _WAVE_CATEGORIES: list[tuple[str, list[str]]] = [
+        ("network",   ["microsoft.network/"]),
+        ("identity",  ["microsoft.keyvault/", "microsoft.managedidentity/", "microsoft.authorization/"]),
+        ("data",      ["microsoft.sql/", "microsoft.dbforpostgresql", "microsoft.dbformysql", "microsoft.dbformariadb",
+                        "microsoft.documentdb/", "microsoft.cache/redis", "microsoft.storage/storageaccounts",
+                        "microsoft.dataprotection/", "microsoft.recoveryservices/", "microsoft.azurearcdata/"]),
+        ("compute",   ["microsoft.compute/", "microsoft.containerservice/", "microsoft.app/",
+                        "microsoft.containerregistry/", "microsoft.hybridcompute/", "microsoft.azurestackhci/"]),
+        ("app",       ["microsoft.web/", "microsoft.apimanagement/"]),
+        ("messaging", ["microsoft.servicebus/", "microsoft.eventhub/", "microsoft.eventgrid/"]),
+        ("edge",      ["microsoft.cdn/", "microsoft.frontdoor", "microsoft.network/frontdoors",
+                        "microsoft.network/dnszones", "microsoft.network/trafficmanagerprofiles"]),
+        ("monitor",   ["microsoft.insights/", "microsoft.operationalinsights/", "microsoft.monitor/"]),
     ]
+    _WAVE_THEME_NAMES = {
+        ("network", "identity"): "Foundation",
+        ("network",):            "Networking",
+        ("identity",):           "Identity & Secrets",
+        ("data",):               "Data Tier",
+        ("compute",):            "Compute",
+        ("app",):                "Application",
+        ("messaging",):          "Messaging",
+        ("edge",):               "Edge & DNS",
+        ("monitor",):            "Observability",
+    }
+
+    def _categorise_wave(wave_resources: list[dict]) -> tuple[str, list[tuple[str, int]]]:
+        """Return (theme_label, [(category, count), …]) so the wave label is always grounded
+        on what's actually in the wave. Resources that match nothing land in 'other'."""
+        counts: dict[str, int] = {}
+        for r in wave_resources:
+            rtype = (r.get("resource_type") or "").lower()
+            matched = False
+            for cat, prefixes in _WAVE_CATEGORIES:
+                if any(rtype.startswith(p) for p in prefixes):
+                    counts[cat] = counts.get(cat, 0) + 1
+                    matched = True
+                    break
+            if not matched:
+                counts["other"] = counts.get("other", 0) + 1
+        ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+        top_cats = tuple(c for c, _ in ranked[:2] if c != "other")
+        theme = _WAVE_THEME_NAMES.get(top_cats) or _WAVE_THEME_NAMES.get(top_cats[:1]) if top_cats else "Mixed"
+        if not theme:
+            theme = top_cats[0].title() if top_cats else "Mixed"
+        return theme, ranked
 
     # RTO per wave based on max BIA tier in the wave
     waves_output = []
@@ -565,7 +640,20 @@ def build_recovery_sequence_plan(
         wave_rto = round(max_rto, 2)
         cumulative_rto += wave_rto
 
-        label = _WAVE_LABELS[i] if i < len(_WAVE_LABELS) else f"Wave {i + 1} — Additional Resources"
+        # Derive a human label from what's actually IN the wave rather than a fixed template,
+        # then append a short breakdown so the user knows why this wave got that label.
+        theme, ranked = _categorise_wave(wave_resources)
+        _CAT_HUMAN = {
+            "network":   "network",   "identity": "identity",
+            "data":      "data",      "compute":  "compute",
+            "app":       "app",       "messaging": "messaging",
+            "edge":      "edge",      "monitor":  "observability",
+            "other":     "other",
+        }
+        breakdown_bits = [f"{n} {_CAT_HUMAN.get(c, c)}" for c, n in ranked[:3] if n > 0]
+        label = f"Wave {i + 1} — {theme}"
+        if breakdown_bits:
+            label += f" ({' · '.join(breakdown_bits)})"
 
         waves_output.append({
             "wave":                  i + 1,

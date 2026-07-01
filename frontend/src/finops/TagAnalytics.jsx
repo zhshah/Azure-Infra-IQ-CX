@@ -18,7 +18,7 @@ function CoverageGauge({ pct }) {
   return (
     <div style={{ position: 'relative', width: 128, height: 128, margin: '0 auto' }}>
       <svg width="128" height="128" viewBox="0 0 128 128">
-        <circle cx="64" cy="64" r="54" fill="none" stroke="#1e293b" strokeWidth="10" />
+        <circle cx="64" cy="64" r="54" fill="none" style={{ stroke: 'var(--c-1e293b)' }} strokeWidth="10" />
         <circle cx="64" cy="64" r="54" fill="none" stroke={color} strokeWidth="10"
           strokeDasharray={`${circumference * pct / 100} ${circumference}`}
           strokeLinecap="round" transform="rotate(-90 64 64)"
@@ -27,7 +27,7 @@ function CoverageGauge({ pct }) {
       </svg>
       <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ color, fontSize: 24, fontWeight: 800 }}>{Math.round(pct)}%</div>
-        <div style={{ color: '#64748b', fontSize: 10 }}>Coverage</div>
+        <div style={{ color: 'var(--c-64748b)', fontSize: 10 }}>Coverage</div>
       </div>
     </div>
   )
@@ -62,11 +62,11 @@ export default function TagAnalytics() {
 
   if (loading) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300, gap: 10 }}>
-      <RefreshCw size={18} className="animate-spin" style={{ color: '#3b82f6' }} /><span style={{ color: '#94a3b8' }}>Loading tag analytics…</span>
+      <RefreshCw size={18} className="animate-spin" style={{ color: '#3b82f6' }} /><span style={{ color: 'var(--c-94a3b8)' }}>Loading tag analytics…</span>
     </div>
   )
   if (error) return (
-    <div style={{ background: '#1a0e0e', border: '1px solid #7f1d1d', borderRadius: 10, padding: 16, color: '#fca5a5', display: 'flex', gap: 8 }}>
+    <div style={{ background: '#1a0e0e', border: '1px solid var(--c-7f1d1d)', borderRadius: 10, padding: 16, color: 'var(--c-fca5a5)', display: 'flex', gap: 8 }}>
       <AlertCircle size={16} /><span style={{ fontSize: 12 }}>{error}</span>
     </div>
   )
@@ -83,8 +83,8 @@ export default function TagAnalytics() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <h2 style={{ color: '#f1f5f9', fontSize: 18, fontWeight: 700, margin: 0 }}>Tag Cost Analytics</h2>
-          <p style={{ color: '#64748b', fontSize: 12, margin: 0 }}>Coverage from Azure Resource Graph · Cost from Azure Cost Management</p>
+          <h2 style={{ color: 'var(--c-f1f5f9)', fontSize: 18, fontWeight: 700, margin: 0 }}>Tag Cost Analytics</h2>
+          <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: 0 }}>Coverage from Azure Resource Graph · Cost from Azure Cost Management</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <DateRangePicker
@@ -93,8 +93,8 @@ export default function TagAnalytics() {
             onDateFromChange={setDateFrom} onDateToChange={setDateTo}
           />
           <button onClick={load} style={{
-            background: '#1e293b', border: '1px solid #334155', borderRadius: 6,
-            padding: '5px 10px', cursor: 'pointer', color: '#94a3b8', fontSize: 11,
+            background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6,
+            padding: '5px 10px', cursor: 'pointer', color: 'var(--c-94a3b8)', fontSize: 11,
             display: 'flex', alignItems: 'center', gap: 5,
           }}>
             <RefreshCw size={12} /> Refresh
@@ -104,21 +104,21 @@ export default function TagAnalytics() {
 
       {/* Compliance gauge + KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16 }}>
-        <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
           <CoverageGauge pct={data.compliance_score_pct ?? 0} />
-          <div style={{ color: '#64748b', fontSize: 11, textAlign: 'center' }}>
+          <div style={{ color: 'var(--c-64748b)', fontSize: 11, textAlign: 'center' }}>
             Overall tag compliance for {data.required_tags?.length || 0} required tags
           </div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, alignContent: 'start' }}>
           {[
-            { label: 'Total Resources', value: data.total_resources ?? 0, color: '#94a3b8' },
+            { label: 'Total Resources', value: data.total_resources ?? 0, color: 'var(--c-94a3b8)' },
             { label: 'Compliant', value: data.fully_compliant ?? 0, color: '#4ade80' },
             { label: 'Non-Compliant', value: data.non_compliant ?? 0, color: '#f87171' },
             { label: 'Untagged Spend', value: fmtUsd(data.untagged_spend_usd ?? 0), color: '#f59e0b' },
           ].map(c => (
-            <div key={c.label} style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 8, padding: '10px 14px' }}>
-              <div style={{ color: '#64748b', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>{c.label}</div>
+            <div key={c.label} style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 8, padding: '10px 14px' }}>
+              <div style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>{c.label}</div>
               <div style={{ color: c.color, fontSize: 18, fontWeight: 700 }}>{c.value}</div>
             </div>
           ))}
@@ -127,12 +127,12 @@ export default function TagAnalytics() {
 
       {/* Tag coverage table + drill-down */}
       <div style={{ display: 'grid', gridTemplateColumns: matrix ? '1fr 1fr' : '1fr', gap: 16 }}>
-        <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
-          <div style={{ color: '#94a3b8', fontSize: 12, fontWeight: 600, marginBottom: 10 }}>Tag Coverage — click a tag to see cost breakdown</div>
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
+          <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, fontWeight: 600, marginBottom: 10 }}>Tag Coverage — click a tag to see cost breakdown</div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr>{['Tag Key', 'Coverage %', 'Resources', 'Compliant', 'Required'].map(h => (
-                <th key={h} style={{ textAlign: 'left', color: '#475569', padding: '5px 8px', borderBottom: '1px solid #1e293b' }}>{h}</th>
+                <th key={h} style={{ textAlign: 'left', color: 'var(--c-475569)', padding: '5px 8px', borderBottom: '1px solid var(--c-1e293b)' }}>{h}</th>
               ))}</tr>
             </thead>
             <tbody>
@@ -142,23 +142,23 @@ export default function TagAnalytics() {
                   <tr
                     key={i}
                     onClick={() => loadMatrix(ts.tag_key)}
-                    style={{ borderBottom: '1px solid #0f172a', cursor: 'pointer', background: activeTag === ts.tag_key ? '#1e293b' : 'transparent' }}
-                    onMouseEnter={e => { if (activeTag !== ts.tag_key) e.currentTarget.style.background = '#111827' }}
+                    style={{ borderBottom: '1px solid var(--c-0f172a)', cursor: 'pointer', background: activeTag === ts.tag_key ? 'var(--c-1e293b)' : 'transparent' }}
+                    onMouseEnter={e => { if (activeTag !== ts.tag_key) e.currentTarget.style.background = 'var(--c-111827)' }}
                     onMouseLeave={e => { if (activeTag !== ts.tag_key) e.currentTarget.style.background = 'transparent' }}
                   >
-                    <td style={{ padding: '6px 8px', color: '#e2e8f0', fontWeight: 600 }}>{ts.tag_key}</td>
+                    <td style={{ padding: '6px 8px', color: 'var(--c-e2e8f0)', fontWeight: 600 }}>{ts.tag_key}</td>
                     <td style={{ padding: '6px 8px', color }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <div style={{ height: 4, width: `${ts.coverage_pct}%`, background: color, borderRadius: 2, maxWidth: 60 }} />
                         {fmtPct(ts.coverage_pct)}
                       </div>
                     </td>
-                    <td style={{ padding: '6px 8px', color: '#64748b' }}>{ts.resource_count ?? '—'}</td>
-                    <td style={{ padding: '6px 8px', color: '#4ade80' }}>{ts.tagged_count ?? '—'}</td>
+                    <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{ts.resource_count ?? '—'}</td>
+                    <td style={{ padding: '6px 8px', color: 'var(--c-4ade80)' }}>{ts.tagged_count ?? '—'}</td>
                     <td style={{ padding: '6px 8px' }}>
                       {ts.is_required
                         ? <span style={{ color: '#f59e0b', fontSize: 10 }}>Required</span>
-                        : <span style={{ color: '#334155', fontSize: 10 }}>Optional</span>}
+                        : <span style={{ color: 'var(--c-334155)', fontSize: 10 }}>Optional</span>}
                     </td>
                   </tr>
                 )
@@ -169,17 +169,17 @@ export default function TagAnalytics() {
 
         {/* Cost matrix drill-down */}
         {(activeTag || matLoading) && (
-          <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
-            <div style={{ color: '#94a3b8', fontSize: 12, fontWeight: 600, marginBottom: 10 }}>
+          <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
+            <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, fontWeight: 600, marginBottom: 10 }}>
               Cost by <span style={{ color: '#3b82f6' }}>{activeTag}</span> tag values
             </div>
             {matLoading && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 20, color: '#64748b', fontSize: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 20, color: 'var(--c-64748b)', fontSize: 12 }}>
                 <RefreshCw size={14} className="animate-spin" style={{ color: '#3b82f6' }} />Loading cost breakdown…
               </div>
             )}
             {matError && !matLoading && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, color: '#fca5a5', fontSize: 12, background: '#1a0e0e', borderRadius: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, color: 'var(--c-fca5a5)', fontSize: 12, background: '#1a0e0e', borderRadius: 6 }}>
                 <AlertTriangle size={14} />{matError}
               </div>
             )}
@@ -190,13 +190,13 @@ export default function TagAnalytics() {
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
                     <XAxis type="number" tick={{ fill: '#475569', fontSize: 10 }} tickFormatter={v => '$' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v)} />
                     <YAxis type="category" dataKey="tag_value" tick={{ fill: '#94a3b8', fontSize: 10 }} width={120} />
-                    <Tooltip formatter={v => fmtUsd(v, 2)} contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 11 }} />
+                    <Tooltip formatter={v => fmtUsd(v, 2)} contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }} />
                     <Bar dataKey="cost_usd" name="Cost (USD)" radius={[0, 4, 4, 0]}>
                       {(matrix.values || []).slice(0, 12).map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
-                <div style={{ marginTop: 12, fontSize: 11, color: '#475569' }}>
+                <div style={{ marginTop: 12, fontSize: 11, color: 'var(--c-475569)' }}>
                   Total tracked: <span style={{ color: '#3b82f6' }}>{fmtUsd(matrix.total_cost_usd, 2)}</span> · {matrix.value_count} values
                 </div>
               </>

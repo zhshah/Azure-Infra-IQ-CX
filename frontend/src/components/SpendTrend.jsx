@@ -339,7 +339,7 @@ export default function SpendTrend({ resources = [], totalDailyCm = [], totalDai
               />
               <Tooltip
                 content={<ChartTooltip currMonth={currMonth} prevMonth={prevMonth} />}
-                cursor={{ stroke: '#374151', strokeWidth: 1 }}
+                cursor={{ stroke: 'var(--c-374151)', strokeWidth: 1 }}
               />
               {avgLine > 0 && (
                 <ReferenceLine

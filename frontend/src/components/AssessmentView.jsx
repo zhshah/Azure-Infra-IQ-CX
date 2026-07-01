@@ -71,7 +71,7 @@ export default function AssessmentView({ title, subtitle, Icon, aiEndpoint, aiTi
                   title={dataConfig.gridTitle}
                 />
               ) : (
-                <div style={{ color: '#64748b', fontSize: 13, padding: '16px 0' }}>
+                <div style={{ color: 'var(--c-64748b)', fontSize: 13, padding: '16px 0' }}>
                   {dataConfig.emptyNote || 'No matching resources discovered in the current scope.'}
                 </div>
               )}

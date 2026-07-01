@@ -10,18 +10,18 @@ import { GenericAIAnalysis } from './AIModuleReports';
 import { asText } from '../utils/safeText';
 
 const SEV = { high: '#ef4444', medium: '#f59e0b', low: '#eab308', info: '#38bdf8' };
-const CRED_COLOR = { expired: '#ef4444', 'expiring-30': '#f97316', 'expiring-90': '#eab308', valid: '#22c55e', none: '#64748b', unknown: '#64748b' };
+const CRED_COLOR = { expired: '#ef4444', 'expiring-30': '#f97316', 'expiring-90': '#eab308', valid: '#22c55e', none: 'var(--c-64748b)', unknown: 'var(--c-64748b)' };
 const CRED_LABEL = { expired: 'Expired', 'expiring-30': 'Expiring ≤30d', 'expiring-90': 'Expiring ≤90d', valid: 'Valid', none: 'No credentials', unknown: 'Unknown' };
 
 function Finding({ f }) {
-  const c = SEV[f.severity] || '#64748b';
+  const c = SEV[f.severity] || 'var(--c-64748b)';
   return (
-    <div style={{ background: '#0f172a', border: `1px solid ${c}44`, borderLeft: `3px solid ${c}`, borderRadius: 8, padding: '10px 14px', marginBottom: 8 }}>
+    <div style={{ background: 'var(--c-0f172a)', border: `1px solid ${c}44`, borderLeft: `3px solid ${c}`, borderRadius: 8, padding: '10px 14px', marginBottom: 8 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' }}>
         <span style={{ background: c + '22', color: c, borderRadius: 4, padding: '1px 8px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase' }}>{f.severity}</span>
-        <span style={{ color: '#f1f5f9', fontSize: 13, fontWeight: 600 }}>{f.title}</span>
+        <span style={{ color: 'var(--c-f1f5f9)', fontSize: 13, fontWeight: 600 }}>{f.title}</span>
       </div>
-      {f.detail && <p style={{ color: '#94a3b8', fontSize: 12, margin: '2px 0' }}>{asText(f.detail)}</p>}
+      {f.detail && <p style={{ color: 'var(--c-94a3b8)', fontSize: 12, margin: '2px 0' }}>{asText(f.detail)}</p>}
       {f.recommendation && <p style={{ color: '#22c55e', fontSize: 12, margin: '2px 0' }}>✅ {asText(f.recommendation)}</p>}
     </div>
   );
@@ -32,18 +32,18 @@ function BarList({ title, data, color = '#38bdf8' }) {
   const max = Math.max(1, ...entries.map((e) => e[1]));
   return (
     <div style={{ ...card, flex: '1 1 280px' }}>
-      <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{title}</div>
+      <div style={{ color: 'var(--c-e2e8f0)', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{title}</div>
       {entries.map(([k, v]) => (
         <div key={k} style={{ marginBottom: 8 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#94a3b8', marginBottom: 3 }}>
-            <span>{k}</span><span style={{ color: '#e2e8f0' }}>{v}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--c-94a3b8)', marginBottom: 3 }}>
+            <span>{k}</span><span style={{ color: 'var(--c-e2e8f0)' }}>{v}</span>
           </div>
-          <div style={{ height: 7, background: '#1e293b', borderRadius: 5, overflow: 'hidden' }}>
+          <div style={{ height: 7, background: 'var(--c-1e293b)', borderRadius: 5, overflow: 'hidden' }}>
             <div style={{ width: `${Math.round((v / max) * 100)}%`, height: '100%', background: color }} />
           </div>
         </div>
       ))}
-      {entries.length === 0 && <div style={{ color: '#64748b', fontSize: 12 }}>No data.</div>}
+      {entries.length === 0 && <div style={{ color: 'var(--c-64748b)', fontSize: 12 }}>No data.</div>}
     </div>
   );
 }
@@ -51,15 +51,15 @@ function BarList({ title, data, color = '#38bdf8' }) {
 function GraphGate({ note }) {
   return (
     <div style={{ ...card, textAlign: 'center', padding: 28 }}>
-      <KeyRound size={28} style={{ color: '#475569', marginBottom: 8 }} />
-      <div style={{ color: '#e2e8f0', fontSize: 14, fontWeight: 600 }}>Microsoft Graph access required</div>
-      <p style={{ color: '#94a3b8', fontSize: 12, maxWidth: 560, margin: '8px auto 0', lineHeight: 1.5 }}>
+      <KeyRound size={28} style={{ color: 'var(--c-475569)', marginBottom: 8 }} />
+      <div style={{ color: 'var(--c-e2e8f0)', fontSize: 14, fontWeight: 600 }}>Microsoft Graph access required</div>
+      <p style={{ color: 'var(--c-94a3b8)', fontSize: 12, maxWidth: 560, margin: '8px auto 0', lineHeight: 1.5 }}>
         {note || 'This section reads the Entra ID directory via Microsoft Graph.'} Grant the application / service
         principal these Microsoft Graph <b>application</b> permissions (with admin consent), then Refresh:
       </p>
       <div style={{ display: 'inline-flex', gap: 8, marginTop: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
         {['Directory.Read.All', 'Application.Read.All', 'User.Read.All'].map((p) => (
-          <span key={p} style={{ background: '#0b1220', border: '1px solid #1e293b', borderRadius: 6, padding: '4px 10px', color: '#93c5fd', fontSize: 12, fontFamily: 'monospace' }}>{p}</span>
+          <span key={p} style={{ background: 'var(--c-0b1220)', border: '1px solid var(--c-1e293b)', borderRadius: 6, padding: '4px 10px', color: 'var(--c-93c5fd)', fontSize: 12, fontFamily: 'monospace' }}>{p}</span>
         ))}
       </div>
     </div>
@@ -124,7 +124,7 @@ function IdentityView() {
           </div>
 
           <div style={{ ...card }}>
-            <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 700, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ color: 'var(--c-e2e8f0)', fontSize: 13, fontWeight: 700, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
               <AlertTriangle size={15} style={{ color: '#f59e0b' }} /> Best-practice findings ({(d.findings || []).length})
             </div>
             {(d.findings || []).length === 0 && <div style={{ color: '#22c55e', fontSize: 13 }}>No issues detected.</div>}
@@ -156,11 +156,11 @@ function IdentityView() {
             { field: 'is_privileged', label: 'Privilege', normalize: (v) => (v ? 'Privileged' : 'Standard') },
           ]}
           columns={[
-            { key: 'role_name', label: 'Role', render: (v, row) => <span style={{ color: row.is_privileged ? '#f87171' : '#cbd5e1', fontWeight: row.is_privileged ? 700 : 400 }}>{v}</span> },
+            { key: 'role_name', label: 'Role', render: (v, row) => <span style={{ color: row.is_privileged ? '#f87171' : 'var(--c-cbd5e1)', fontWeight: row.is_privileged ? 700 : 400 }}>{v}</span> },
             { key: 'principal_type', label: 'Principal Type' },
             { key: 'principal_id', label: 'Principal', render: (v) => (v ? v.slice(0, 8) + '…' : '—') },
             { key: 'scope_level', label: 'Scope' },
-            { key: 'is_privileged', label: 'Privileged', csv: (v) => (v ? 'Yes' : 'No'), render: (v) => (v ? <span style={{ color: '#ef4444', fontWeight: 700 }}>● privileged</span> : <span style={{ color: '#475569' }}>—</span>) },
+            { key: 'is_privileged', label: 'Privileged', csv: (v) => (v ? 'Yes' : 'No'), render: (v) => (v ? <span style={{ color: '#ef4444', fontWeight: 700 }}>● privileged</span> : <span style={{ color: 'var(--c-475569)' }}>—</span>) },
             { key: 'subscription_id', label: 'Subscription' },
           ]}
         />
@@ -174,7 +174,7 @@ function IdentityView() {
               <KPI label="App Registrations" value={apps.total ?? 0} color="#a78bfa" Icon={AppWindow} />
               <KPI label="Expired" value={apps.expired ?? 0} sub="broken auth" color={(apps.expired ?? 0) > 0 ? '#ef4444' : '#22c55e'} />
               <KPI label="Expiring ≤30d" value={apps.expiring_30 ?? 0} color={(apps.expiring_30 ?? 0) > 0 ? '#f97316' : '#22c55e'} />
-              <KPI label="No Credentials" value={apps.no_credentials ?? 0} color="#64748b" />
+              <KPI label="No Credentials" value={apps.no_credentials ?? 0} color="var(--c-64748b)" />
             </div>
             <DataGrid
               title="App Registrations"
@@ -188,8 +188,8 @@ function IdentityView() {
                 { key: 'display_name', label: 'Application' },
                 { key: 'secret_count', label: 'Secrets' },
                 { key: 'cert_count', label: 'Certs' },
-                { key: 'credential_status', label: 'Status', csv: (v) => CRED_LABEL[v] || v, render: (v) => <span style={{ color: CRED_COLOR[v] || '#64748b', fontWeight: 700 }}>{CRED_LABEL[v] || v}</span> },
-                { key: 'soonest_expiry_days', label: 'Soonest expiry', render: (v) => (v == null ? '—' : v < 0 ? <span style={{ color: '#ef4444', fontWeight: 700 }}>{Math.abs(v)}d ago</span> : <span style={{ color: v <= 30 ? '#f97316' : '#cbd5e1' }}>in {v}d</span>) },
+                { key: 'credential_status', label: 'Status', csv: (v) => CRED_LABEL[v] || v, render: (v) => <span style={{ color: CRED_COLOR[v] || 'var(--c-64748b)', fontWeight: 700 }}>{CRED_LABEL[v] || v}</span> },
+                { key: 'soonest_expiry_days', label: 'Soonest expiry', render: (v) => (v == null ? '—' : v < 0 ? <span style={{ color: '#ef4444', fontWeight: 700 }}>{Math.abs(v)}d ago</span> : <span style={{ color: v <= 30 ? '#f97316' : 'var(--c-cbd5e1)' }}>in {v}d</span>) },
                 { key: 'sign_in_audience', label: 'Audience' },
               ]}
             />

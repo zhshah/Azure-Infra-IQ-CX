@@ -29,11 +29,11 @@ export default function ForecastPanel() {
   if (loading) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 400, gap: 10 }}>
       <RefreshCw size={18} className="animate-spin" style={{ color: '#3b82f6' }} />
-      <span style={{ color: '#94a3b8' }}>Loading Azure forecast…</span>
+      <span style={{ color: 'var(--c-94a3b8)' }}>Loading Azure forecast…</span>
     </div>
   )
   if (error) return (
-    <div style={{ background: '#1a0e0e', border: '1px solid #7f1d1d', borderRadius: 10, padding: 16, color: '#fca5a5', display: 'flex', gap: 8 }}>
+    <div style={{ background: '#1a0e0e', border: '1px solid var(--c-7f1d1d)', borderRadius: 10, padding: 16, color: 'var(--c-fca5a5)', display: 'flex', gap: 8 }}>
       <AlertCircle size={16} /><span style={{ fontSize: 12 }}>{error}</span>
     </div>
   )
@@ -51,7 +51,7 @@ export default function ForecastPanel() {
     })),
   ]
 
-  const trendColor = data.trend_direction === 'up' ? '#ef4444' : data.trend_direction === 'down' ? '#22c55e' : '#64748b'
+  const trendColor = data.trend_direction === 'up' ? '#ef4444' : data.trend_direction === 'down' ? '#22c55e' : 'var(--c-64748b)'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -62,8 +62,8 @@ export default function ForecastPanel() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h2 style={{ color: '#f1f5f9', fontSize: 18, fontWeight: 700, margin: 0 }}>Spend Forecast</h2>
-          <p style={{ color: '#64748b', fontSize: 12, margin: 0 }}>
+          <h2 style={{ color: 'var(--c-f1f5f9)', fontSize: 18, fontWeight: 700, margin: 0 }}>Spend Forecast</h2>
+          <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: 0 }}>
             {data.method === 'azure_forecast_api'
               ? 'Azure Cost Management Forecast API — same ML model as Azure Portal'
               : 'Linear regression forecast (Azure Forecast API unavailable for this billing scope)'}
@@ -79,8 +79,8 @@ export default function ForecastPanel() {
             />
           </div>
           <button onClick={load} style={{
-            background: '#1e293b', border: '1px solid #334155', borderRadius: 6,
-            padding: '5px 10px', cursor: 'pointer', color: '#94a3b8', fontSize: 11,
+            background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6,
+            padding: '5px 10px', cursor: 'pointer', color: 'var(--c-94a3b8)', fontSize: 11,
             display: 'flex', alignItems: 'center', gap: 5,
           }}>
             <RefreshCw size={12} /> Refresh
@@ -89,8 +89,8 @@ export default function ForecastPanel() {
       </div>
 
       {/* Combined chart */}
-      <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
-        <div style={{ color: '#94a3b8', fontSize: 12, fontWeight: 600, marginBottom: 12 }}>
+      <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
+        <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, fontWeight: 600, marginBottom: 12 }}>
           Historical vs Forecast — dashed line marks today
         </div>
         <ResponsiveContainer width="100%" height={300}>
@@ -105,10 +105,10 @@ export default function ForecastPanel() {
             <XAxis dataKey="date" tick={{ fill: '#475569', fontSize: 9 }} interval="preserveStartEnd" />
             <YAxis tick={{ fill: '#475569', fontSize: 10 }} tickFormatter={v => '$' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v)} />
             <Tooltip
-              contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 11 }}
+              contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }}
               formatter={(v, name) => [fmtUsd(v, 2), name]}
             />
-            <Legend iconSize={10} wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+            <Legend iconSize={10} wrapperStyle={{ fontSize: 11, color: 'var(--c-94a3b8)' }} />
             {today && <ReferenceLine x={today} stroke="#3b82f6" strokeDasharray="4 4" label={{ value: 'Today', fill: '#3b82f6', fontSize: 10, position: 'top' }} />}
             {/* Confidence band */}
             <Area type="monotone" dataKey="upper" stroke="none" fill="url(#confBand)" legendType="none" />
@@ -117,30 +117,30 @@ export default function ForecastPanel() {
             <Line type="monotone" dataKey="forecast" stroke="#8b5cf6" strokeWidth={2} strokeDasharray="5 5" dot={false} name="Forecast" />
           </ComposedChart>
         </ResponsiveContainer>
-        <div style={{ fontSize: 10, color: '#334155', textAlign: 'right', marginTop: 6 }}>
+        <div style={{ fontSize: 10, color: 'var(--c-334155)', textAlign: 'right', marginTop: 6 }}>
           Shaded area = confidence interval · Method: {data.method}
         </div>
       </div>
 
       {/* ── Cost Drivers table ── */}
       {(data.cost_drivers?.length > 0 || data.by_subscription?.length > 0) && (
-        <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
-          <div style={{ color: '#94a3b8', fontSize: 12, fontWeight: 600, marginBottom: 12 }}>Forecast Cost Drivers</div>
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
+          <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, fontWeight: 600, marginBottom: 12 }}>Forecast Cost Drivers</div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr>{['Category', 'Forecast Amount', '% of Total', 'Trend'].map(h => (
-                <th key={h} style={{ textAlign: 'left', color: '#475569', padding: '5px 8px', borderBottom: '1px solid #1e293b' }}>{h}</th>
+                <th key={h} style={{ textAlign: 'left', color: 'var(--c-475569)', padding: '5px 8px', borderBottom: '1px solid var(--c-1e293b)' }}>{h}</th>
               ))}</tr>
             </thead>
             <tbody>
               {(data.cost_drivers || data.by_subscription || []).map((d, i) => (
-                <tr key={i} style={{ borderBottom: '1px solid #0f172a' }}>
-                  <td style={{ padding: '6px 8px', color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <tr key={i} style={{ borderBottom: '1px solid var(--c-0f172a)' }}>
+                  <td style={{ padding: '6px 8px', color: 'var(--c-e2e8f0)', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <div style={{ width: 8, height: 8, borderRadius: '50%', background: ['#3b82f6','#8b5cf6','#22c55e','#f59e0b','#ef4444'][i % 5], flexShrink: 0 }} />
                     {d.name || d.label || d.category || '—'}
                   </td>
                   <td style={{ padding: '6px 8px', color: '#8b5cf6', fontWeight: 600 }}>{fmtUsd(d.forecast_usd ?? d.cost ?? d.amount ?? 0, 2)}</td>
-                  <td style={{ padding: '6px 8px', color: '#64748b' }}>{d.pct != null ? `${d.pct}%` : '—'}</td>
+                  <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{d.pct != null ? `${d.pct}%` : '—'}</td>
                   <td style={{ padding: '6px 8px', color: (d.mom_delta_pct ?? 0) > 0 ? '#f87171' : '#4ade80', fontSize: 11 }}>
                     {d.mom_delta_pct != null ? `${d.mom_delta_pct > 0 ? '+' : ''}${d.mom_delta_pct}%` : '—'}
                   </td>
@@ -152,15 +152,15 @@ export default function ForecastPanel() {
       )}
 
       {/* ── Forecast summary ── */}
-      <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+      <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
         {[
           { label: 'End of Month',    value: fmtUsd(data.eom_forecast_usd, 0),  color: '#3b82f6' },
           { label: 'End of Quarter',  value: fmtUsd(data.eoq_forecast_usd, 0),  color: '#8b5cf6' },
-          { label: 'MoM Trend',       value: `${data.trend_direction === 'up' ? '↑' : data.trend_direction === 'down' ? '↓' : '→'} ${data.trend_direction}`, color: data.trend_direction === 'up' ? '#ef4444' : data.trend_direction === 'down' ? '#22c55e' : '#64748b' },
+          { label: 'MoM Trend',       value: `${data.trend_direction === 'up' ? '↑' : data.trend_direction === 'down' ? '↓' : '→'} ${data.trend_direction}`, color: data.trend_direction === 'up' ? '#ef4444' : data.trend_direction === 'down' ? '#22c55e' : 'var(--c-64748b)' },
           { label: 'Model Confidence',value: fmtPct(data.confidence_pct),        color: '#22c55e' },
         ].map(c => (
           <div key={c.label}>
-            <div style={{ color: '#64748b', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>{c.label}</div>
+            <div style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>{c.label}</div>
             <div style={{ color: c.color, fontSize: 16, fontWeight: 700 }}>{c.value}</div>
           </div>
         ))}

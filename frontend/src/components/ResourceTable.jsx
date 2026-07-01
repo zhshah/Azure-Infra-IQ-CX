@@ -30,7 +30,7 @@ const CATEGORY_STYLE = {
   storage:        { bg: 'bg-amber-900/40',  text: 'text-amber-300',  border: 'border-amber-800/50',  icon: HardDrive, dot: '#fbbf24' },
   data:           { bg: 'bg-purple-900/40', text: 'text-purple-300', border: 'border-purple-800/50', icon: Database,  dot: '#c084fc' },
   ai:             { bg: 'bg-indigo-900/40', text: 'text-indigo-300', border: 'border-indigo-800/50', icon: Brain,     dot: '#818cf8' },
-  infrastructure: { bg: 'bg-slate-800/60',  text: 'text-slate-400',  border: 'border-slate-700/50',  icon: Shield,    dot: '#94a3b8' },
+  infrastructure: { bg: 'bg-slate-800/60',  text: 'text-slate-400',  border: 'border-slate-700/50',  icon: Shield,    dot: 'var(--c-94a3b8)' },
   other:          { bg: 'bg-gray-800/60',   text: 'text-gray-400',   border: 'border-gray-700/50',   icon: Server,    dot: '#9ca3af' },
 }
 

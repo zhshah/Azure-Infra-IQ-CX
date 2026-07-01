@@ -59,7 +59,7 @@ function GovernanceView() {
             filters={['search']}
             maxHeight="32vh"
             columns={[
-              { key: 'policy', label: 'Policy', tdStyle: () => ({ color: '#e2e8f0', fontWeight: 600 }) },
+              { key: 'policy', label: 'Policy', tdStyle: () => ({ color: 'var(--c-e2e8f0)', fontWeight: 600 }) },
               { key: 'category', label: 'Category', render: (v) => v || '—' },
               { key: 'effect', label: 'Effect', render: (v) => v || '—' },
               { key: 'scope_level', label: 'Assigned At', render: (v) => v || '—' },
@@ -93,9 +93,9 @@ function GovernanceView() {
 
       {tab === 'identity' && identity && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div style={{ ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', borderColor: '#1e3a5f' }}>
-            <span style={{ color: '#94a3b8', fontSize: 12 }}>
-              This is a summary. Open the full <b style={{ color: '#e2e8f0' }}>Identity &amp; Access</b> workspace for app-registration expiry, over-permissioning findings, guests and AI analysis.
+          <div style={{ ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', borderColor: 'var(--c-1e3a5f)' }}>
+            <span style={{ color: 'var(--c-94a3b8)', fontSize: 12 }}>
+              This is a summary. Open the full <b style={{ color: 'var(--c-e2e8f0)' }}>Identity &amp; Access</b> workspace for app-registration expiry, over-permissioning findings, guests and AI analysis.
             </span>
             <button onClick={() => window.dispatchEvent(new CustomEvent('navigate', { detail: 'entra' }))}
               style={{ background: '#1d4ed8', color: '#fff', border: 'none', borderRadius: 8, padding: '7px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
@@ -110,15 +110,15 @@ function GovernanceView() {
           </div>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
             <div style={{ ...card, flex: '1 1 320px' }}>
-              <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600, marginBottom: 12 }}>By Principal Type</div>
+              <div style={{ color: 'var(--c-e2e8f0)', fontSize: 13, fontWeight: 600, marginBottom: 12 }}>By Principal Type</div>
               {Object.entries(ide.by_principal_type || {}).map(([k, v]) => (
                 <Bar key={k} label={k} value={v} total={ide.total_assignments || 0} color="#38bdf8" />
               ))}
             </div>
             <div style={{ ...card, flex: '1 1 320px' }}>
-              <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Top Roles</div>
+              <div style={{ color: 'var(--c-e2e8f0)', fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Top Roles</div>
               {Object.entries(ide.by_role || {}).slice(0, 8).map(([k, v]) => (
-                <Bar key={k} label={k} value={v} total={ide.total_assignments || 0} color={['Owner', 'User Access Administrator', 'Role Based Access Control Administrator', 'Contributor'].includes(k) ? '#ef4444' : '#64748b'} />
+                <Bar key={k} label={k} value={v} total={ide.total_assignments || 0} color={['Owner', 'User Access Administrator', 'Role Based Access Control Administrator', 'Contributor'].includes(k) ? '#ef4444' : 'var(--c-64748b)'} />
               ))}
             </div>
           </div>
@@ -132,10 +132,10 @@ function GovernanceView() {
             filters={['sub', 'search']}
             maxHeight="40vh"
             columns={[
-              { key: 'role_name', label: 'Role', tdStyle: (v, row) => ({ color: row.is_privileged ? '#ef4444' : '#cbd5e1', fontWeight: row.is_privileged ? 600 : 400 }) },
+              { key: 'role_name', label: 'Role', tdStyle: (v, row) => ({ color: row.is_privileged ? '#ef4444' : 'var(--c-cbd5e1)', fontWeight: row.is_privileged ? 600 : 400 }) },
               { key: 'principal_type', label: 'Principal Type' },
               { key: 'scope_level', label: 'Scope Level' },
-              { key: 'is_privileged', label: 'Privileged', render: (v) => (v ? 'Yes' : '—'), tdStyle: (v) => ({ color: v ? '#ef4444' : '#64748b' }) },
+              { key: 'is_privileged', label: 'Privileged', render: (v) => (v ? 'Yes' : '—'), tdStyle: (v) => ({ color: v ? '#ef4444' : 'var(--c-64748b)' }) },
               { key: 'subscription_id', label: 'Subscription' },
             ]}
           />

@@ -55,7 +55,7 @@ const DOMAINS = [
 const STATUS_META = {
   full:    { icon: CheckCircle2, color: '#22c55e', label: 'Implemented' },
   partial: { icon: CircleDashed, color: '#f59e0b', label: 'Partial' },
-  none:    { icon: Circle,       color: '#475569', label: 'Planned' },
+  none:    { icon: Circle,       color: 'var(--c-475569)', label: 'Planned' },
 }
 
 function maturityFromScore(pct) {
@@ -117,16 +117,16 @@ export default function FinOpsComplianceView() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h2 style={{ color: '#f1f5f9', fontSize: 20, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <h2 style={{ color: 'var(--c-f1f5f9)', fontSize: 20, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
             <ShieldCheck size={20} style={{ color: '#22c55e' }} /> FinOps Framework Compliance
           </h2>
-          <p style={{ color: '#64748b', fontSize: 12, margin: 0 }}>
+          <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: 0 }}>
             Mapped to the FinOps Foundation Framework · FOCUS 1.2 · Microsoft FinOps toolkit aligned
           </p>
         </div>
         <button onClick={load} disabled={loading} style={{
-          background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '6px 12px',
-          cursor: 'pointer', color: '#94a3b8', fontSize: 11, display: 'flex', alignItems: 'center', gap: 5,
+          background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6, padding: '6px 12px',
+          cursor: 'pointer', color: 'var(--c-94a3b8)', fontSize: 11, display: 'flex', alignItems: 'center', gap: 5,
         }}>
           <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh
         </button>
@@ -146,8 +146,8 @@ export default function FinOpsComplianceView() {
       {/* Domains */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 14 }}>
         {DOMAINS.map(d => (
-          <div key={d.domain} style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 10, padding: 16 }}>
-            <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{d.domain}</div>
+          <div key={d.domain} style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
+            <div style={{ color: 'var(--c-e2e8f0)', fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{d.domain}</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
               {d.capabilities.map(c => {
                 const m = STATUS_META[c.status]
@@ -156,8 +156,8 @@ export default function FinOpsComplianceView() {
                   <div key={c.name} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                     <Icon size={15} style={{ color: m.color, flexShrink: 0, marginTop: 1 }} />
                     <div>
-                      <div style={{ color: '#cbd5e1', fontSize: 12, fontWeight: 600 }}>{c.name}</div>
-                      <div style={{ color: '#64748b', fontSize: 11 }}>{c.note}</div>
+                      <div style={{ color: 'var(--c-cbd5e1)', fontSize: 12, fontWeight: 600 }}>{c.name}</div>
+                      <div style={{ color: 'var(--c-64748b)', fontSize: 11 }}>{c.note}</div>
                     </div>
                   </div>
                 )
@@ -167,7 +167,7 @@ export default function FinOpsComplianceView() {
         ))}
       </div>
 
-      <div style={{ color: '#475569', fontSize: 11, display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ color: 'var(--c-475569)', fontSize: 11, display: 'flex', alignItems: 'center', gap: 6 }}>
         <CircleDashed size={12} style={{ color: '#f59e0b' }} /> Partial &nbsp;·&nbsp;
         <CheckCircle2 size={12} style={{ color: '#22c55e' }} /> Implemented &nbsp;·&nbsp;
         Framework © FinOps Foundation (CC BY 4.0)
@@ -178,13 +178,13 @@ export default function FinOpsComplianceView() {
 
 function ScoreCard({ label, value, sub, icon: Icon, accent }) {
   return (
-    <div style={{ background: '#111827', border: `1px solid ${accent || '#1e293b'}55`, borderRadius: 10, padding: '14px 16px' }}>
+    <div style={{ background: 'var(--c-111827)', border: `1px solid ${accent || 'var(--c-1e293b)'}55`, borderRadius: 10, padding: '14px 16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-        <span style={{ color: '#64748b', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</span>
+        <span style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</span>
         {Icon && <Icon size={15} style={{ color: accent || '#3b82f6' }} />}
       </div>
-      <div style={{ color: '#f1f5f9', fontSize: 20, fontWeight: 700 }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{sub}</div>}
+      <div style={{ color: 'var(--c-f1f5f9)', fontSize: 20, fontWeight: 700 }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: 'var(--c-64748b)', marginTop: 2 }}>{sub}</div>}
     </div>
   )
 }
