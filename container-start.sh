@@ -124,7 +124,9 @@ if [ "$ZUREMAP_ENABLED" = "1" ]; then
   # /tmp/zuremap.log. Without this the engine failed silently and the Architecture
   # Map showed "refused to connect" with no diagnosable trace.
   echo "[start] launching Architecture Map engine on :3001 ..."
-  ( cd /app && node proxy/server.js 2>&1 | tee /tmp/zuremap.log & )
+  # Engine runtime env replicated from the upstream ZureMap image (grafted onto a plain Node
+  # base, so these are set here rather than inherited from the image ENV).
+  ( cd /app && NODE_ENV=production PORT=3001 HOST=0.0.0.0 node proxy/server.js 2>&1 | tee /tmp/zuremap.log & )
 fi
 
 # Start the main app (port 8000) as the container's MAIN process (signal-forwarded).

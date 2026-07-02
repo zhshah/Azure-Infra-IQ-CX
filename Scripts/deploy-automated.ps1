@@ -799,19 +799,22 @@ if ($zmImportOk) {
     $buildArgs += @("--build-arg","ZUREMAP_IMAGE=$acrLoginServer/$zuremapAcrPath")
     Write-Ok "ZureMap engine image cached in ACR — the build will not touch ghcr.io."
 } else {
-    # The ZureMap engine image could not be imported (it is PRIVATE on ghcr.io and no
-    # -GhcrUsername/-GhcrToken was supplied, or the source is unreachable). Instead of
-    # failing the whole deployment on a live 'denied' pull, build the combined image on the
-    # STANDARD base already cached in THIS ACR. The app (API + SPA + icons + ODBC) deploys
-    # and runs normally; ONLY the embedded "Architecture Map" tab is unavailable.
-    # container-start.sh detects the missing engine and starts the app by itself.
-    $fallbackBase = if ($importOk) { "$acrLoginServer/$nodeAcrPath" } else { "docker.io/library/node:20-bookworm-slim" }
-    $buildArgs += @("--build-arg","ZUREMAP_IMAGE=$fallbackBase")
-    $deployZureMap = $false
-    Write-Warn2 "ZureMap 'Architecture Map' engine image '$ZureMapImage' could not be imported into the ACR."
-    Write-Warn2 "  Proceeding WITHOUT the Architecture Map — the rest of Azure Infra IQ deploys and runs normally."
-    Write-Warn2 "  To ENABLE the Architecture Map later, re-run with -GhcrUsername <github-user> -GhcrToken <PAT: read:packages>,"
-    Write-Warn2 "  or set -ZureMapImage to a registry you can access, then redeploy."
+    # The combined image GRAFTS the ZureMap engine from this image (Dockerfile: COPY --from),
+    # so a real engine image MUST be available — there is no silent "build without the engine"
+    # fallback (that would break the COPY --from and is not what we want anyway). The engine
+    # image (ghcr.io/natechsa/zuremap) is PRIVATE, so it must be seeded into the ACR once.
+    Write-Warn2 "ZureMap 'Architecture Map' engine image is not cached in the ACR and could not be imported from '$ZureMapImage'."
+    Write-Host ""
+    Write-Host "  Seed it ONCE from a machine that already has the image cached (e.g. where the"    -ForegroundColor Yellow
+    Write-Host "  Architecture Map runs locally). Any architecture works — the build grafts the"    -ForegroundColor Yellow
+    Write-Host "  pure-JS engine onto an amd64 base:"                                              -ForegroundColor Yellow
+    Write-Host "    az acr login --name $ContainerRegistryName"                                    -ForegroundColor Cyan
+    Write-Host "    docker tag $ZureMapImage $acrLoginServer/$zuremapAcrPath"                       -ForegroundColor Cyan
+    Write-Host "    docker push $acrLoginServer/$zuremapAcrPath"                                    -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  OR re-run this script with -GhcrUsername <github-user> -GhcrToken <PAT: read:packages>" -ForegroundColor Yellow
+    Write-Host ""
+    Fail "ZureMap engine image unavailable. Seed '$acrLoginServer/$zuremapAcrPath' (see above) or pass GHCR credentials, then re-run."
 }
 
 Write-Info "Building combined image remotely (SPA build + backend + ODBC + Architecture Map engine). This takes ~10-15 min..."

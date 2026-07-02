@@ -25,15 +25,16 @@
 # NODE_IMAGE is overridable so the deploy script can point this at a copy of the
 # Node base image pre-imported into the customer's ACR — this avoids the Docker Hub
 # anonymous pull rate limit ('toomanyrequests') on shared ACR build agents.
+# node:20 (cached in the ACR). The grafted ZureMap engine declares engines.node >=22, but
+# that is an Angular BUILD-time constraint; the prebuilt engine's RUNTIME (Express 5 proxy)
+# runs fine on Node 20 — verified: "ZureMap proxy running on :3001" on node:20-bookworm-slim.
 ARG NODE_IMAGE=node:20-bookworm-slim
-# ZUREMAP_IMAGE (the Stage-2 runtime base) MUST be declared here in the GLOBAL scope, i.e.
-# BEFORE the first FROM, so it can be referenced in the Stage-2 `FROM ${ZUREMAP_IMAGE}` below.
-# An ARG declared after a FROM is stage-scoped and resolves to BLANK in a later FROM
-# ('base name should not be blank'). The deploy script overrides it with an ACR copy.
-# NOTE: the ZureMap engine image is PRIVATE (ghcr.io) and OPTIONAL. The default below is a
-# STANDARD base so a plain `docker build` (and the deploy script's fallback) succeeds WITHOUT
-# the third-party engine — the Architecture Map tab is simply absent. Point this at a real
-# ZureMap image (via the deploy script's -ZureMapImage / ACR import) to include the engine.
+# ZUREMAP_IMAGE = the ZureMap "Architecture Map" engine image. The deploy script pre-imports
+# it into the customer's ACR and passes the ACR copy here, so the build never needs a live
+# ghcr.io pull. It is used ONLY as a cross-architecture FILE SOURCE (the `zmengine` stage
+# below) — the engine is pure JavaScript (0 native *.node modules), so its /app is COPYied
+# onto an amd64 runtime base and runs correctly regardless of the engine image's own arch.
+# Declared in GLOBAL scope (before the first FROM) so it resolves in the FROM below.
 ARG ZUREMAP_IMAGE=node:20-bookworm-slim
 FROM ${NODE_IMAGE} AS web
 WORKDIR /web
@@ -42,21 +43,24 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# ---- Stage 2: combined runtime (ZureMap engine + Python backend + SPA + ODBC) -
-# ZUREMAP_IMAGE is overridable so the deploy script can point this at a copy of the
-# ZureMap engine image pre-imported into the customer's ACR. This avoids depending on a
-# live anonymous pull from ghcr.io during the build — which can fail with 'denied' /
-# 'toomanyrequests' on shared ACR build agents, or if the upstream package's visibility
-# changes. The deploy script imports it into the ACR (with optional GHCR credentials) and
-# passes the ACR copy here; the default keeps the original public source.
-# (ZUREMAP_IMAGE is declared in the GLOBAL scope near the top of this file — required so it
-# can be substituted into this FROM. Do NOT re-declare it here or it resolves to blank.)
-FROM ${ZUREMAP_IMAGE}
+# ---- ZureMap engine source (cross-arch FILE SOURCE only; never executed during build) -----
+# The engine ships as a Node app under /app (pure JS — verified: no native *.node modules).
+# The engine image is a SINGLE-ARCH linux/arm64 image, so this FROM pulls it directly; Stage 2
+# then COPYies /app out of it. `COPY --from` is architecture-agnostic (it only copies files
+# and the stage is never executed), so the JS engine grafts cleanly onto the amd64 runtime and
+# needs NO amd64 build of the (now-private) upstream image. (No `--platform` flag here — the
+# ACR dependency scanner cannot parse it, and it is unnecessary for a single-arch source.)
+FROM ${ZUREMAP_IMAGE} AS zmengine
 
-# Python 3.11 (bookworm default) + venv (Debian PEP 668) + ODBC Driver 18.
-# When built on the ZureMap base, Node + Azure CLI + the engine already exist; when built on
-# the standard base (Architecture Map disabled) they are absent and container-start.sh skips
-# the engine + az startup accordingly.
+# ---- Stage 2: combined amd64 runtime (grafted engine + Python backend + SPA + ODBC) --------
+# The runtime base is the amd64 Node image (same base the SPA build used, pre-cached in the
+# ACR) — NOT the engine image — so the produced image is amd64 and runs on Container Apps.
+FROM ${NODE_IMAGE}
+
+# Python 3.11 (bookworm) + venv (Debian PEP 668) + ODBC Driver 18 + Azure CLI.
+# The engine (Node) shells out to `az` for topology scanning, so the Azure CLI (amd64) is
+# installed fresh here — it CANNOT be copied from the engine image (az has arch-specific
+# binaries). Node already exists in the base image; Python powers the FastAPI backend.
 # NOTE: Microsoft's prod.list pins signed-by=/usr/share/keyrings/microsoft-prod.gpg,
 # so the signing key MUST be dearmored to that exact path (writing it to
 # trusted.gpg.d does NOT satisfy the repo's signed-by and fails with NO_PUBKEY).
@@ -68,8 +72,13 @@ RUN apt-get update \
     && curl -sSL https://packages.microsoft.com/config/debian/12/prod.list -o /etc/apt/sources.list.d/mssql-release.list \
     && apt-get update \
     && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 \
+    && curl -sSL https://aka.ms/InstallAzureCLIDeb | bash \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Graft the pure-JS ZureMap engine (Node app at /app) from the engine image. Cross-arch file
+# copy: the arm64 engine's JavaScript runs on the amd64 Node runtime installed above.
+COPY --from=zmengine /app /app
 
 # Python deps in an isolated venv (avoids Debian's externally-managed-environment).
 COPY backend/requirements.txt /srv/app/requirements.txt
