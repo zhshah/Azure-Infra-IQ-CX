@@ -26,6 +26,11 @@
 # Node base image pre-imported into the customer's ACR — this avoids the Docker Hub
 # anonymous pull rate limit ('toomanyrequests') on shared ACR build agents.
 ARG NODE_IMAGE=node:20-bookworm-slim
+# ZUREMAP_IMAGE (the Stage-2 runtime base) MUST be declared here in the GLOBAL scope, i.e.
+# BEFORE the first FROM, so it can be referenced in the Stage-2 `FROM ${ZUREMAP_IMAGE}` below.
+# An ARG declared after a FROM is stage-scoped and resolves to BLANK in a later FROM
+# ('base name should not be blank'). The deploy script overrides it with an ACR copy.
+ARG ZUREMAP_IMAGE=ghcr.io/natechsa/zuremap:latest
 FROM ${NODE_IMAGE} AS web
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json* ./
@@ -40,7 +45,8 @@ RUN npm run build
 # 'toomanyrequests' on shared ACR build agents, or if the upstream package's visibility
 # changes. The deploy script imports it into the ACR (with optional GHCR credentials) and
 # passes the ACR copy here; the default keeps the original public source.
-ARG ZUREMAP_IMAGE=ghcr.io/natechsa/zuremap:latest
+# (ZUREMAP_IMAGE is declared in the GLOBAL scope near the top of this file — required so it
+# can be substituted into this FROM. Do NOT re-declare it here or it resolves to blank.)
 FROM ${ZUREMAP_IMAGE}
 
 # Python 3.11 (bookworm default) + venv (Debian PEP 668) + ODBC Driver 18.
