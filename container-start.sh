@@ -19,6 +19,17 @@ set -e
 
 ZM_DIR=/app/dist/zuremap/browser
 
+# The ZureMap "Architecture Map" engine is OPTIONAL — it only exists when the image was
+# built ON the ZureMap base image. When it is ABSENT (image built on a standard base) or the
+# az CLI is unavailable, skip ALL engine + az-CLI startup and run just the main app on :8000,
+# so the deployment still succeeds without the third-party engine.
+ZUREMAP_ENABLED=0
+if [ -f /app/proxy/server.js ] && command -v az >/dev/null 2>&1; then
+  ZUREMAP_ENABLED=1
+else
+  echo "[start] Architecture Map engine not present in this image — starting the main app only (:8000)."
+fi
+
 # Serve ZureMap under the /zuremap/ subpath: rewrite its <base href> and absolute
 # API base so ALL engine traffic stays under /zuremap/* behind the app's
 # auth-gated reverse proxy (no unauthenticated /api/az/* on the public ingress).
@@ -59,8 +70,6 @@ fi
 # the resource-graph extension that powers the topology queries. Backgrounded so it never
 # blocks the proxy/app startup; the engine shells out to `az` per scan and picks up the
 # session as soon as the loop succeeds.
-az config set extension.use_dynamic_install=yes_without_prompt 2>/dev/null || true
-
 zm_auth_loop() {
   i=0
   while [ "$i" -lt 60 ]; do
@@ -101,19 +110,22 @@ zm_auth_loop() {
   return 1
 }
 
-if [ -n "$ZUREMAP_CLIENT_ID" ] && [ -n "$ZUREMAP_CLIENT_SECRET" ] && [ -n "$ZUREMAP_TENANT_ID" ]; then
-  echo "[start] Architecture Map auth mode: service principal (background login + retry)"
-else
-  echo "[start] Architecture Map auth mode: managed identity (background login + retry)"
-fi
-zm_auth_loop &
+if [ "$ZUREMAP_ENABLED" = "1" ]; then
+  az config set extension.use_dynamic_install=yes_without_prompt 2>/dev/null || true
+  if [ -n "$ZUREMAP_CLIENT_ID" ] && [ -n "$ZUREMAP_CLIENT_SECRET" ] && [ -n "$ZUREMAP_TENANT_ID" ]; then
+    echo "[start] Architecture Map auth mode: service principal (background login + retry)"
+  else
+    echo "[start] Architecture Map auth mode: managed identity (background login + retry)"
+  fi
+  zm_auth_loop &
 
-# Start the ZureMap proxy (port 3001) in the background. Mirror its output to the
-# container console (so `az containerapp logs show` surfaces engine errors) AND to
-# /tmp/zuremap.log. Without this the engine failed silently and the Architecture
-# Map showed "refused to connect" with no diagnosable trace.
-echo "[start] launching Architecture Map engine on :3001 ..."
-( cd /app && node proxy/server.js 2>&1 | tee /tmp/zuremap.log & )
+  # Start the ZureMap proxy (port 3001) in the background. Mirror its output to the
+  # container console (so `az containerapp logs show` surfaces engine errors) AND to
+  # /tmp/zuremap.log. Without this the engine failed silently and the Architecture
+  # Map showed "refused to connect" with no diagnosable trace.
+  echo "[start] launching Architecture Map engine on :3001 ..."
+  ( cd /app && node proxy/server.js 2>&1 | tee /tmp/zuremap.log & )
+fi
 
 # Start the main app (port 8000) as the container's MAIN process (signal-forwarded).
 echo "[start] launching Azure Infra IQ app on :8000 ..."

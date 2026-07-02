@@ -799,11 +799,19 @@ if ($zmImportOk) {
     $buildArgs += @("--build-arg","ZUREMAP_IMAGE=$acrLoginServer/$zuremapAcrPath")
     Write-Ok "ZureMap engine image cached in ACR — the build will not touch ghcr.io."
 } else {
-    $buildArgs += @("--build-arg","ZUREMAP_IMAGE=$ZureMapImage")
-    Write-Warn2 "Could not import the ZureMap engine image '$ZureMapImage' into the ACR."
-    Write-Warn2 "  If it is PRIVATE on ghcr.io, re-run with -GhcrUsername <github-user> -GhcrToken <PAT with read:packages>,"
-    Write-Warn2 "  or set -ZureMapImage to a registry you can access (e.g. a mirror you control)."
-    Write-Warn2 "  The build will now try to pull '$ZureMapImage' directly and may fail with 'denied'."
+    # The ZureMap engine image could not be imported (it is PRIVATE on ghcr.io and no
+    # -GhcrUsername/-GhcrToken was supplied, or the source is unreachable). Instead of
+    # failing the whole deployment on a live 'denied' pull, build the combined image on the
+    # STANDARD base already cached in THIS ACR. The app (API + SPA + icons + ODBC) deploys
+    # and runs normally; ONLY the embedded "Architecture Map" tab is unavailable.
+    # container-start.sh detects the missing engine and starts the app by itself.
+    $fallbackBase = if ($importOk) { "$acrLoginServer/$nodeAcrPath" } else { "docker.io/library/node:20-bookworm-slim" }
+    $buildArgs += @("--build-arg","ZUREMAP_IMAGE=$fallbackBase")
+    $deployZureMap = $false
+    Write-Warn2 "ZureMap 'Architecture Map' engine image '$ZureMapImage' could not be imported into the ACR."
+    Write-Warn2 "  Proceeding WITHOUT the Architecture Map — the rest of Azure Infra IQ deploys and runs normally."
+    Write-Warn2 "  To ENABLE the Architecture Map later, re-run with -GhcrUsername <github-user> -GhcrToken <PAT: read:packages>,"
+    Write-Warn2 "  or set -ZureMapImage to a registry you can access, then redeploy."
 }
 
 Write-Info "Building combined image remotely (SPA build + backend + ODBC + Architecture Map engine). This takes ~10-15 min..."

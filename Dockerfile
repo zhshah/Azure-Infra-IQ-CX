@@ -30,7 +30,11 @@ ARG NODE_IMAGE=node:20-bookworm-slim
 # BEFORE the first FROM, so it can be referenced in the Stage-2 `FROM ${ZUREMAP_IMAGE}` below.
 # An ARG declared after a FROM is stage-scoped and resolves to BLANK in a later FROM
 # ('base name should not be blank'). The deploy script overrides it with an ACR copy.
-ARG ZUREMAP_IMAGE=ghcr.io/natechsa/zuremap:latest
+# NOTE: the ZureMap engine image is PRIVATE (ghcr.io) and OPTIONAL. The default below is a
+# STANDARD base so a plain `docker build` (and the deploy script's fallback) succeeds WITHOUT
+# the third-party engine — the Architecture Map tab is simply absent. Point this at a real
+# ZureMap image (via the deploy script's -ZureMapImage / ACR import) to include the engine.
+ARG ZUREMAP_IMAGE=node:20-bookworm-slim
 FROM ${NODE_IMAGE} AS web
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json* ./
@@ -50,7 +54,9 @@ RUN npm run build
 FROM ${ZUREMAP_IMAGE}
 
 # Python 3.11 (bookworm default) + venv (Debian PEP 668) + ODBC Driver 18.
-# Node and the Azure CLI already exist in the base ZureMap image.
+# When built on the ZureMap base, Node + Azure CLI + the engine already exist; when built on
+# the standard base (Architecture Map disabled) they are absent and container-start.sh skips
+# the engine + az startup accordingly.
 # NOTE: Microsoft's prod.list pins signed-by=/usr/share/keyrings/microsoft-prod.gpg,
 # so the signing key MUST be dearmored to that exact path (writing it to
 # trusted.gpg.d does NOT satisfy the repo's signed-by and fails with NO_PUBKEY).
