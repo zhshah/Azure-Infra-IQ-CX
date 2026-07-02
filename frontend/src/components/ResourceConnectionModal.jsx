@@ -130,9 +130,9 @@ function NodeCircle({ x, y, r, color, label, resourceType, isOrphan, onClick, is
 
       {/* Type icon */}
       <text textAnchor="middle" dominantBaseline="central"
-        fontSize={iconSize} fontWeight="700" style={{ fill: 'var(--c-0f172a)' }}
+        fontSize={iconSize} fontWeight="700"
         fontFamily="ui-sans-serif, system-ui, sans-serif"
-        style={{ pointerEvents: 'none', userSelect: 'none' }} opacity={0.85}>
+        style={{ fill: 'var(--c-0f172a)', pointerEvents: 'none', userSelect: 'none' }} opacity={0.85}>
         {icon}
       </text>
 

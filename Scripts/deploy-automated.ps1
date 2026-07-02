@@ -70,6 +70,15 @@ param(
     # access token works. If omitted, the base image is imported anonymously (usually fine).
     [string]$DockerHubUsername   = "",
     [string]$DockerHubToken      = "",
+    # ZureMap "Architecture Map" engine base image — the combined runtime is built ON TOP of
+    # it. It is imported into the customer ACR at deploy time so the build pulls it from THIS
+    # registry instead of a live anonymous ghcr.io pull (which fails with 'denied' if the
+    # upstream package's visibility changed, or 'toomanyrequests' on shared build agents).
+    # Pass -GhcrUsername/-GhcrToken (a GitHub PAT with read:packages) if the source image is
+    # private, or point -ZureMapImage at any registry you can access (e.g. a mirror you own).
+    [string]$ZureMapImage        = "ghcr.io/natechsa/zuremap:latest",
+    [string]$GhcrUsername        = "",
+    [string]$GhcrToken           = "",
     [string]$LogAnalyticsName    = "azure-infra-iq-logs",
     # Optional: customer-provided existing Log Analytics workspace credentials.
     # If omitted, deployment defaults to logs-destination=none unless
@@ -761,6 +770,40 @@ if ($importOk) {
     Write-Ok "Node base image cached in ACR — the build will not touch Docker Hub."
 } else {
     Write-Info "ACR cache unavailable — build will pull the base image directly during the build. This is a NORMAL fallback, not an error."
+}
+
+# Pre-import the ZureMap "Architecture Map" engine base image into the customer's ACR so the
+# build pulls it from THIS registry (implicitly authenticated) instead of a live anonymous
+# ghcr.io pull — which fails with 'denied' if the upstream package's visibility changed, or
+# 'toomanyrequests' on shared ACR build agents. Idempotent across re-runs.
+$zuremapAcrPath = "base/zuremap:latest"
+$zmImportOk = $false
+if (az acr repository show --name $ContainerRegistryName --image $zuremapAcrPath 2>$null) {
+    $zmImportOk = $true
+    Write-Ok "ZureMap engine image already cached in ACR: $acrLoginServer/$zuremapAcrPath"
+} else {
+    $zmArgs = @("acr","import","--name",$ContainerRegistryName,"--source",$ZureMapImage,"--image",$zuremapAcrPath,"--force")
+    if (-not [string]::IsNullOrWhiteSpace($GhcrUsername) -and -not [string]::IsNullOrWhiteSpace($GhcrToken)) {
+        $zmArgs += @("--username",$GhcrUsername,"--password",$GhcrToken)
+        Write-Info "Importing ZureMap engine image into ACR (authenticated to ghcr.io)..."
+    } else {
+        Write-Info "Importing ZureMap engine image ($ZureMapImage) into ACR (best-effort)..."
+    }
+    for ($i = 1; $i -le 2; $i++) {
+        az @zmArgs --output none 2>$null
+        if ($LASTEXITCODE -eq 0) { $zmImportOk = $true; break }
+        if ($i -lt 2) { Write-Info "  ZureMap import not ready; one more try in 15s..."; Start-Sleep -Seconds 15 }
+    }
+}
+if ($zmImportOk) {
+    $buildArgs += @("--build-arg","ZUREMAP_IMAGE=$acrLoginServer/$zuremapAcrPath")
+    Write-Ok "ZureMap engine image cached in ACR — the build will not touch ghcr.io."
+} else {
+    $buildArgs += @("--build-arg","ZUREMAP_IMAGE=$ZureMapImage")
+    Write-Warn2 "Could not import the ZureMap engine image '$ZureMapImage' into the ACR."
+    Write-Warn2 "  If it is PRIVATE on ghcr.io, re-run with -GhcrUsername <github-user> -GhcrToken <PAT with read:packages>,"
+    Write-Warn2 "  or set -ZureMapImage to a registry you can access (e.g. a mirror you control)."
+    Write-Warn2 "  The build will now try to pull '$ZureMapImage' directly and may fail with 'denied'."
 }
 
 Write-Info "Building combined image remotely (SPA build + backend + ODBC + Architecture Map engine). This takes ~10-15 min..."

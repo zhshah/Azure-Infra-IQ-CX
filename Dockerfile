@@ -34,7 +34,14 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---- Stage 2: combined runtime (ZureMap engine + Python backend + SPA + ODBC) -
-FROM ghcr.io/natechsa/zuremap:latest
+# ZUREMAP_IMAGE is overridable so the deploy script can point this at a copy of the
+# ZureMap engine image pre-imported into the customer's ACR. This avoids depending on a
+# live anonymous pull from ghcr.io during the build — which can fail with 'denied' /
+# 'toomanyrequests' on shared ACR build agents, or if the upstream package's visibility
+# changes. The deploy script imports it into the ACR (with optional GHCR credentials) and
+# passes the ACR copy here; the default keeps the original public source.
+ARG ZUREMAP_IMAGE=ghcr.io/natechsa/zuremap:latest
+FROM ${ZUREMAP_IMAGE}
 
 # Python 3.11 (bookworm default) + venv (Debian PEP 668) + ODBC Driver 18.
 # Node and the Azure CLI already exist in the base ZureMap image.

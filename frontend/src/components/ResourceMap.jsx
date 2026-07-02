@@ -798,10 +798,10 @@ export default function ResourceMap({ resources = [], onNavigate }) {
 
                   {/* Type icon */}
                   <text textAnchor="middle" dominantBaseline="central"
-                    fontSize={iconSize} fontWeight="700" style={{ fill: 'var(--c-0f172a)' }}
+                    fontSize={iconSize} fontWeight="700"
                     fontFamily="ui-sans-serif, system-ui, sans-serif"
                     opacity={dim ? 0 : 0.88}
-                    style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                    style={{ fill: 'var(--c-0f172a)', pointerEvents: 'none', userSelect: 'none' }}>
                     {n.icon}
                   </text>
 

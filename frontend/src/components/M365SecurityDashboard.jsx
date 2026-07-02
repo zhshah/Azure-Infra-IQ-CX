@@ -66,8 +66,7 @@ function ScoreRing({ pct = 0, size = 96 }) {
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" style={{ stroke: 'var(--c-1e293b)' }} strokeWidth="8" />
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={col} strokeWidth="8" strokeLinecap="round"
         strokeDasharray={`${c}`} strokeDashoffset={`${c * (1 - pct / 100)}`} />
-      <text x="50%" y="50%" dy="0.1em" textAnchor="middle" className="rotate-90" style={{ transformOrigin: 'center' }}
-        style={{ fill: 'var(--c-f1f5f9)' }} fontSize="20" fontWeight="700">{pct}%</text>
+      <text x="50%" y="50%" dy="0.1em" textAnchor="middle" className="rotate-90" style={{ transformOrigin: 'center', fill: 'var(--c-f1f5f9)' }} fontSize="20" fontWeight="700">{pct}%</text>
     </svg>
   )
 }
