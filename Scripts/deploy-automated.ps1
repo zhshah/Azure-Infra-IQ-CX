@@ -795,6 +795,32 @@ if (az acr repository show --name $ContainerRegistryName --image $zuremapAcrPath
         if ($i -lt 2) { Write-Info "  ZureMap import not ready; one more try in 15s..."; Start-Sleep -Seconds 15 }
     }
 }
+
+# AUTO-SEED from the LOCAL Docker image cache. The engine image is PRIVATE on ghcr.io, so a
+# fresh ACR cannot import it — but the machine running this deploy typically has it cached
+# (it is the same image the Architecture Map uses locally). Push that cached copy into the
+# ACR ONCE; the Dockerfile grafts the pure-JS engine via COPY --from, so the cached image's
+# ARCHITECTURE does not matter. This makes deploys to a brand-new ACR seamless with no manual
+# seeding step. Idempotent — skipped once the image is cached in the ACR.
+if (-not $zmImportOk -and (Get-Command docker -ErrorAction SilentlyContinue)) {
+    docker image inspect $ZureMapImage *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Info "Seeding the ZureMap engine into the ACR from the local Docker cache ($ZureMapImage)."
+        Write-Info "  (one-time per registry; pushes ~1-2 GB — later deploys reuse the cached copy)"
+        az acr login --name $ContainerRegistryName --output none 2>$null
+        docker tag $ZureMapImage "$acrLoginServer/$zuremapAcrPath" 2>$null
+        docker push "$acrLoginServer/$zuremapAcrPath" 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $zmImportOk = $true
+            Write-Ok "ZureMap engine seeded into the ACR from the local Docker cache."
+        } else {
+            Write-Warn2 "Could not push the local ZureMap image to the ACR (check 'az acr login' / ACR reachability)."
+        }
+    } else {
+        Write-Info "ZureMap engine not in the local Docker cache ($ZureMapImage) — cannot auto-seed (is Docker Desktop running?)."
+    }
+}
+
 if ($zmImportOk) {
     $buildArgs += @("--build-arg","ZUREMAP_IMAGE=$acrLoginServer/$zuremapAcrPath")
     Write-Ok "ZureMap engine image cached in ACR — the build will not touch ghcr.io."
@@ -803,18 +829,20 @@ if ($zmImportOk) {
     # so a real engine image MUST be available — there is no silent "build without the engine"
     # fallback (that would break the COPY --from and is not what we want anyway). The engine
     # image (ghcr.io/natechsa/zuremap) is PRIVATE, so it must be seeded into the ACR once.
-    Write-Warn2 "ZureMap 'Architecture Map' engine image is not cached in the ACR and could not be imported from '$ZureMapImage'."
+    Write-Warn2 "ZureMap 'Architecture Map' engine image is not cached in the ACR, and it could not be auto-seeded or imported."
     Write-Host ""
-    Write-Host "  Seed it ONCE from a machine that already has the image cached (e.g. where the"    -ForegroundColor Yellow
-    Write-Host "  Architecture Map runs locally). Any architecture works — the build grafts the"    -ForegroundColor Yellow
-    Write-Host "  pure-JS engine onto an amd64 base:"                                              -ForegroundColor Yellow
-    Write-Host "    az acr login --name $ContainerRegistryName"                                    -ForegroundColor Cyan
-    Write-Host "    docker tag $ZureMapImage $acrLoginServer/$zuremapAcrPath"                       -ForegroundColor Cyan
-    Write-Host "    docker push $acrLoginServer/$zuremapAcrPath"                                    -ForegroundColor Cyan
+    Write-Host "  This script AUTO-SEEDS the engine from your LOCAL Docker cache, which needs"        -ForegroundColor Yellow
+    Write-Host "  Docker Desktop RUNNING with the image present. Start Docker Desktop, then re-run."  -ForegroundColor Yellow
+    Write-Host "  (The Architecture Map running locally puts the image in your cache.)"               -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  OR seed it manually ONCE (any architecture — the build grafts the pure-JS engine):" -ForegroundColor Yellow
+    Write-Host "    az acr login --name $ContainerRegistryName"                                       -ForegroundColor Cyan
+    Write-Host "    docker tag $ZureMapImage $acrLoginServer/$zuremapAcrPath"                          -ForegroundColor Cyan
+    Write-Host "    docker push $acrLoginServer/$zuremapAcrPath"                                       -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  OR re-run this script with -GhcrUsername <github-user> -GhcrToken <PAT: read:packages>" -ForegroundColor Yellow
     Write-Host ""
-    Fail "ZureMap engine image unavailable. Seed '$acrLoginServer/$zuremapAcrPath' (see above) or pass GHCR credentials, then re-run."
+    Fail "ZureMap engine image unavailable. Start Docker Desktop (auto-seed), or seed '$acrLoginServer/$zuremapAcrPath' manually / pass GHCR creds, then re-run."
 }
 
 Write-Info "Building combined image remotely (SPA build + backend + ODBC + Architecture Map engine). This takes ~10-15 min..."
