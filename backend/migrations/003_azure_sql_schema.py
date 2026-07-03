@@ -405,6 +405,72 @@ TABLES = [
         payload         TEXT NOT NULL
     )
     """,
+
+    # 27. onprem_credentials — saved remote-scan credentials (encrypted password)
+    # (onprem_scanner_service only CREATEs this for SQLite — it MUST exist on Azure SQL too,
+    #  or save/list credentials fail with "Invalid object name 'onprem_credentials'".)
+    """
+    CREATE TABLE IF NOT EXISTS onprem_credentials (
+        credential_id      TEXT PRIMARY KEY,
+        label              TEXT NOT NULL,
+        auth_type          TEXT DEFAULT 'ntlm',
+        username           TEXT NOT NULL,
+        encrypted_password TEXT NOT NULL,
+        domain             TEXT DEFAULT '',
+        is_default         BOOLEAN DEFAULT 0,
+        created_at         TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at         TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+
+    # 28. modernization_opportunities — APEX modernization findings
+    # (previously only created by the SQLite-only migration 001; add here for Azure SQL parity.)
+    """
+    CREATE TABLE IF NOT EXISTS modernization_opportunities (
+        opportunity_id      TEXT PRIMARY KEY,
+        resource_id         TEXT,
+        current_service     TEXT,
+        recommended_service TEXT,
+        migration_type      TEXT,
+        cost_savings        REAL,
+        effort_estimate     TEXT,
+        business_case       TEXT,
+        status              TEXT,
+        created_at          TEXT
+    )
+    """,
+
+    # 29. bcdr_attachments — BCDR planning file uploads (+ extracted text)
+    """
+    CREATE TABLE IF NOT EXISTS bcdr_attachments (
+        id              TEXT PRIMARY KEY,
+        resource_id     TEXT,
+        project_id      TEXT,
+        filename        TEXT NOT NULL,
+        content_type    TEXT,
+        size_bytes      INTEGER,
+        extracted_text  TEXT,
+        content_b64     TEXT,
+        uploaded_at     TEXT NOT NULL
+    )
+    """,
+
+    # 30. project_assessments — per-project, per-category AI assessment runs
+    """
+    CREATE TABLE IF NOT EXISTS project_assessments (
+        id             TEXT PRIMARY KEY,
+        project_id     TEXT NOT NULL,
+        category       TEXT NOT NULL,
+        category_label TEXT,
+        score          INTEGER,
+        score_label    TEXT,
+        summary        TEXT,
+        result_json    TEXT NOT NULL DEFAULT '{}',
+        model          TEXT,
+        resource_count INTEGER DEFAULT 0,
+        created_at     TEXT NOT NULL
+    )
+    """,
 ]
 
 # ── Indexes ──────────────────────────────────────────────────────────────────
