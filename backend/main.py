@@ -5797,10 +5797,26 @@ async def start_auto_refresh_scheduler() -> None:
     global _auto_refresh_task
     # ── Initialize database abstraction layer ────────────────────────────────
     try:
-        from services.database import init_db, get_db_info
+        from services.database import init_db, get_db_info, is_azure_sql
         init_db()
         db_info = get_db_info()
         logger.info("Database initialized: provider=%s", db_info["provider"])
+        # On Azure SQL the persistence/tagging services do NOT create their tables (they only
+        # create them for SQLite), so ensure the full schema exists by running the idempotent
+        # schema migration (003) at startup. Without this, 003 tables such as resource_custom_tags
+        # can be missing and features like the BCDR plan fail with "Invalid object name". The
+        # module name starts with a digit, so load it via importlib (same pattern as 005 below).
+        if is_azure_sql():
+            try:
+                import importlib.util as _ilu
+                _p = os.path.join(os.path.dirname(__file__), "migrations", "003_azure_sql_schema.py")
+                _spec = _ilu.spec_from_file_location("azuresql_schema_migration_003", _p)
+                _m = _ilu.module_from_spec(_spec)
+                _spec.loader.exec_module(_m)
+                _m.run_migration()
+                logger.info("Startup: Azure SQL schema migration (003) ensured")
+            except Exception as _sch_err:
+                logger.warning("Startup: Azure SQL schema migration (003) skipped: %s", _sch_err)
     except Exception as e:
         logger.error("Database initialization failed: %s", e)
 

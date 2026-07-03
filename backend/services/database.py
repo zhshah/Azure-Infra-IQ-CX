@@ -349,33 +349,52 @@ def create_table_sql(sqlite_ddl: str, indexed_cols: Optional[set] = None) -> str
     sql = re.sub(r'\bREAL\b', 'FLOAT', sql, flags=re.IGNORECASE)
 
     # ── Smart TEXT → NVARCHAR conversion ──────────────────────────────────
-    # Columns used as PKs or in indexes need NVARCHAR(450), not MAX.
-    key_cols = set(_indexed)
+    # Single-column PK / indexed columns need NVARCHAR(450) (900 bytes = the CLUSTERED
+    # index-key limit). Columns in a COMPOSITE PK must SHARE the 1700-byte NONCLUSTERED
+    # key budget, so they get a smaller width AND the PK is emitted as NONCLUSTERED.
+    # (A composite PK of NVARCHAR(450) columns = 1800 bytes overflows the limit, so the
+    # CREATE TABLE fails and the table is missing — e.g. resource_custom_tags
+    # (resource_id, tag_key), which then breaks the BCDR plan with "Invalid object name".)
+    single_key_cols = set(_indexed)
 
     # Single-column TEXT PRIMARY KEY: "col TEXT PRIMARY KEY"
     for m in re.finditer(r'(\w+)\s+TEXT\s+(?:NOT\s+NULL\s+)?PRIMARY\s+KEY', sql, re.IGNORECASE):
-        key_cols.add(m.group(1).lower())
+        single_key_cols.add(m.group(1).lower())
 
     # Composite PRIMARY KEY (col1, col2, ...)
+    composite_key_cols = set()
     pk_match = re.search(r'PRIMARY\s+KEY\s*\(([^)]+)\)', sql, re.IGNORECASE)
     if pk_match:
         for col in pk_match.group(1).split(','):
-            key_cols.add(col.strip().lower())
+            composite_key_cols.add(col.strip().lower())
 
-    # Parse all column definitions: "col_name TEXT ..."
-    # Build a list of (col_name, start_of_TEXT, end_of_TEXT) tuples
+    # Width for composite-PK TEXT columns: NVARCHAR(N) = N*2 bytes, so the whole key
+    # (N * 2 * num_cols) must be <= 1700; cap each column at 450.
+    comp_size = min(450, 1700 // (2 * len(composite_key_cols))) if composite_key_cols else 450
+
+    # Parse all column definitions and choose the right NVARCHAR width.
     replacements = []
     for m in re.finditer(r'(\w+)\s+(TEXT)\b', sql, re.IGNORECASE):
         col_name = m.group(1).lower()
         if col_name in ('create', 'table', 'if', 'not', 'exists', 'primary', 'key',
                          'default', 'select', 'from', 'where', 'insert', 'into', 'set'):
             continue  # skip SQL keywords
-        nvarchar = 'NVARCHAR(450)' if col_name in key_cols else 'NVARCHAR(MAX)'
+        if col_name in composite_key_cols:
+            nvarchar = f'NVARCHAR({comp_size})'
+        elif col_name in single_key_cols:
+            nvarchar = 'NVARCHAR(450)'
+        else:
+            nvarchar = 'NVARCHAR(MAX)'
         replacements.append((m.start(2), m.end(2), nvarchar))
 
     # Apply replacements in reverse order to preserve positions
     for start, end, nvarchar in reversed(replacements):
         sql = sql[:start] + nvarchar + sql[end:]
+
+    # A composite PRIMARY KEY on string columns can exceed the 900-byte CLUSTERED key limit,
+    # so declare it NONCLUSTERED (1700-byte limit; the columns were sized above to fit).
+    if pk_match:
+        sql = re.sub(r'PRIMARY\s+KEY\s*\(', 'PRIMARY KEY NONCLUSTERED (', sql, count=1, flags=re.IGNORECASE)
 
     # TIMESTAMP DEFAULT CURRENT_TIMESTAMP → DATETIME2 DEFAULT GETUTCDATE()
     sql = sql.replace("TIMESTAMP DEFAULT CURRENT_TIMESTAMP", "DATETIME2 DEFAULT GETUTCDATE()")
