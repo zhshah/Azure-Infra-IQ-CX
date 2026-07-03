@@ -1610,9 +1610,10 @@ if ([string]::IsNullOrWhiteSpace($graphSpObjId)) {
         if (-not $granted) {
             $why = (("$res" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1))
             Write-Warn2 "$($perm.Name) - could not grant: $why"
-            # Runnable fallback for the admin grants file: the JSON body is in SINGLE quotes so it is
-            # passed literally (avoids the PowerShell quote-mangling that breaks an inline body).
-            $permIssues += "az rest --method POST --uri `"https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments`" --headers `"Content-Type=application/json`" --body '{`"principalId`":`"$principalId`",`"resourceId`":`"$graphSpObjId`",`"appRoleId`":`"$($perm.Id)`"}'   # $($perm.Name) -- why: $why"
+            # Emit a Windows-safe helper call into the admin-grants file. The helper passes the JSON
+            # body via a temp FILE (--body "@file"); an inline single-quoted body is mangled by az.cmd
+            # on Windows -> BadRequest "Unable to read JSON request payload".
+            $permIssues += "Grant-GraphAppRole -PrincipalId '$principalId' -ResourceId '$graphSpObjId' -AppRoleId '$($perm.Id)' -Name '$($perm.Name)'"
         }
     }
 }
@@ -1635,7 +1636,7 @@ if ([string]::IsNullOrWhiteSpace($appObjId)) {
     if ($LASTEXITCODE -eq 0) { Write-Ok "Registered SPA redirect URI: $redirectUri"; $spaRegistered = $true }
     else {
         Write-Warn2 "Could not add the SPA redirect URI (needs Application Administrator / app owner) — see the footer for the exact manual step."
-        $permIssues += "az rest --method PATCH --uri https://graph.microsoft.com/v1.0/applications/$appObjId --headers Content-Type=application/json --body '$spaBody'"
+        $permIssues += "Set-SpaRedirectUris -AppObjId '$appObjId' -AddUris @('$redirectUri','$redirectUri/')"
     }
 }
 
@@ -1706,8 +1707,35 @@ if ($permIssues.Count -gt 0) {
         "`$ErrorActionPreference = 'Continue'",
         ""
     )
+    # Windows-safe helpers written INTO the generated script (single-quoted here-string = all
+    # literal). They pass the Graph JSON body via a temp FILE (--body "@file"), which avoids the
+    # az.cmd quote-mangling that makes an inline body fail with BadRequest "Unable to read JSON".
+    $helpers = @'
+function Grant-GraphAppRole {
+    param([string]$PrincipalId, [string]$ResourceId, [string]$AppRoleId, [string]$Name)
+    $f = New-TemporaryFile
+    (@{ principalId = $PrincipalId; resourceId = $ResourceId; appRoleId = $AppRoleId } | ConvertTo-Json -Compress) | Out-File -Encoding ascii -FilePath $f.FullName
+    $r = az rest --method POST --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$PrincipalId/appRoleAssignments" --headers "Content-Type=application/json" --body "@$($f.FullName)" 2>&1
+    Remove-Item $f.FullName -ErrorAction SilentlyContinue
+    if ($LASTEXITCODE -eq 0) { Write-Host "  $Name - granted" -ForegroundColor Green }
+    elseif ("$r" -match "already exists") { Write-Host "  $Name - already granted" -ForegroundColor Green }
+    else { Write-Host "  $Name - FAILED: $r" -ForegroundColor Red }
+}
+function Set-SpaRedirectUris {
+    param([string]$AppObjId, [string[]]$AddUris)
+    $existing = az ad app show --id $AppObjId --query "spa.redirectUris" -o json 2>$null | ConvertFrom-Json
+    $uris = @(); if ($existing) { $uris += $existing }
+    foreach ($u in $AddUris) { if ($uris -notcontains $u) { $uris += $u } }
+    $f = New-TemporaryFile
+    (@{ spa = @{ redirectUris = $uris } } | ConvertTo-Json -Depth 5 -Compress) | Out-File -Encoding ascii -FilePath $f.FullName
+    $r = az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$AppObjId" --headers "Content-Type=application/json" --body "@$($f.FullName)" 2>&1
+    Remove-Item $f.FullName -ErrorAction SilentlyContinue
+    if ($LASTEXITCODE -eq 0) { Write-Host "  SPA redirect URIs set" -ForegroundColor Green }
+    else { Write-Host "  SPA redirect URI - FAILED: $r" -ForegroundColor Red }
+}
+'@
     try {
-        ($hdr + $permIssues) | Set-Content -Path $grantsFile -Encoding UTF8
+        ($hdr + $helpers + "" + $permIssues) | Set-Content -Path $grantsFile -Encoding UTF8
         $wroteFile = $true
     } catch { $wroteFile = $false }
     Write-Host "`n  POST-DEPLOY ADMIN ACTIONS ($($permIssues.Count)) — require a Microsoft Entra directory admin" -ForegroundColor Yellow
