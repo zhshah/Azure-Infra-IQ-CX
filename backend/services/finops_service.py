@@ -546,12 +546,19 @@ def get_savings_summary(dashboard_cache: Optional[Dict] = None) -> FinOpsSavings
 
         # Waste & orphan resources
         for res in dashboard_cache.get("resources", []):
-            waste = float(res.get("estimated_monthly_savings", 0))
+            is_orphan = res.get("is_orphan", False)
+            waste = float(res.get("estimated_monthly_savings", 0) or 0)
+            # Run-rate fallback: early in the month (or under Cost Management throttling)
+            # the current month hasn't accrued cost, so estimated_monthly_savings is $0.
+            # For orphaned or clearly-idle (low-score) resources, attribute LAST full
+            # month's spend as the savings estimate so real opportunities aren't hidden.
+            if waste <= 0 and (is_orphan or (res.get("final_score") is not None and float(res.get("final_score") or 100) < 25)):
+                waste = float(res.get("cost_previous_month", 0) or 0)
             if waste <= 0:
                 continue
-            is_orphan = res.get("is_orphan", False)
             cat = "orphan" if is_orphan else "waste"
             cat_label = "Orphan Resource" if is_orphan else "Waste Cleanup"
+            _cmc = float(res.get("cost_current_month", 0) or 0) or float(res.get("cost_previous_month", 0) or 0)
             opportunities.append(FinOpsSavingsOpportunity(
                 id=f"{cat}_{res.get('resource_id', '')[:16]}",
                 category=cat,
@@ -561,13 +568,13 @@ def get_savings_summary(dashboard_cache: Optional[Dict] = None) -> FinOpsSavings
                 resource_type=res.get("resource_type", ""),
                 resource_group=res.get("resource_group", ""),
                 subscription_id=res.get("subscription_id", ""),
-                current_monthly_cost=round(float(res.get("cost_current_month", 0)), 2),
+                current_monthly_cost=round(_cmc, 2),
                 potential_savings_usd=round(waste, 2),
                 savings_pct=round(float(res.get("rightsize_savings_pct", 0)) or 100.0, 1),
                 confidence="high" if is_orphan else "medium",
                 effort="low",
                 action=res.get("recommendation", "Review and decommission"),
-                priority_score=round(waste / max(float(res.get("cost_current_month", 1)), 0.01) * 50, 1),
+                priority_score=round(waste / max(_cmc, 0.01) * 50, 1),
                 source="scoring_engine",
             ))
 

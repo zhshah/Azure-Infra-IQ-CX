@@ -669,7 +669,20 @@ def _register_ai_summary(analysis_type: str, model: str, result: dict):
 def get_ai_insights_summary() -> dict:
     """Aggregate the latest AI analysis summary for every known module for the
     home-page AI dashboard. Reads the in-session registry first, then best-effort
-    persisted cache for modules not analyzed yet. Never triggers a new AI call."""
+    persisted cache for modules not analyzed yet. Never triggers a new AI call.
+
+    Result is cached (90s) via cache_service — which falls back to an in-process
+    cache when Redis is absent — because the per-module persisted-cache lookups are
+    many small DB round-trips (slow on Basic-tier Azure SQL); without this the home
+    dashboard re-reads them on every poll and the AI panels paint slowly."""
+    import services.cache_service as _cache
+    _ck = "ai:insights_summary:v1"
+    try:
+        _hit = _cache.get_json(_ck)
+        if _hit:
+            return _hit
+    except Exception:
+        pass
     modules = []
     analyzed = 0
     scores = []
@@ -699,7 +712,7 @@ def get_ai_insights_summary() -> dict:
                 high_risk += 1
         modules.append(entry)
     estate_score = int(round(sum(scores) / len(scores))) if scores else None
-    return {
+    result = {
         "modules": modules,
         "estate_health": {
             "score": estate_score,
@@ -709,6 +722,11 @@ def get_ai_insights_summary() -> dict:
         },
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+    try:
+        _cache.set_json(_ck, result, ttl_seconds=90)
+    except Exception:
+        pass
+    return result
 
 
 def analyze_executive_briefing_ai(force_refresh: bool = False) -> dict:

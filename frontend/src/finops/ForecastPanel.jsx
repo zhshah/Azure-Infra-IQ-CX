@@ -9,7 +9,7 @@ import {
 import { RefreshCw, AlertCircle } from 'lucide-react'
 import { finopsApi, fmtUsd, fmtPct } from './finopsApi'
 import FinOpsAIPanel from './FinOpsAIPanel'
-import FinOpsExportMenu from './FinOpsExportMenu'
+import FinOpsToolbar, { EMPTY_TOOLBAR_FILTERS } from './FinOpsToolbar'
 import SearchableSelect from '../components/shared/SearchableSelect'
 
 export default function ForecastPanel() {
@@ -17,6 +17,7 @@ export default function ForecastPanel() {
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState(null)
   const [horizon, setHorizon] = useState(90)
+  const [filters, setFilters] = useState(EMPTY_TOOLBAR_FILTERS)
 
   const load = async () => {
     setLoading(true); setError(null)
@@ -53,12 +54,25 @@ export default function ForecastPanel() {
 
   const trendColor = data.trend_direction === 'up' ? '#ef4444' : data.trend_direction === 'down' ? '#22c55e' : 'var(--c-64748b)'
 
+  const exportReport = {
+    title: 'Spend Forecast',
+    kpis: [
+      { label: 'EOM Forecast', value: fmtUsd(data.eom_forecast_usd) },
+      { label: 'EOQ Forecast', value: fmtUsd(data.eoq_forecast_usd) },
+      { label: 'Confidence', value: fmtPct(data.confidence_pct) },
+      { label: 'Trend', value: String(data.trend_direction || '-') },
+    ],
+    tables: [{
+      title: 'Forecast points',
+      columns: ['Date', 'Actual (USD)', 'Forecast (USD)', 'Lower', 'Upper'],
+      rows: allPoints.map(p => [p.date, p.actual ?? '', p.forecast ?? '', p.lower ?? '', p.upper ?? '']),
+    }],
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <FinOpsExportMenu view="forecast" focusDays={30} onXlsx={() => finopsApi.downloadReport()} report={{ title: 'Spend Forecast', kpis: [{ label: 'EOM Forecast', value: fmtUsd(data.eom_forecast_usd) }, { label: 'EOQ Forecast', value: fmtUsd(data.eoq_forecast_usd) }, { label: 'Confidence', value: fmtPct(data.confidence_pct) }, { label: 'Trend', value: String(data.trend_direction || '-') }] }} />
-      </div>
-      <FinOpsAIPanel view="forecast" data={{ method: data.method, trend_direction: data.trend_direction, eom_forecast_usd: data.eom_forecast_usd, eoq_forecast_usd: data.eoq_forecast_usd, confidence_pct: data.confidence_pct, horizon, cost_drivers: (data.cost_drivers || []).slice(0, 6), by_subscription: (data.by_subscription || []).slice(0, 6) }} />
+      <FinOpsToolbar filters={filters} onChange={setFilters} showPeriod={false} exportName="forecast" exportReport={exportReport} />
+      <FinOpsAIPanel view="forecast" filters={filters} data={{ method: data.method, trend_direction: data.trend_direction, eom_forecast_usd: data.eom_forecast_usd, eoq_forecast_usd: data.eoq_forecast_usd, confidence_pct: data.confidence_pct, horizon, cost_drivers: (data.cost_drivers || []).slice(0, 6), by_subscription: (data.by_subscription || []).slice(0, 6) }} />
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>

@@ -155,13 +155,19 @@ function BudgetCard({ b, onDelete, onEdit }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
         <div style={{ flex: 1, cursor: 'pointer' }} onClick={handleExpand}>
           <div style={{ color: 'var(--c-e2e8f0)', fontWeight: 700, fontSize: 13 }}>{b.name}</div>
-          <div style={{ color: 'var(--c-475569)', fontSize: 10, marginTop: 2 }}>
-            {b.period} · {b.scope_type} · {b.source === 'azure' ? '☁ Azure' : '✎ Custom'}
+          <div style={{ color: 'var(--c-475569)', fontSize: 10, marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>{b.period} · {b.scope_type}</span>
+            <span style={{
+              fontSize: 9, fontWeight: 700, padding: '1px 7px', borderRadius: 10,
+              background: (b.source === 'azure_native' || b.source === 'azure') ? 'rgba(59,130,246,0.15)' : 'rgba(148,163,184,0.12)',
+              color: (b.source === 'azure_native' || b.source === 'azure') ? '#60a5fa' : '#94a3b8',
+              border: `1px solid ${(b.source === 'azure_native' || b.source === 'azure') ? '#1d4ed8' : 'var(--c-334155)'}`,
+            }}>{(b.source === 'azure_native' || b.source === 'azure') ? '☁ Azure Portal' : '✎ Custom'}</span>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           {variance && <StatusBadge status={variance.status} />}
-          {b.source !== 'azure' && (
+          {!(b.source === 'azure_native' || b.source === 'azure') && (
             <>
               <button onClick={() => onEdit(b)} style={{
                 background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-475569)', padding: 2,
@@ -226,7 +232,9 @@ export default function BudgetManager() {
     finally { setLoading(false); setSyncing(false) }
   }
 
-  useEffect(() => { loadBudgets() }, [])
+  // Auto-sync Azure Portal budgets on open so budgets the customer already configured
+  // in Azure Cost Management appear immediately (alongside any custom budgets).
+  useEffect(() => { loadBudgets(true) }, [])
 
   const deleteBudget = async (id) => {
     if (!confirm('Delete this budget?')) return

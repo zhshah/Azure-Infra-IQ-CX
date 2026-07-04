@@ -134,13 +134,38 @@ export default function FinOpsDashboard() {
       ])
       setKpi(kpiData)
 
-      // Merge subscription sources
+      // Metrics Service (single source of truth) — overlay canonical values onto
+      // the KPI object so the Dashboard cards match the Overview exactly (one
+      // forecast, one untagged count, one savings figure). Non-blocking.
+      finopsApi.getMetrics().then(m => {
+        if (!m) return
+        setKpi(prev => ({
+          ...(prev || {}),
+          total_spend_mtd:        m.spend?.mtd ?? prev?.total_spend_mtd,
+          total_spend_last_month: m.spend?.priorMonthFull ?? prev?.total_spend_last_month,
+          mom_delta_pct:          m.spend?.momDeltaPct ?? prev?.mom_delta_pct,
+          forecast_eom_usd:       m.forecast?.eom ?? prev?.forecast_eom_usd,
+          savings_identified_usd: m.savings?.monthlyRunRate ?? prev?.savings_identified_usd,
+          tagging_compliance_pct: m.resources?.tagCompliancePct ?? prev?.tagging_compliance_pct,
+          total_untagged:         m.resources?.untagged ?? prev?.total_untagged,
+          ri_coverage_pct:        m.reservations?.coveragePct ?? prev?.ri_coverage_pct,
+          ri_utilization_pct:     m.reservations?.utilizationPct ?? prev?.ri_utilization_pct,
+          anomaly_count:          m.anomalies?.openCount ?? prev?.anomaly_count,
+        }))
+      }).catch(() => {})
+      // filter-options subscriptions = {id,name,count} objects — map defensively).
       const subOpts = subs.length > 0
         ? subs.map(s => ({ value: s.subscription_id, label: s.subscription_name || s.subscription_id }))
-        : (filterOpts.subscriptions || []).map(s => ({ value: s, label: s }))
+        : (filterOpts.subscriptions || []).map(s => (typeof s === 'string'
+            ? { value: s, label: s }
+            : { value: s.id || s.value, label: s.name || s.label || s.id || s.value }))
       setSubscriptions(subOpts)
 
-      const rgOpts = (filterOpts.resource_groups || []).map(rg => ({ value: rg, label: rg }))
+      // filter-options resource_groups are {value,label,count} objects (NOT strings) — map
+      // defensively so we never pass an object as a React child (was crashing with error #31).
+      const rgOpts = (filterOpts.resource_groups || []).map(rg => (typeof rg === 'string'
+        ? { value: rg, label: rg }
+        : { value: rg.value, label: rg.label ?? rg.value, count: rg.count }))
       setResourceGroups(rgOpts)
     } catch (e) {
       setError(e.message)

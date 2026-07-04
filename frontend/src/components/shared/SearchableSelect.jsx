@@ -22,6 +22,7 @@
  *   compact       — smaller padding for inline usage
  */
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, Search, Check, X } from 'lucide-react'
 
 export default function SearchableSelect({
@@ -41,6 +42,8 @@ export default function SearchableSelect({
   const containerRef = useRef(null)
   const searchRef = useRef(null)
   const listRef = useRef(null)
+  const dropdownRef = useRef(null)
+  const [rect, setRect] = useState(null)
 
   // Normalize options
   const normalized = useMemo(
@@ -66,17 +69,32 @@ export default function SearchableSelect({
     [normalized, value],
   )
 
-  // Close on outside click
+  // Close on outside click (checks BOTH the trigger container and the portalled dropdown)
   useEffect(() => {
     if (!open) return
     const handler = e => {
-      if (containerRef.current && !containerRef.current.contains(e.target)) {
+      const inContainer = containerRef.current && containerRef.current.contains(e.target)
+      const inDropdown = dropdownRef.current && dropdownRef.current.contains(e.target)
+      if (!inContainer && !inDropdown) {
         setOpen(false)
         setSearch('')
       }
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  // Position the portalled dropdown under the trigger; keep it in sync on scroll/resize.
+  useEffect(() => {
+    if (!open) return
+    const update = () => { if (containerRef.current) setRect(containerRef.current.getBoundingClientRect()) }
+    update()
+    window.addEventListener('scroll', update, true)
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('resize', update)
+    }
   }, [open])
 
   // Auto-focus search when opened
@@ -231,15 +249,19 @@ export default function SearchableSelect({
         </span>
       </button>
 
-      {/* Dropdown panel */}
-      {open && (
+      {/* Dropdown panel — portalled to <body> so overflow:hidden ancestors never clip it */}
+      {open && rect && createPortal(
         <div
+          ref={dropdownRef}
+          onKeyDown={handleKeyDown}
           style={{
-            position: 'absolute',
-            top: 'calc(100% + 4px)',
-            left: 0,
-            right: 0,
-            zIndex: 9999,
+            position: 'fixed',
+            ...(((window.innerHeight - rect.bottom) < 300 && rect.top > (window.innerHeight - rect.bottom))
+              ? { bottom: (window.innerHeight - rect.top) + 4 }
+              : { top: rect.bottom + 4 }),
+            left: rect.left,
+            width: rect.width,
+            zIndex: 99999,
             background: 'var(--c-111827)',
             border: '1px solid var(--c-334155)',
             borderRadius: 8,
@@ -392,7 +414,8 @@ export default function SearchableSelect({
               )
             })}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

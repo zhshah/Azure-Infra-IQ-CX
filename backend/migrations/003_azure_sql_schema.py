@@ -132,6 +132,14 @@ TABLES = [
         resource_ids    TEXT NOT NULL DEFAULT '[]',
         color           TEXT DEFAULT '#3b82f6',
         icon            TEXT DEFAULT '📁',
+        business_unit   TEXT,
+        owner           TEXT,
+        focus_area      TEXT,
+        criticality     TEXT,
+        environment     TEXT,
+        dr_tier         TEXT,
+        rto_target      TEXT,
+        rpo_target      TEXT,
         created_at      TEXT NOT NULL,
         updated_at      TEXT NOT NULL
     )
@@ -191,6 +199,14 @@ TABLES = [
         rpo_target      TEXT,
         business_function TEXT,
         notes           TEXT,
+        target_region   TEXT,
+        desired_sku     TEXT,
+        environment     TEXT,
+        business_owner  TEXT,
+        financial_loss_per_hour TEXT,
+        app_dependencies TEXT,
+        data_classification TEXT,
+        compliance      TEXT,
         created_at      TEXT NOT NULL,
         updated_at      TEXT NOT NULL
     )

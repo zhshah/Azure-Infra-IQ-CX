@@ -47,7 +47,15 @@ _SYSTEM_PROMPT = (
     '  "projected_savings_usd": 0\n'
     "}\n"
     "Be specific to the data. Quantify savings when possible. Max 5 findings, 5 "
-    "recommendations, 4 risk flags."
+    "recommendations, 4 risk flags. "
+    "IMPORTANT: the data may include a `_grounding` object with AUTHORITATIVE, real "
+    "resource-level facts from the customer's live Azure estate - estate totals, the "
+    "top resources by cost (name/type/resource group/region/utilisation), cost "
+    "breakdowns by service/resource group/subscription/region, and concrete waste "
+    "candidates (orphaned / oversized resources with current + recommended SKU). "
+    "Treat `_grounding` as ground truth: cite specific resource names, resource groups "
+    "and dollar figures from it, and base recommendations on those real resources "
+    "rather than generic advice."
 )
 
 
@@ -164,8 +172,8 @@ def _parse_json(raw: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _fingerprint(view: str, data: Any, filters: Any, scope: str = "") -> str:
-    blob = json.dumps({"v": view, "d": data, "f": filters, "s": scope}, sort_keys=True, default=str)
+def _fingerprint(view: str, data: Any, filters: Any, scope: str = "", context: Any = None) -> str:
+    blob = json.dumps({"v": view, "d": data, "f": filters, "s": scope, "c": context or {}}, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
 
 
@@ -188,19 +196,24 @@ def get_finops_insights(
     filters: Optional[Dict[str, Any]] = None,
     force_refresh: bool = False,
     scope: Optional[str] = None,
+    context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Generate (or return cached) AI insights for a FinOps view.
 
     When `scope` is supplied (a free-text focus area such as "Storage in West
     Europe" or "Reservation coverage"), the analysis is narrowed to that area and
     cached separately so users can keep both the broad and the scoped analyses.
+
+    `context` is an optional dict of end-user business context (industry, org
+    size, primary goal, free-text notes, …) used to ground the recommendations.
     """
     provider = _provider_name()
     if provider == "none":
         return _empty("AI provider not configured. Set an Azure OpenAI or Claude key in Settings to enable AI cost analysis.")
 
     scope = (scope or "").strip()[:300]
-    fp = _fingerprint(view, data, filters or {}, scope)
+    context = context if isinstance(context, dict) else {}
+    fp = _fingerprint(view, data, filters or {}, scope, context)
     cache_key = f"finops:ai:{view}:{fp}"
 
     # Warm cache
@@ -223,11 +236,27 @@ def get_finops_insights(
             "briefly if they materially affect the focus area.\n"
         )
 
+    context_block = ""
+    ctx_items = [
+        (str(k).replace("_", " ").strip(), str(v).strip())
+        for k, v in context.items()
+        if v not in (None, "", "—") and str(v).strip()
+    ]
+    if ctx_items:
+        ctx_lines = "\n".join(f"- {k.title()}: {v[:240]}" for k, v in ctx_items[:12])
+        context_block = (
+            "\nBUSINESS CONTEXT — Ground your analysis in the following customer context. "
+            "Tailor the findings, recommendations, benchmarks, prioritisation and tone to it "
+            "(e.g. reflect the industry, organisation size and stated primary goal):\n"
+            f"{ctx_lines}\n"
+        )
+
     user = (
         f"FinOps view: {view}\n"
         f"Active filters: {json.dumps(filters or {}, default=str)}\n"
         f"{scope_block}"
-        f"\nData summary (JSON):\n{json.dumps(data, default=str)[:6000]}"
+        f"{context_block}"
+        f"\nData summary (JSON):\n{json.dumps(data, default=str)[:14000]}"
     )
 
     try:
@@ -257,6 +286,7 @@ def get_finops_insights(
         "projected_savings_usd": _safe_float(parsed.get("projected_savings_usd")),
         "provider": provider,
         "scope": scope or None,
+        "context": {k: v for k, v in context.items() if v not in (None, "", "—")} or None,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "cached": False,
     }

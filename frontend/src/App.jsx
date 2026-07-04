@@ -58,18 +58,23 @@ const NAV_SECTIONS = [
   ]},
   { heading: 'FinOps', collapsible: true, items: [
     { key: 'finops-overview',   label: '⚡ FinOps Overview',    icon: '/icons/management + governance/00001-icon-service-Monitor.svg' },
+    { key: 'finops-studio',   label: '🎨 Cost Studio',      icon: '/icons/general/10015-icon-service-Dashboard.svg' },
     { key: 'finops',          label: 'FinOps Dashboard',    icon: '/icons/management + governance/00001-icon-service-Monitor.svg' },
     { key: 'cost-explorer',   label: 'Cost Explorer',       icon: '/icons/general/10015-icon-service-Dashboard.svg' },
+    { key: 'finops-dependencies', label: '🔗 Cost Dependencies', icon: '/icons/general/10349-icon-service-Resource-Explorer.svg' },
+    { key: 'finops-compare',  label: '⇄ Cost Comparison',   icon: '/icons/management + governance/00001-icon-service-Monitor.svg' },
     { key: 'finops-budgets',  label: 'Budget Manager',      icon: '/icons/general/10003-icon-service-Reservations.svg' },
     { key: 'finops-forecast', label: 'Forecast',            icon: '/icons/general/10008-icon-service-Marketplace.svg' },
     { key: 'finops-alloc',    label: 'Cost Allocation',     icon: '/icons/general/10007-icon-service-Resource-Groups.svg' },
     { key: 'finops-chargeback', label: 'Chargeback',        icon: '/icons/general/10014-icon-service-Tag.svg' },
+    { key: 'finops-unit-economics', label: '📊 Unit Economics', icon: '/icons/general/10015-icon-service-Dashboard.svg' },
     { key: 'finops-commit',   label: 'Commitments & RI',   icon: '/icons/general/10349-icon-service-Resource-Explorer.svg' },
     { key: 'finops-savings',  label: 'Savings Optimizer',   icon: '/icons/migrate/10281-icon-service-Azure-Migrate.svg' },
     { key: 'finops-tags',     label: 'Tag Cost Analytics',  icon: '/icons/general/10001-icon-service-All-Resources.svg' },
     { key: 'finops-alerts',   label: 'FinOps Alerts',       icon: '/icons/security/10241-icon-service-Microsoft-Defender-for-Cloud.svg' },
     { key: 'finops-warehouse', label: 'Cost Warehouse',   icon: '/icons/databases/00036-icon-service-SQL-Data-Warehouses.svg' },
     { key: 'finops-compliance', label: '✅ FinOps Compliance', icon: '/icons/management + governance/00003-icon-service-Advisor.svg' },
+    { key: 'finops-exec',     label: '📄 Executive Report', icon: '/icons/general/10015-icon-service-Dashboard.svg' },
   ]},
   // Keep 'About' LAST so it always sits at the bottom of the left-hand menu.
   { heading: 'About', items: [
@@ -430,6 +435,8 @@ import UpdateManagementView   from './components/updates/UpdateManagementView'
 
 // ── FinOps Module ─────────────────────────────────────────────────────────────
 import FinOpsOverview    from './finops/FinOpsOverview'
+import CostStudio        from './finops/CostStudio'
+import UnitEconomics     from './finops/UnitEconomics'
 import FinOpsDashboard    from './finops/FinOpsDashboard'
 import CostExplorer       from './finops/CostExplorer'
 import BudgetManager      from './finops/BudgetManager'
@@ -442,6 +449,9 @@ import TagAnalytics       from './finops/TagAnalytics'
 import FinOpsAlerts       from './finops/FinOpsAlerts'
 import FinOpsWarehouse    from './finops/FinOpsWarehouse'
 import FinOpsComplianceView from './finops/FinOpsComplianceView'
+import CostDependencies   from './finops/CostDependencies'
+import CostComparison     from './finops/CostComparison'
+import FinOpsExecutiveReport from './finops/FinOpsExecutiveReport'
 
 function ErrorView({ message, onRetry }) {
   return (
@@ -2324,18 +2334,23 @@ function AppInner() {
 
         {/* ── FinOps Module ── */}
         {view === 'finops-overview' && <FinOpsOverview />}
+        {view === 'finops-studio' && <CostStudio />}
         {view === 'finops' && <FinOpsDashboard />}
         {view === 'cost-explorer' && <CostExplorer />}
+        {view === 'finops-dependencies' && <CostDependencies />}
+        {view === 'finops-compare' && <CostComparison />}
         {view === 'finops-budgets' && <BudgetManager />}
         {view === 'finops-forecast' && <ForecastPanel />}
         {view === 'finops-alloc' && <AllocationView />}
         {view === 'finops-chargeback' && <ChargebackPanel />}
+        {view === 'finops-unit-economics' && <UnitEconomics />}
         {view === 'finops-commit' && <CommitmentTracker />}
         {view === 'finops-savings' && <SavingsSummary />}
         {view === 'finops-tags' && <TagAnalytics />}
         {view === 'finops-alerts' && <FinOpsAlerts />}
         {view === 'finops-warehouse' && <FinOpsWarehouse />}
         {view === 'finops-compliance' && <FinOpsComplianceView />}
+        {view === 'finops-exec' && <FinOpsExecutiveReport />}
 
         {/* ── About / Features / FAQs ── */}
         {view === 'about' && <About tab="about" />}

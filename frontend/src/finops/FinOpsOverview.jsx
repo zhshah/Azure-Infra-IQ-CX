@@ -12,12 +12,13 @@ import {
 } from 'recharts'
 import {
   DollarSign, TrendingUp, Shield, Zap, Tag, AlertTriangle,
-  RefreshCw, AlertCircle, Download, ChevronRight, TrendingDown,
+  RefreshCw, AlertCircle, Download, ChevronRight, TrendingDown, Filter, X,
 } from 'lucide-react'
-import { finopsApi, fmtUsd, fmtPct, CHART_COLORS, drillToExplorer } from './finopsApi'
+import { finopsApi, fmtUsd, fmtPct, CHART_COLORS, drillToExplorer, getSubscriptions, getFilterOptions, TIME_RANGE_OPTIONS } from './finopsApi'
 import { OverviewSkeleton } from './FinOpsSkeleton'
 import FinOpsAIPanel from './FinOpsAIPanel'
 import FinOpsExportMenu from './FinOpsExportMenu'
+import SearchableSelect from '../components/shared/SearchableSelect'
 
 /* ── helpers ── */
 const fmtDate = d => (d ? d.slice(5) : '')   // "MM-DD" from "YYYY-MM-DD"
@@ -72,6 +73,7 @@ function ImpactBadge({ impact }) {
 /* ═══════════════════════════════════════════════════════════════ */
 export default function FinOpsOverview() {
   const [kpi,          setKpi]          = useState(null)
+  const [metrics,      setMetrics]      = useState(null)   // Metrics Service — single source of truth
   const [forecast,     setForecast]     = useState(null)
   const [savings,      setSavings]      = useState(null)
   const [advisor,      setAdvisor]      = useState(null)
@@ -87,6 +89,14 @@ export default function FinOpsOverview() {
   const [liveRefreshing, setLiveRefreshing] = useState(false)
   const [snapAsOf,     setSnapAsOf]     = useState(null)
   const [showAllAlerts, setShowAllAlerts] = useState(false)
+  const [horizon,      setHorizon]      = useState(90)
+  const [scopeSub,     setScopeSub]     = useState('')
+  const [scopeRG,      setScopeRG]      = useState('')
+  const [scopeTime,    setScopeTime]    = useState('last_30d')
+  const [scoped,       setScoped]       = useState(null)
+  const [scopeLoading, setScopeLoading] = useState(false)
+  const [subOpts,      setSubOpts]      = useState([])
+  const [rgOpts,       setRgOpts]       = useState([])
 
   const handleDownload = async () => {
     setDownloading(true); setDownloadErr(null)
@@ -106,9 +116,12 @@ export default function FinOpsOverview() {
       ])
       setKpi(k); setAdvisor(adv); setOptim(op)
       setLoading(false)  // render immediately with fast data
+      // Metrics Service (single source of truth) — non-blocking; cards fall back
+      // to the legacy summary until it lands.
+      finopsApi.getMetrics().then(setMetrics).catch(() => {})
 
-      // Slow path: load remaining sections in background (don't block UI)
-      finopsApi.getForecast(90).then(f => setForecast(f)).catch(() => {})
+      // Slow path: load remaining sections in background (don't block UI).
+      // Forecast is loaded by its own effect (depends on the selected horizon).
       finopsApi.getSavings().then(sv => setSavings(sv)).catch(() => {})
       finopsApi.getCommitments().then(cm => setCommitments(cm)).catch(() => {})
       finopsApi.getBudgetAlerts().then(al => setAlerts(al)).catch(() => {})
@@ -116,6 +129,28 @@ export default function FinOpsOverview() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // Forecast follows the selected horizon (30/60/90/180/365 days).
+  useEffect(() => { finopsApi.getForecast(horizon).then(f => setForecast(f)).catch(() => {}) }, [horizon])
+
+  // Scope-filter option sources (subscriptions + resource groups).
+  useEffect(() => {
+    getSubscriptions().then(subs => setSubOpts((subs || []).map(s => ({ value: s.subscription_id, label: s.subscription_name || s.subscription_id })))).catch(() => {})
+    getFilterOptions().then(o => setRgOpts((o.resource_groups || []).map(rg => (typeof rg === 'string' ? { value: rg, label: rg } : { value: rg.value, label: rg.label ?? rg.value })))).catch(() => {})
+  }, [])
+
+  // Re-scope the spend trend to the selected subscription / resource group / time range.
+  useEffect(() => {
+    const active = !!(scopeSub || scopeRG || scopeTime !== 'last_30d')
+    if (!active) { setScoped(null); return }
+    let cancelled = false
+    setScopeLoading(true)
+    finopsApi.getDashboardData({ subscription_id: scopeSub || undefined, resource_group: scopeRG || undefined, time_range: scopeTime, group_by: 'ServiceName' })
+      .then(d => { if (!cancelled) setScoped(d) })
+      .catch(() => { if (!cancelled) setScoped(null) })
+      .finally(() => { if (!cancelled) setScopeLoading(false) })
+    return () => { cancelled = true }
+  }, [scopeSub, scopeRG, scopeTime])
 
   /* ── Cost snapshot "as of" indicator ── */
   const loadSnapStatus = useCallback(async () => {
@@ -166,22 +201,26 @@ export default function FinOpsOverview() {
 
   /* ── Trend data with optional cumulative ── */
   const trendData = useMemo(() => {
-    const dates = kpi?.cost_trend_dates || []
-    const costs = kpi?.cost_trend_30d   || []
-    const raw = dates.map((d, i) => ({ date: d, cost: costs[i] ?? 0 }))
+    let raw
+    if (scoped && Array.isArray(scoped.trend) && scoped.trend.length) {
+      raw = scoped.trend.map(p => ({ date: p.date, cost: p.cost ?? 0 }))
+    } else {
+      const dates = kpi?.cost_trend_dates || []
+      const costs = kpi?.cost_trend_30d   || []
+      raw = dates.map((d, i) => ({ date: d, cost: costs[i] ?? 0 }))
+    }
     if (!accumulated) return raw
     return raw.reduce((acc, pt, i) => {
       acc.push({ date: pt.date, cost: (acc[i - 1]?.cost ?? 0) + (pt.cost ?? 0) })
       return acc
     }, [])
-  }, [kpi, accumulated])
+  }, [kpi, accumulated, scoped])
 
-  /* ── Forecast chart data ── */
-  const fcastData = useMemo(() => (
-    forecast?.forecast_points?.map(p => ({
-      date: p.date, actual: p.actual ?? null, projected: p.projected ?? null,
-    })) || []
-  ), [forecast])
+  /* ── Forecast chart data (history = actual, forecast = projected) ── */
+  const fcastData = useMemo(() => ([
+    ...((forecast?.history) || []).map(p => ({ date: p.date, actual: p.cost_usd })),
+    ...((forecast?.forecast) || []).map(p => ({ date: p.date, projected: p.cost_usd })),
+  ]), [forecast])
 
   /* ── RI health bars ── */
   const riCoverage    = kpi?.ri_coverage_pct    ?? 0
@@ -218,8 +257,13 @@ export default function FinOpsOverview() {
     </div>
   )
 
-  const momColor = (kpi?.mom_delta_pct ?? 0) >= 0 ? '#ef4444' : '#22c55e'
-  const momArrow = (kpi?.mom_delta_pct ?? 0) >= 0 ? '↑' : '↓'
+  // Projected month-over-month = projected end-of-month vs the FULL last month (a like-for-like
+  // comparison; raw MTD-vs-last-month % is misleading early in the month).
+  const _lastMo  = kpi?.total_spend_last_month ?? 0
+  const _projMoM = _lastMo > 0 ? (((kpi?.forecast_eom_usd ?? 0) - _lastMo) / _lastMo) * 100 : 0
+  const momColor = _projMoM >= 0 ? '#ef4444' : '#22c55e'
+  const momArrow = _projMoM >= 0 ? '↑' : '↓'
+  const scopeActive = !!(scopeSub || scopeRG || scopeTime !== 'last_30d')
   const advisorItems  = advisor?.items || []
   const optimOversized    = optim?.oversized    || []
   const optimUnderutilized = optim?.underutilized || []
@@ -227,26 +271,44 @@ export default function FinOpsOverview() {
   const topSavings = (savings?.opportunities || []).slice(0, 5)
   const budgetAlerts = alerts?.alerts || []
 
+  // ── Metrics Service = single source of truth for the 6 headline cards. Falls
+  //    back to the legacy summary (kpi) until /api/metrics/summary lands. ──
+  const M = metrics || {}
+  const cardMtdSpend    = M.spend?.mtd            ?? kpi?.total_spend_mtd
+  const cardForecastEom = M.forecast?.eom         ?? kpi?.forecast_eom_usd
+  const cardBudgetUtil  = M.budgets?.utilizationPct ?? kpi?.budget_utilization_pct
+  const cardBudgetBreaching = M.budgets?.breaching?.length ?? kpi?.budgets_exceeded ?? 0
+  const cardBudgetCount = M.budgets?.count ?? null
+  const cardSavingsMonthly = M.savings?.monthlyRunRate ?? kpi?.savings_identified_usd
+  const cardSavingsAnnual  = M.savings?.identifiedAnnualizedPotential ?? null
+  const cardRiCoverage  = M.reservations?.coveragePct ?? kpi?.ri_coverage_pct
+  const cardRiUtil      = M.reservations?.utilizationPct ?? kpi?.ri_utilization_pct
+  const cardTagPct      = M.resources?.tagCompliancePct ?? kpi?.tagging_compliance_pct
+  const cardUntagged    = M.resources?.untagged ?? kpi?.total_untagged ?? 0
+  const hasReservations = M.reservations ? (M.reservations.count > 0 || cardRiCoverage > 0) : kpi?.has_reservations
+  const hasBudgets      = M.budgets ? (M.budgets.count > 0) : kpi?.has_budgets
+
   // Compact data fingerprint for the AI panel + a structured report for PDF export.
   const aiData = {
-    mtd_spend: kpi?.total_spend_mtd, last_month: kpi?.total_spend_last_month,
-    mom_delta_pct: kpi?.mom_delta_pct, forecast_eom: kpi?.forecast_eom_usd,
-    savings_identified: kpi?.savings_identified_usd, budget_utilization_pct: kpi?.budget_utilization_pct,
-    budgets_exceeded: kpi?.budgets_exceeded, ri_coverage_pct: kpi?.ri_coverage_pct,
-    ri_utilization_pct: kpi?.ri_utilization_pct, tag_compliance_pct: kpi?.tagging_compliance_pct,
-    anomaly_count: kpi?.anomaly_count, subscriptions: kpi?.subscription_count, resources: kpi?.total_resource_count,
-    oversized: optim?.oversized_count, underutilized: optim?.underutilized_count, orphaned: optim?.orphaned_count,
+    mtd_spend: cardMtdSpend, last_month: kpi?.total_spend_last_month,
+    mom_delta_pct: kpi?.mom_delta_pct, forecast_eom: cardForecastEom,
+    savings_identified: cardSavingsMonthly, savings_annualized_potential: cardSavingsAnnual,
+    budget_utilization_pct: cardBudgetUtil,
+    budgets_exceeded: cardBudgetBreaching, ri_coverage_pct: cardRiCoverage,
+    ri_utilization_pct: cardRiUtil, tag_compliance_pct: cardTagPct, untagged: cardUntagged,
+    anomaly_count: M.anomalies?.openCount ?? kpi?.anomaly_count, subscriptions: kpi?.subscription_count, resources: M.resources?.total ?? kpi?.total_resource_count,
+    oversized: optim?.oversized_count, underutilized: optim?.underutilized_count, orphaned: M.savings?.orphanedCount ?? optim?.orphaned_count,
     top_savings: topSavings.map(o => ({ name: o.resource_name || o.title, savings: o.savings_usd ?? o.monthly_savings })),
   }
   const aiReport = {
     title: 'Azure FinOps Overview',
     kpis: [
-      { label: 'MTD Spend', value: fmtUsd(kpi?.total_spend_mtd) },
-      { label: 'EOM Forecast', value: fmtUsd(kpi?.forecast_eom_usd) },
-      { label: 'Savings Found', value: fmtUsd(kpi?.savings_identified_usd) },
-      { label: 'Budget Util', value: fmtPct(kpi?.budget_utilization_pct) },
-      { label: 'RI Coverage', value: fmtPct(kpi?.ri_coverage_pct) },
-      { label: 'Tag Compliance', value: fmtPct(kpi?.tagging_compliance_pct) },
+      { label: 'MTD Spend', value: fmtUsd(cardMtdSpend) },
+      { label: 'EOM Forecast', value: fmtUsd(cardForecastEom) },
+      { label: 'Savings Found', value: fmtUsd(cardSavingsMonthly) },
+      { label: 'Budget Util', value: fmtPct(cardBudgetUtil) },
+      { label: 'RI Coverage', value: fmtPct(cardRiCoverage) },
+      { label: 'Tag Compliance', value: fmtPct(cardTagPct) },
     ],
     tables: [
       { title: 'Top Savings Opportunities', columns: ['Resource', 'Monthly Savings'],
@@ -295,6 +357,32 @@ export default function FinOpsOverview() {
         </div>
       </div>
 
+      {/* ── Scope filter bar (subscription / resource group / time range) ── */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', background: 'var(--c-0f172a)', border: `1px solid ${scopeActive ? '#1d4ed8' : 'var(--c-1e293b)'}`, borderRadius: 10, padding: '12px 16px' }}>
+        <Filter size={15} style={{ color: scopeActive ? '#60a5fa' : 'var(--c-64748b)', marginBottom: 6 }} />
+        <div style={{ minWidth: 210 }}>
+          <SearchableSelect label="Subscription" value={scopeSub} onChange={v => setScopeSub(v || '')} options={subOpts} placeholder="All subscriptions" searchPlaceholder="Search subscriptions…" compact />
+        </div>
+        <div style={{ minWidth: 200 }}>
+          <SearchableSelect label="Resource Group" value={scopeRG} onChange={v => setScopeRG(v || '')} options={rgOpts} placeholder="All resource groups" searchPlaceholder="Search resource groups…" compact />
+        </div>
+        <div style={{ minWidth: 150 }}>
+          <SearchableSelect label="Time Range" value={scopeTime} onChange={v => setScopeTime(v || 'last_30d')} options={TIME_RANGE_OPTIONS.filter(o => o.value !== 'custom')} compact />
+        </div>
+        {scopeActive && (
+          <button onClick={() => { setScopeSub(''); setScopeRG(''); setScopeTime('last_30d') }} style={{
+            background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6, padding: '6px 12px',
+            cursor: 'pointer', color: 'var(--c-94a3b8)', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, marginBottom: 1,
+          }}><X size={11} /> Clear</button>
+        )}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+          {scopeLoading && <span style={{ color: 'var(--c-64748b)', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}><RefreshCw size={11} className="animate-spin" /> Updating…</span>}
+          {scoped && (
+            <span style={{ color: 'var(--c-94a3b8)', fontSize: 12 }}>Spend in scope: <b style={{ color: '#60a5fa' }}>{fmtUsd(scoped.total_cost)}</b></span>
+          )}
+        </div>
+      </div>
+
       {/* ── Download Error Banner ── */}
       {downloadErr && (
         <div style={{
@@ -327,37 +415,38 @@ export default function FinOpsOverview() {
       {/* ══ SECTION 1: KPI CARDS ══ */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: 12 }}>
         <KPICard label="MTD Spend" icon={DollarSign} color="#3b82f6"
-          value={fmtUsd(kpi?.total_spend_mtd)}
-          sub={<span style={{ color: momColor }}>{momArrow} {Math.abs(kpi?.mom_delta_pct ?? 0).toFixed(1)}% vs last month</span>}
-          accent={(kpi?.mom_delta_pct ?? 0) > 20 ? 'var(--c-7f1d1d)' : undefined}
+          value={fmtUsd(cardMtdSpend)}
+          sub={<span style={{ color: 'var(--c-64748b)' }}>{`Month-to-date · day ${new Date().getDate()} of ${new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()}`}</span>}
         />
         <KPICard label="EOM Forecast" icon={TrendingUp} color="#8b5cf6"
-          value={fmtUsd(kpi?.forecast_eom_usd)}
-          sub={`Prev month: ${fmtUsd(kpi?.total_spend_last_month)}`}
+          value={fmtUsd(cardForecastEom)}
+          sub={<span style={{ color: momColor }}>{momArrow} {Math.abs(_projMoM).toFixed(1)}% vs last month (proj.)</span>}
         />
         <KPICard label="Budget Health" icon={Shield} color="#f59e0b"
-          value={kpi?.has_budgets ? fmtPct(kpi?.budget_utilization_pct) : '—'}
-          sub={kpi?.has_budgets
-            ? `${kpi?.budgets_exceeded ?? 0} exceeded · ${kpi?.budgets_at_risk ?? 0} at risk`
+          value={hasBudgets ? fmtPct(cardBudgetUtil) : '—'}
+          sub={hasBudgets
+            ? `${cardBudgetBreaching} breaching${cardBudgetCount != null ? ` · ${cardBudgetCount} total` : ''}`
             : 'No budgets configured'}
-          accent={(kpi?.budgets_exceeded ?? 0) > 0 ? '#854d0e' : undefined}
+          accent={cardBudgetBreaching > 0 ? '#854d0e' : undefined}
         />
         <KPICard label="Savings Found" icon={Zap} color="#22c55e"
-          value={fmtUsd(kpi?.savings_identified_usd)}
-          sub="RI · rightsize · waste"
+          value={fmtUsd(cardSavingsMonthly)}
+          sub={cardSavingsAnnual != null
+            ? `Monthly run-rate · ${fmtUsd(cardSavingsAnnual)}/yr potential`
+            : 'RI · rightsize · waste (monthly)'}
         />
         <KPICard label="RI Coverage" icon={Shield} color="#06b6d4"
-          value={kpi?.has_reservations ? fmtPct(kpi?.ri_coverage_pct) : '—'}
-          sub={kpi?.has_reservations
-            ? `Utilization: ${fmtPct(kpi?.ri_utilization_pct)}`
+          value={hasReservations ? fmtPct(cardRiCoverage) : '—'}
+          sub={hasReservations
+            ? `Utilization: ${fmtPct(cardRiUtil)}`
             : 'No reservations purchased'}
         />
         <KPICard label="Tag Compliance" icon={Tag} color="#10b981"
-          value={fmtPct(kpi?.tagging_compliance_pct)}
-          sub={(kpi?.total_untagged ?? 0) > 0
-            ? `${kpi.total_untagged} resource${kpi.total_untagged === 1 ? '' : 's'} untagged`
+          value={fmtPct(cardTagPct)}
+          sub={(cardUntagged ?? 0) > 0
+            ? `${cardUntagged} resource${cardUntagged === 1 ? '' : 's'} untagged`
             : 'Required tags coverage'}
-          accent={(kpi?.tagging_compliance_pct ?? 100) < 60 ? '#854d0e' : undefined}
+          accent={(cardTagPct ?? 100) < 60 ? '#854d0e' : undefined}
         />
       </div>
 
@@ -398,10 +487,22 @@ export default function FinOpsOverview() {
           )}
         </div>
 
-        {/* 90-day Forecast */}
+        {/* Forecast (selectable horizon) */}
         <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
-          <SectionHeader title="90-Day Forecast"
-            sub={forecast ? `Projected EOM: ${fmtUsd(forecast.forecast_eom_usd)}` : undefined} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <SectionHeader title={`${horizon}-Day Forecast`}
+              sub={forecast ? `Projected EOM: ${fmtUsd(forecast.eom_forecast_usd)}` : undefined} />
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[30, 60, 90, 180, 365].map(h => (
+                <button key={h} onClick={() => setHorizon(h)} style={{
+                  background: horizon === h ? 'var(--c-1e3a5f)' : 'var(--c-1e293b)',
+                  border: `1px solid ${horizon === h ? '#1d4ed8' : 'var(--c-334155)'}`,
+                  borderRadius: 5, padding: '3px 8px', cursor: 'pointer',
+                  color: horizon === h ? '#93c5fd' : 'var(--c-64748b)', fontSize: 10, fontWeight: 600,
+                }}>{h}d</button>
+              ))}
+            </div>
+          </div>
           {fcastData.length > 0 ? (
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={fcastData} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
