@@ -580,6 +580,107 @@ def compute_chargeback(dash: Optional[Dict[str, Any]], model: Optional[Dict[str,
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Cost Flow (Sankey) — money flowing subscription → resource group → service
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_FLOW_LEVELS = {
+    "subscription":   lambda r, sn: sn.get(r.get("subscription_id", "") or "", (r.get("subscription_id", "") or "")[:8] or "(none)"),
+    "resource_group": lambda r, sn: r.get("resource_group", "") or "(none)",
+    "service":        lambda r, sn: (r.get("resource_type", "") or "other").split("/")[-1],
+    "region":         lambda r, sn: r.get("location", "") or "(none)",
+}
+
+
+def cost_flow(
+    dash: Optional[Dict[str, Any]],
+    *,
+    levels: Optional[List[str]] = None,
+    subscription_id: Optional[str] = None,
+    resource_group: Optional[str] = None,
+    region: Optional[str] = None,
+    top_per_level: int = 10,
+    min_pct: float = 0.5,
+) -> Dict[str, Any]:
+    """Aggregate spend into a multi-level flow (for a Sankey diagram): by default
+    subscription → resource group → service. Small nodes at each level are rolled
+    into an 'Other' bucket (keeps the diagram readable). Uses run-rate cost
+    (current month, falling back to last full month) so it survives Cost Management
+    per-resource throttling. Pure — operates on the dashboard cache dict."""
+    resources = _resources(dash)
+    levels = [l for l in (levels or ["subscription", "resource_group", "service"]) if l in _FLOW_LEVELS]
+    if len(levels) < 2:
+        levels = ["subscription", "resource_group", "service"]
+    sub_names = _sub_name_map(dash)
+
+    def _cost(r: Dict[str, Any]) -> float:
+        cur = _fnum(r.get("cost_current_month"))
+        return cur if cur > 0 else _fnum(r.get("cost_previous_month"))
+
+    sel = []
+    for r in resources:
+        if subscription_id and str(r.get("subscription_id", "") or "").lower() != subscription_id.lower():
+            continue
+        if resource_group and str(r.get("resource_group", "") or "").lower() != resource_group.lower():
+            continue
+        if region and str(r.get("location", "") or "").lower() != region.lower():
+            continue
+        sel.append(r)
+
+    total = sum(_cost(r) for r in sel)
+    if total <= 0:
+        return {"nodes": [], "links": [], "levels": levels, "total_usd": 0.0,
+                "resource_count": len(sel), "generated_at": _now_iso()}
+
+    # Per-level value tables → decide which values survive (top-N + min %), rest = "Other".
+    level_vals: List[Dict[str, float]] = []
+    for lv in levels:
+        fn = _FLOW_LEVELS[lv]
+        agg: Dict[str, float] = defaultdict(float)
+        for r in sel:
+            agg[str(fn(r, sub_names))] += _cost(r)
+        level_vals.append(agg)
+
+    keep: List[set] = []
+    floor = total * (min_pct / 100.0)
+    for agg in level_vals:
+        ranked = sorted(agg.items(), key=lambda x: -x[1])
+        kept = {k for i, (k, v) in enumerate(ranked) if i < top_per_level and v >= floor}
+        keep.append(kept)
+
+    def _label(lv_idx: int, raw: str) -> str:
+        return raw if raw in keep[lv_idx] else "Other"
+
+    # Aggregate links between adjacent levels.
+    link_agg: Dict[tuple, float] = defaultdict(float)
+    node_val: Dict[str, float] = defaultdict(float)
+    for r in sel:
+        c = _cost(r)
+        if c <= 0:
+            continue
+        path = [f"{i}:{_label(i, str(_FLOW_LEVELS[lv](r, sub_names)))}" for i, lv in enumerate(levels)]
+        for n in path:
+            node_val[n] += c
+        for a, b in zip(path, path[1:]):
+            link_agg[(a, b)] += c
+
+    node_names = list(node_val.keys())
+    idx = {n: i for i, n in enumerate(node_names)}
+    nodes = [{"name": n.split(":", 1)[1], "level": int(n.split(":", 1)[0]), "value": round(node_val[n], 2)} for n in node_names]
+    links = [{"source": idx[a], "target": idx[b], "value": round(v, 2)}
+             for (a, b), v in sorted(link_agg.items(), key=lambda x: -x[1]) if v > 0]
+
+    return {
+        "nodes": nodes,
+        "links": links,
+        "levels": levels,
+        "total_usd": round(total, 2),
+        "resource_count": len(sel),
+        "generated_at": _now_iso(),
+    }
+
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  5. Unit economics / business value
 # ══════════════════════════════════════════════════════════════════════════════

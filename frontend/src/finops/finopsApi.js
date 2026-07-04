@@ -136,6 +136,10 @@ export const finopsApi = {
   /** Unit economics — POST scope + value drivers; returns cost-per-unit per driver. */
   computeUnitEconomics: (model, signal) =>
     request('/unit-economics', { method: 'POST', body: JSON.stringify(model || {}) }, signal),
+  /** Recommendation Studio — POST scope filters + goals + constraints + priority + business
+   *  context; returns deterministic grounded actions + an AI-personalized phased roadmap. */
+  getRecommendations: (model, signal) =>
+    request('/recommendations', { method: 'POST', body: JSON.stringify(model || {}) }, signal),
   /** Generic multi-sheet XLSX export for any module. payload = {title, sheets:[{name,columns,rows}]}. */
   exportGenericXlsx: async (payload) => {
     const res = await fetch(BASE + '/export/generic-xlsx', {
@@ -291,6 +295,31 @@ export const finopsApi = {
     if (tagKey) qs.set('tag_key', tagKey)
     return request(`/compare?${qs.toString()}`, {}, signal)
   },
+  /** Multi-level cost flow for a Sankey diagram (subscription → RG → service). */
+  getCostFlow: (opts = {}, signal) => {
+    const qs = new URLSearchParams({ levels: opts.levels || 'subscription,resource_group,service' })
+    if (opts.subscription_id) qs.set('subscription_id', opts.subscription_id)
+    if (opts.resource_group) qs.set('resource_group', opts.resource_group)
+    if (opts.region) qs.set('region', opts.region)
+    if (opts.top_per_level) qs.set('top_per_level', opts.top_per_level)
+    return request(`/cost-flow?${qs.toString()}`, {}, signal)
+  },
+  /** Cost anomaly intelligence — rolling-baseline detection + AI root-cause. */
+  getAnomalies: (opts = {}, signal) => {
+    const qs = new URLSearchParams()
+    if (opts.days) qs.set('days', opts.days)
+    if (opts.z != null) qs.set('z', opts.z)
+    if (opts.include_ai === false) qs.set('include_ai', 'false')
+    return request(`/anomalies?${qs.toString()}`, {}, signal)
+  },
+  /** Cross-domain Cost Lens — spend tied to resiliency / security / governance signals. */
+  getCostLens: (lens = 'resiliency', signal) => request(`/cost-lens?lens=${encodeURIComponent(lens)}`, {}, signal),
+  /** Reservation / Savings-Plan what-if simulator. */
+  simulateCommitment: (model, signal) =>
+    request('/commitments/simulate', { method: 'POST', body: JSON.stringify(model || {}) }, signal),
+  /** Budget burndown / scenario for the current month (user-set target + growth). */
+  budgetScenario: (model, signal) =>
+    request('/budget-scenario', { method: 'POST', body: JSON.stringify(model || {}) }, signal),
 }
 
 export const TIME_RANGE_OPTIONS = [

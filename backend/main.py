@@ -5418,6 +5418,147 @@ async def finops_compare(dimension: str = "ResourceGroupName", tag_key: Optional
     return out
 
 
+@app.get("/api/finops/cost-flow", tags=["FinOps"])
+async def finops_cost_flow(levels: str = "subscription,resource_group,service",
+                           subscription_id: Optional[str] = None,
+                           resource_group: Optional[str] = None,
+                           region: Optional[str] = None,
+                           top_per_level: int = 10, min_pct: float = 0.5):
+    """Multi-level cost flow for a Sankey diagram (money flowing subscription →
+    resource group → service by default). Instant + throttle-immune — aggregated
+    from the dashboard resource cache with run-rate cost."""
+    _require_finops()
+    dash = _finops_dash_dict()
+    if dash is None:
+        return {"nodes": [], "links": [], "levels": [], "total_usd": 0.0,
+                "resource_count": 0, "data_source": "cache_unavailable",
+                "generated_at": datetime.now(timezone.utc).isoformat()}
+    lv = [x.strip() for x in (levels or "").split(",") if x.strip()]
+    loop = asyncio.get_event_loop()
+    out = await loop.run_in_executor(_pool, lambda: finops_adv_svc.cost_flow(
+        dash, levels=lv, subscription_id=subscription_id, resource_group=resource_group,
+        region=region, top_per_level=top_per_level, min_pct=min_pct))
+    out["data_source"] = "dashboard_cache"
+    return out
+
+
+@app.get("/api/finops/anomalies", tags=["FinOps"])
+async def finops_anomalies(days: int = 60, window: int = 7, z: float = 2.5,
+                           pct: float = 40.0, include_ai: bool = True):
+    """Cost anomaly intelligence: rolling-baseline z-score + %-jump detection over the
+    daily spend series (aggregate — throttle-immune), with a grounded AI root-cause
+    narrative. Returns the dated series (with baseline), the anomalies, and AI insight."""
+    _require_finops()
+    from services import finops_anomaly_service as _anom
+    dash = _cache.get("data:*") or _cache.get("data")
+    pm = list(getattr(dash, "total_daily_pm", None) or []) if dash else []
+    cm = list(getattr(dash, "total_daily_cm", None) or []) if dash else []
+    if _cost_series_empty(cm, pm):
+        try:
+            _snap = persistence_svc.load_latest_cost_snapshot()
+            if _snap:
+                pm = list(_snap.get("total_daily_pm") or []) or pm
+                cm = list(_snap.get("total_daily_cm") or []) or cm
+        except Exception:
+            pass
+    loop = asyncio.get_event_loop()
+    series = _anom.build_series_from_daily(pm, cm)
+    if days and days > 0:
+        series = series[-days:]
+    result = await loop.run_in_executor(_pool, lambda: _anom.detect_anomalies(series, window=window, z_thresh=z, pct_thresh=pct))
+    result["data_source"] = "dashboard_cache"
+
+    if include_ai and result.get("anomalies"):
+        from services import finops_ai_service as _ai
+        dash_dict = _finops_dash_dict()
+        movers = []
+        try:
+            if dash_dict:
+                movers = (finops_adv_svc.period_compare(dash_dict, dimension="ResourceGroupName", limit=8) or {}).get("rows", [])[:8]
+        except Exception:
+            movers = []
+        data_for_ai = {
+            "anomalies": result["anomalies"][:12],
+            "top_movers_by_resource_group": movers,
+            "recent_series": result["series"][-14:],
+        }
+        try:
+            grounding = _finops_ai_grounding(None)
+            if grounding:
+                data_for_ai["_grounding"] = grounding
+        except Exception:
+            pass
+        try:
+            ai = await asyncio.wait_for(
+                loop.run_in_executor(_ai_pool, lambda: _ai.get_finops_insights(
+                    "anomalies", data_for_ai, None, False,
+                    "Explain each cost anomaly and its most likely root cause; cite the resource groups / services and dollar changes driving the spike or drop.", None)),
+                timeout=60,
+            )
+            result["ai"] = ai
+        except Exception as exc:
+            logger.warning("Anomaly AI root-cause failed/slow: %s", exc)
+            result["ai"] = None
+    return result
+
+
+@app.get("/api/finops/cost-lens", tags=["FinOps"])
+async def finops_cost_lens(lens: str = "resiliency"):
+    """Cross-domain Cost Lens — ties spend to resiliency / security / governance signals
+    from the scan (backup, locks, private endpoints, RBAC, tags, orphan/idle). Answers
+    'how much are we spending on unprotected / exposed / ungoverned resources?'. Instant,
+    run-rate cost from the dashboard cache."""
+    _require_finops()
+    from services import finops_cost_lens_service as _lens
+    dash = _finops_dash_dict()
+    if dash is None:
+        return {"lens": lens, "buckets": [], "total_spend_usd": 0.0, "exposed_spend_usd": 0.0,
+                "resource_count": 0, "data_source": "cache_unavailable",
+                "generated_at": datetime.now(timezone.utc).isoformat()}
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, lambda: _lens.compute_lens(dash, lens))
+
+
+@app.post("/api/finops/commitments/simulate", tags=["FinOps"])
+async def finops_commitment_simulate(model: Dict[str, Any] = Body(default={})):
+    """Reservation / Savings-Plan what-if: simulate covering X% of eligible on-demand
+    compute & database spend for 1 or 3 years and project savings / committed run-rate /
+    break-even. Grounded in the real on-demand eligible spend from the estate."""
+    _require_finops()
+    from services import finops_commitment_planner_service as _plan
+    dash = _finops_dash_dict()
+    if dash is None:
+        return {"eligible_monthly_spend_usd": 0.0, "selected": {}, "savings_curve": [],
+                "data_source": "cache_unavailable", "generated_at": datetime.now(timezone.utc).isoformat()}
+    term = str(model.get("term", "3yr"))
+    cov = float(model.get("coverage_target_pct", 75) or 75)
+    pay = str(model.get("payment", "no_upfront"))
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, lambda: _plan.simulate(dash, term=term, coverage_target_pct=cov, payment=pay))
+
+
+@app.post("/api/finops/budget-scenario", tags=["FinOps"])
+async def finops_budget_scenario(model: Dict[str, Any] = Body(default={})):
+    """Budget burndown / scenario for the current month: linear budget line vs the
+    real cumulative actual spend vs a projected end-of-month run-rate (optionally
+    grown). Works without a configured Azure budget — the user sets the target."""
+    _require_finops()
+    from services import finops_budget_scenario_service as _bs
+    dash = _cache.get("data:*") or _cache.get("data")
+    cm = list(getattr(dash, "total_daily_cm", None) or []) if dash else []
+    if not cm:
+        try:
+            _snap = persistence_svc.load_latest_cost_snapshot()
+            if _snap:
+                cm = list(_snap.get("total_daily_cm") or [])
+        except Exception:
+            pass
+    budget = float(model.get("monthly_budget", 0) or 0)
+    growth = float(model.get("growth_pct", 0) or 0)
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, lambda: _bs.build_burndown(cm, budget, growth))
+
+
 @app.post("/api/finops/chargeback/compute", tags=["FinOps"])
 async def finops_chargeback_compute(model: Dict[str, Any] = Body(...)):
     """Real chargeback engine — allocate 100% of period spend to user-defined cost
@@ -5454,6 +5595,79 @@ async def finops_unit_economics(model: Dict[str, Any] = Body(...)):
     out = await loop.run_in_executor(_pool, lambda: finops_adv_svc.compute_unit_economics(dash, model))
     out["data_source"] = "dashboard_cache"
     return out
+
+
+# ── Recommendation Studio — scope-driven, grounded, personalized action plan ──
+
+class FinOpsRecoRequest(BaseModel):
+    filters: Optional[Dict[str, Any]] = None        # scope: subscription / RG / region / type / tags
+    goals: List[str] = []                            # reduce_spend | waste_cleanup | rightsizing | commitments | tag_compliance | sustainability
+    constraints: Optional[Dict[str, Any]] = None     # exclude_environments[], allowed_regions[], min_impact_usd
+    priority: str = "balanced"                       # cost | effort | risk | balanced
+    context: Optional[Dict[str, Any]] = None         # business context (industry / org size / notes)
+    include_ai: bool = True
+    force_refresh: bool = False
+    limit: int = 100
+
+
+@app.post("/api/finops/recommendations", tags=["FinOps"])
+async def finops_recommendations(req: FinOpsRecoRequest):
+    """Recommendation Studio: the user sets a CONTEXT (subscription + resource group +
+    optional tags/region/type), GOALS, CONSTRAINTS and a PRIORITY lens; this returns a
+    prioritized set of DETERMINISTIC, grounded actions (from real per-resource scan
+    signals — each with $ impact, effort, risk, confidence, portal link and ready-to-run
+    CLI) PLUS an AI-generated personalized phased roadmap that cites those real
+    resources. Instant + throttling-immune (dashboard resource cache)."""
+    _require_finops()
+    from services import finops_recommendation_service as _reco
+    from services import finops_ai_service as _ai
+    dash = _finops_dash_dict()
+    loop = asyncio.get_event_loop()
+    recos = await loop.run_in_executor(_pool, lambda: _reco.build_recommendations(
+        dash, req.filters, req.goals, req.constraints, req.priority, req.limit))
+
+    result: Dict[str, Any] = {"recommendations": recos, "ai": None}
+
+    if req.include_ai:
+        data_for_ai = {
+            "top_actions": recos.get("actions", [])[:20],
+            "category_summary": recos.get("category_summary", {}),
+            "projected_monthly_savings_usd": recos.get("projected_monthly_savings_usd"),
+            "projected_annual_savings_usd": recos.get("projected_annual_savings_usd"),
+            "context": recos.get("context", {}),
+        }
+        # Scope-driven grounding: real resource-level facts limited to the selected scope.
+        try:
+            grounding = _finops_ai_grounding(req.filters)
+            if grounding:
+                data_for_ai["_grounding"] = grounding
+        except Exception as _ge:
+            logger.debug("Recommendation grounding skipped: %s", _ge)
+        # Personalization: fold goals / priority / constraints into the AI context.
+        ctx: Dict[str, Any] = dict(req.context or {})
+        _goals = recos.get("context", {}).get("goals") or []
+        if _goals:
+            ctx["finops_goals"] = ", ".join(_goals)
+        ctx["priority_lens"] = req.priority
+        if req.constraints:
+            ctx["constraints"] = json.dumps(req.constraints, default=str)[:240]
+        scope_text = "Build a personalized, prioritized cost-optimization action plan for the selected scope; group actions into quick wins and a phased roadmap, and cite the specific real resources and dollar impacts from the grounding."
+        try:
+            ai = await asyncio.wait_for(
+                loop.run_in_executor(
+                    _ai_pool,
+                    lambda: _ai.get_finops_insights(
+                        "recommendation-studio", data_for_ai, req.filters,
+                        req.force_refresh, scope_text, ctx),
+                ),
+                timeout=60,
+            )
+            result["ai"] = ai
+        except Exception as exc:
+            logger.warning("Recommendation AI plan failed/slow: %s", exc)
+            result["ai"] = {"summary": f"AI plan unavailable: {exc}", "recommendations": [],
+                            "key_findings": [], "risk_flags": [], "provider": "none", "cached": False}
+    return result
 
 
 # ── Resource Optimization (oversized + underutilized) ────────────────────────
