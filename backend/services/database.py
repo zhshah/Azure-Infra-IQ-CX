@@ -38,7 +38,9 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-_DB_PROVIDER: str = os.environ.get("DATABASE_PROVIDER", "sqlite").lower().strip()
+# Explicitly-requested provider (may be empty — resolved below once we know whether an
+# Azure SQL connection string is configured).
+_DB_PROVIDER_RAW: str = os.environ.get("DATABASE_PROVIDER", "").lower().strip()
 
 # SQLite path (used when provider=sqlite)
 _DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent.parent / "data"))
@@ -75,6 +77,18 @@ def _resolve_sql_conn_str() -> str:
 
 
 _AZURE_SQL_CONN_STR: str = _resolve_sql_conn_str()
+
+# Resolve the EFFECTIVE provider. NEVER silently fall back to SQLite when an Azure SQL
+# connection string is configured: a deployment that forgets to set DATABASE_PROVIDER
+# must still use Azure SQL — otherwise every table gets created in an ephemeral local
+# SQLite file and is "missing" from Azure SQL. SQLite is used only when it is explicitly
+# selected AND there is no Azure SQL connection string present.
+if _DB_PROVIDER_RAW:
+    _DB_PROVIDER: str = _DB_PROVIDER_RAW
+elif _AZURE_SQL_CONN_STR and "Server=" in _AZURE_SQL_CONN_STR:
+    _DB_PROVIDER = "azuresql"
+else:
+    _DB_PROVIDER = "sqlite"
 
 # Module-level flag for quick checks
 _pyodbc_available: bool = False

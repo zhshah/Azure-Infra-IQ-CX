@@ -39,29 +39,64 @@ export default function FinOpsExportMenu({ view = 'finops', onCsv, onXlsx, focus
   const handlePdf = async () => {
     const mod = await import('@react-pdf/renderer')
     const { pdf, Document, Page, Text, View, StyleSheet } = mod
+    // Shared brand mark (dynamic import keeps the FinOps bundle code-split).
+    let BrandMark = null
+    try { BrandMark = (await import('../utils/pdfBrand')).BrandMark } catch { /* optional */ }
     const h = React.createElement
+    // Dark, branded palette — matches the BCDR / BIA consultant reports.
+    const C = {
+      bg: '#0f172a', card: '#1e293b', slate: '#334155', accent: '#3b82f6', blue: '#60a5fa',
+      blueDk: '#93c5fd', ink: '#f8fafc', body: '#cbd5e1', muted: '#94a3b8', faint: '#64748b',
+      green: '#4ade80', border: '#22304a', headerAlt: '#16223b',
+    }
     const S = StyleSheet.create({
-      page:    { padding: 32, fontSize: 10, color: '#0f172a', fontFamily: 'Helvetica' },
-      h1:      { fontSize: 18, fontWeight: 700, marginBottom: 2, color: '#1e3a5f' },
-      sub:     { fontSize: 9, color: '#64748b', marginBottom: 14 },
-      h2:      { fontSize: 12, fontWeight: 700, marginTop: 14, marginBottom: 6, color: '#1e3a5f' },
-      kpiRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 6 },
-      kpi:     { width: '31%', border: '1pt solid #e2e8f0', borderRadius: 4, padding: 6, marginRight: 6, marginBottom: 6 },
-      kpiLbl:  { fontSize: 7, color: '#64748b', textTransform: 'uppercase' },
-      kpiVal:  { fontSize: 12, fontWeight: 700, color: '#0f172a' },
-      tr:      { flexDirection: 'row', borderBottom: '0.5pt solid #e2e8f0' },
-      th:      { flex: 1, fontSize: 8, fontWeight: 700, color: '#1e3a5f', padding: 3, backgroundColor: '#f1f5f9' },
-      td:      { flex: 1, fontSize: 8, padding: 3, color: '#334155' },
-      ai:      { fontSize: 9, color: '#334155', lineHeight: 1.5, marginTop: 4 },
+      page:    { paddingTop: 30, paddingHorizontal: 30, paddingBottom: 52, fontSize: 10, color: C.body, fontFamily: 'Helvetica', backgroundColor: C.bg },
+      // Cover / header
+      brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
+      brandName: { fontSize: 12, fontWeight: 700, color: C.ink, fontFamily: 'Helvetica-Bold' },
+      brandTag: { fontSize: 8, color: C.muted },
+      h1:      { fontSize: 20, color: C.ink, fontFamily: 'Helvetica-Bold', marginBottom: 2 },
+      sub:     { fontSize: 9, color: C.muted, marginBottom: 8 },
+      rule:    { height: 2, backgroundColor: C.accent, marginBottom: 14, borderRadius: 1 },
+      // Sections
+      h2:      { fontSize: 12, color: C.blueDk, fontFamily: 'Helvetica-Bold', marginTop: 16, marginBottom: 7, paddingBottom: 3, borderBottom: `1pt solid ${C.slate}` },
+      // KPI cards
+      kpiRow:  { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 4 },
+      kpi:     { width: '31.5%', backgroundColor: C.card, borderRadius: 5, borderLeft: `2pt solid ${C.accent}`, padding: 8, marginRight: '1.8%', marginBottom: 7 },
+      kpiLbl:  { fontSize: 7, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 3 },
+      kpiVal:  { fontSize: 13, color: C.ink, fontFamily: 'Helvetica-Bold' },
+      // AI narrative
+      aiCard:  { backgroundColor: C.card, borderRadius: 5, padding: 10, borderLeft: `2pt solid ${C.blue}` },
+      ai:      { fontSize: 9.5, color: C.body, lineHeight: 1.55 },
+      // Tables
+      thRow:   { flexDirection: 'row', backgroundColor: C.slate, borderTopLeftRadius: 4, borderTopRightRadius: 4 },
+      th:      { flex: 1, fontSize: 8, color: '#ffffff', fontFamily: 'Helvetica-Bold', padding: 5 },
+      tr:      { flexDirection: 'row', borderBottom: `0.5pt solid ${C.border}` },
+      trAlt:   { flexDirection: 'row', borderBottom: `0.5pt solid ${C.border}`, backgroundColor: C.headerAlt },
+      td:      { flex: 1, fontSize: 8, padding: 5, color: C.body },
+      more:    { fontSize: 8, color: C.faint, fontStyle: 'italic', marginTop: 4 },
+      // Footer
+      footer:  { position: 'absolute', bottom: 22, left: 30, right: 30, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTop: `0.5pt solid ${C.slate}`, paddingTop: 6 },
+      footTxt: { fontSize: 7.5, color: C.faint },
+      footMid: { fontSize: 7.5, color: C.muted, fontFamily: 'Helvetica-Bold' },
     })
     const r = report || {}
+    const year = new Date().getFullYear()
     const children = [
-      h(Text, { style: S.h1 }, r.title || 'Azure FinOps Report'),
-      h(Text, { style: S.sub }, `Generated ${new Date().toLocaleString()} · Azure Cost Management`),
+      h(View, { style: S.brandRow, key: 'brand' }, [
+        BrandMark ? h(BrandMark, { size: 34, key: 'm' }) : null,
+        h(View, { key: 't' }, [
+          h(Text, { style: S.brandName, key: 'n' }, 'Azure Infra IQ'),
+          h(Text, { style: S.brandTag, key: 'g' }, 'FinOps · Cost Intelligence'),
+        ]),
+      ]),
+      h(Text, { style: S.h1, key: 'title' }, r.title || 'Azure FinOps Report'),
+      h(Text, { style: S.sub, key: 'gen' }, `Generated ${new Date().toLocaleString()} · grounded on Azure Cost Management data`),
+      h(View, { style: S.rule, key: 'rule' }),
     ]
     if (r.kpis?.length) {
-      children.push(h(Text, { style: S.h2 }, 'Key Metrics'))
-      children.push(h(View, { style: S.kpiRow },
+      children.push(h(Text, { style: S.h2, key: 'kh' }, 'Key Metrics'))
+      children.push(h(View, { style: S.kpiRow, key: 'kr' },
         r.kpis.map((k, i) => h(View, { style: S.kpi, key: i }, [
           h(Text, { style: S.kpiLbl, key: 'l' }, String(k.label || '')),
           h(Text, { style: S.kpiVal, key: 'v' }, String(k.value ?? '')),
@@ -69,17 +104,28 @@ export default function FinOpsExportMenu({ view = 'finops', onCsv, onXlsx, focus
       ))
     }
     if (r.aiSummary) {
-      children.push(h(Text, { style: S.h2 }, 'AI Analysis'))
-      children.push(h(Text, { style: S.ai }, String(r.aiSummary)))
+      children.push(h(Text, { style: S.h2, key: 'aih' }, 'AI Cost Analysis'))
+      children.push(h(View, { style: S.aiCard, key: 'aic' }, h(Text, { style: S.ai }, String(r.aiSummary))))
     }
-    for (const t of (r.tables || [])) {
-      children.push(h(Text, { style: S.h2 }, t.title || 'Detail'))
-      children.push(h(View, { style: S.tr }, (t.columns || []).map((c, i) => h(Text, { style: S.th, key: i }, String(c)))))
-      for (let ri = 0; ri < (t.rows || []).length && ri < 60; ri++) {
-        const row = t.rows[ri]
-        children.push(h(View, { style: S.tr, key: ri }, row.map((c, ci) => h(Text, { style: S.td, key: ci }, String(c ?? '')))))
+    for (const [ti, t] of (r.tables || []).entries()) {
+      children.push(h(Text, { style: S.h2, key: `t${ti}h` }, t.title || 'Detail'))
+      children.push(h(View, { style: S.thRow, key: `t${ti}head` }, (t.columns || []).map((c, i) => h(Text, { style: S.th, key: i }, String(c)))))
+      const allRows = t.rows || []
+      const shown = Math.min(allRows.length, 60)
+      for (let ri = 0; ri < shown; ri++) {
+        const row = allRows[ri]
+        children.push(h(View, { style: ri % 2 ? S.trAlt : S.tr, key: `t${ti}r${ri}` }, row.map((c, ci) => h(Text, { style: S.td, key: ci }, String(c ?? '')))))
+      }
+      if (allRows.length > shown) {
+        children.push(h(Text, { style: S.more, key: `t${ti}more` }, `… +${allRows.length - shown} more rows (download the Excel export for the full detail)`))
       }
     }
+    // Fixed footer with page numbers (repeats on every page).
+    children.push(h(View, { style: S.footer, fixed: true, key: 'footer' }, [
+      h(Text, { style: S.footTxt, key: 'l' }, `© ${year} Azure Infra IQ`),
+      h(Text, { style: S.footMid, key: 'm' }, 'Confidential'),
+      h(Text, { style: S.footTxt, key: 'r', render: ({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}` }),
+    ]))
     const doc = h(Document, {}, h(Page, { size: 'A4', style: S.page }, children))
     const blob = await pdf(doc).toBlob()
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob)

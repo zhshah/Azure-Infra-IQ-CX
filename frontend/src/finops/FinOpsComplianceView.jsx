@@ -10,6 +10,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { ShieldCheck, CheckCircle2, CircleDashed, Circle, RefreshCw, Database, Award } from 'lucide-react'
 import { finopsApi, fmtUsd } from './finopsApi'
 import FinOpsAIPanel from './FinOpsAIPanel'
+import FinOpsExportMenu from './FinOpsExportMenu'
 
 // status: 'full' | 'partial' | 'none'
 const DOMAINS = [
@@ -58,6 +59,13 @@ const STATUS_META = {
   none:    { icon: Circle,       color: 'var(--c-475569)', label: 'Planned' },
 }
 
+const STATUS_FILTERS = [
+  { key: 'all',     label: 'All' },
+  { key: 'full',    label: 'Implemented' },
+  { key: 'partial', label: 'Partial' },
+  { key: 'none',    label: 'Planned' },
+]
+
 function maturityFromScore(pct) {
   if (pct >= 85) return { label: 'Run', color: '#22c55e' }
   if (pct >= 55) return { label: 'Walk', color: '#3b82f6' }
@@ -67,6 +75,8 @@ function maturityFromScore(pct) {
 export default function FinOpsComplianceView() {
   const [focus, setFocus]     = useState(null)
   const [loading, setLoading] = useState(true)
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [aiInsights, setAiInsights]     = useState(null)
   const abortRef = useRef(null)
 
   const load = useCallback(async () => {
@@ -96,6 +106,56 @@ export default function FinOpsComplianceView() {
 
   const maturity = maturityFromScore(score)
 
+  const filteredDomains = useMemo(() => {
+    if (statusFilter === 'all') return DOMAINS
+    return DOMAINS
+      .map(d => ({ ...d, capabilities: d.capabilities.filter(c => c.status === statusFilter) }))
+      .filter(d => d.capabilities.length > 0)
+  }, [statusFilter])
+
+  const shownCount = useMemo(
+    () => filteredDomains.reduce((n, d) => n + d.capabilities.length, 0),
+    [filteredDomains],
+  )
+
+  // Client-side CSV of the (filtered) capability matrix.
+  const downloadCsv = async () => {
+    const esc = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`
+    const rows = [['Domain', 'Capability', 'Status', 'Notes']]
+    for (const d of filteredDomains) for (const c of d.capabilities) rows.push([d.domain, c.name, STATUS_META[c.status].label, c.note])
+    const csv = rows.map(r => r.map(esc).join(',')).join('\r\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
+    a.download = `finops-compliance-${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove() }, 1000)
+  }
+
+  // Branded PDF report payload (scorecard + capability matrix + AI recommendations).
+  const report = useMemo(() => {
+    const aiRecs = aiInsights?.recommendations || []
+    const matrixRows = []
+    for (const d of filteredDomains) for (const c of d.capabilities) matrixRows.push([d.domain, c.name, STATUS_META[c.status].label, c.note])
+    const tables = [{ title: 'FinOps Capability Matrix', columns: ['Domain', 'Capability', 'Status', 'Notes'], rows: matrixRows }]
+    if (aiRecs.length) tables.push({
+      title: 'AI Maturity Recommendations',
+      columns: ['Recommendation', 'Impact', 'Est. $/mo', 'Detail'],
+      rows: aiRecs.map(r => [r.title, r.impact, r.est_monthly_savings ? fmtUsd(r.est_monthly_savings) : '—', r.detail]),
+    })
+    return {
+      title: 'FinOps Framework Compliance',
+      kpis: [
+        { label: 'FinOps Maturity', value: `${score}/100 · ${maturity.label}` },
+        { label: 'Capabilities', value: `${counts.full}/${counts.total} implemented` },
+        { label: 'Partial', value: String(counts.partial) },
+        { label: 'FOCUS 1.2', value: focus ? 'Compliant' : '—' },
+        { label: 'FOCUS Billed Cost', value: focus ? fmtUsd(focus.total_billed_cost) : '—' },
+        { label: 'FOCUS Records', value: focus ? String(focus.record_count || 0) : '0' },
+      ],
+      aiSummary: aiInsights?.summary || '',
+      tables,
+    }
+  }, [filteredDomains, score, maturity.label, counts, focus, aiInsights])
+
   const aiData = useMemo(() => ({
     finops_maturity_pct: score,
     maturity_stage: maturity.label,
@@ -124,12 +184,15 @@ export default function FinOpsComplianceView() {
             Mapped to the FinOps Foundation Framework · FOCUS 1.2 · Microsoft FinOps toolkit aligned
           </p>
         </div>
-        <button onClick={load} disabled={loading} style={{
-          background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6, padding: '6px 12px',
-          cursor: 'pointer', color: 'var(--c-94a3b8)', fontSize: 11, display: 'flex', alignItems: 'center', gap: 5,
-        }}>
-          <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <FinOpsExportMenu view="compliance" onCsv={downloadCsv} report={report} focusDays={30} />
+          <button onClick={load} disabled={loading} style={{
+            background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6, padding: '6px 12px',
+            cursor: 'pointer', color: 'var(--c-94a3b8)', fontSize: 11, display: 'flex', alignItems: 'center', gap: 5,
+          }}>
+            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh
+          </button>
+        </div>
       </div>
 
       {/* Scorecard */}
@@ -141,11 +204,29 @@ export default function FinOpsComplianceView() {
       </div>
 
       {/* AI maturity recommendations */}
-      <FinOpsAIPanel view="compliance" data={aiData} title="AI FinOps Maturity Recommendations" />
+      <FinOpsAIPanel view="compliance" data={aiData} title="AI FinOps Maturity Recommendations" onInsights={setAiInsights} />
+
+      {/* Capability status filter */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ color: 'var(--c-64748b)', fontSize: 11, fontWeight: 600 }}>Capability status</span>
+        <div style={{ display: 'inline-flex', background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 8, padding: 2 }}>
+          {STATUS_FILTERS.map(sf => {
+            const active = statusFilter === sf.key
+            return (
+              <button key={sf.key} onClick={() => setStatusFilter(sf.key)} style={{
+                background: active ? 'var(--c-1e293b)' : 'transparent', border: 'none', borderRadius: 6,
+                padding: '5px 12px', cursor: 'pointer', fontSize: 11, fontWeight: 600,
+                color: active ? 'var(--c-e2e8f0)' : 'var(--c-64748b)',
+              }}>{sf.label}</button>
+            )
+          })}
+        </div>
+        <span style={{ color: 'var(--c-475569)', fontSize: 11 }}>{shownCount} shown</span>
+      </div>
 
       {/* Domains */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 14 }}>
-        {DOMAINS.map(d => (
+        {filteredDomains.map(d => (
           <div key={d.domain} style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
             <div style={{ color: 'var(--c-e2e8f0)', fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{d.domain}</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>

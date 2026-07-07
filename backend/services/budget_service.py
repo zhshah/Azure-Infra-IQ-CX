@@ -441,6 +441,55 @@ def get_budget_alerts(budget_id: Optional[str] = None) -> List[FinOpsBudgetAlert
     ]
 
 
+def get_azure_cost_alerts(subscription_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """Read the customer's EXISTING Azure Cost Management alerts (the portal's
+    "Cost alerts" blade — budget-triggered + anomaly + scheduled). Read-only; surfaces
+    what the customer already configured so their investment is visible in the tool."""
+    try:
+        from azure.mgmt.costmanagement import CostManagementClient
+    except ImportError:
+        return []
+    if not subscription_ids:
+        subscription_ids = get_subscription_ids()
+    try:
+        credential = get_credential()
+    except Exception:
+        return []
+    client = CostManagementClient(credential)
+    out: List[Dict[str, Any]] = []
+
+    def _g(obj, attr, default=None):
+        return getattr(obj, attr, default) if obj is not None else default
+
+    for sub_id in subscription_ids:
+        scope = f"/subscriptions/{sub_id}"
+        try:
+            result = client.alerts.list(scope)
+            alerts = getattr(result, "alerts", None) or getattr(result, "value", None) or []
+            for a in alerts:
+                d = getattr(a, "details", None)
+                defn = getattr(a, "definition", None)
+                out.append({
+                    "id": getattr(a, "name", "") or getattr(a, "id", ""),
+                    "subscription_id": sub_id,
+                    "category": str(_g(d, "alert_category", "") or ""),
+                    "type": str(_g(defn, "type", "") or ""),
+                    "status": str(getattr(a, "status", "") or ""),
+                    "description": str(_g(d, "description", "") or getattr(a, "description", "") or ""),
+                    "threshold": float(_g(d, "threshold", 0) or 0),
+                    "current_spend": float(_g(d, "current_spend", 0) or 0),
+                    "amount": float(_g(d, "amount", 0) or 0),
+                    "unit": str(_g(d, "unit", "") or ""),
+                    "time_grain": str(_g(d, "time_grain_type", "") or ""),
+                    "triggered_by": str(_g(d, "triggered_by", "") or ""),
+                    "cost_entity_id": str(getattr(a, "cost_entity_id", "") or ""),
+                })
+        except Exception as e:
+            logger.debug("get_azure_cost_alerts: could not list alerts for %s: %s", sub_id, e)
+    logger.info("get_azure_cost_alerts: read %d Azure cost alerts", len(out))
+    return out
+
+
 def _recent_alert_exists(budget_id: str, threshold_pct: float) -> bool:
     """True if a matching alert was already logged in the last 24 hours."""
     try:

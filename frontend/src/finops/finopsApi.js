@@ -96,6 +96,18 @@ export const getResourceOptimization = (signal) =>
 
 export const finopsApi = {
   getSummary:    (signal)       => request('/summary', {}, signal),
+  /**
+   * Metrics Service — THE single source of truth for headline numbers
+   * (GET /api/metrics/summary). Every KPI card / dashboard tile / Cost Studio
+   * strip / AI narrative should read from here so a metric is never computed two
+   * different ways. Returns { spend, forecast, resources, reservations, budgets,
+   * savings, anomalies, trend, dataThroughDate, currency }.
+   */
+  getMetrics: (scope, signal) => {
+    const qs = scope ? `?scope=${encodeURIComponent(scope)}` : ''
+    return fetch(`/api/metrics/summary${qs}`, { signal })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`metrics ${r.status}`)))
+  },
   getDashboardData: (params = {}, signal) => {
     const qs = new URLSearchParams()
     if (params.subscription_id) qs.set('subscription_id', params.subscription_id)
@@ -116,6 +128,31 @@ export const finopsApi = {
     let url = `/chargeback?time_range=${tr}`
     if (tr === 'custom' && dateFrom) url += `&date_from=${dateFrom}&date_to=${dateTo || dateFrom}`
     return request(url, {}, signal)
+  },
+  /** Real chargeback engine — POST the allocation model (cost centers + rules +
+   *  shared-allocation method + markup); returns the computed chargeback statement. */
+  computeChargeback: (model, signal) =>
+    request('/chargeback/compute', { method: 'POST', body: JSON.stringify(model || {}) }, signal),
+  /** Unit economics — POST scope + value drivers; returns cost-per-unit per driver. */
+  computeUnitEconomics: (model, signal) =>
+    request('/unit-economics', { method: 'POST', body: JSON.stringify(model || {}) }, signal),
+  /** Recommendation Studio — POST scope filters + goals + constraints + priority + business
+   *  context; returns deterministic grounded actions + an AI-personalized phased roadmap. */
+  getRecommendations: (model, signal) =>
+    request('/recommendations', { method: 'POST', body: JSON.stringify(model || {}) }, signal),
+  /** Generic multi-sheet XLSX export for any module. payload = {title, sheets:[{name,columns,rows}]}. */
+  exportGenericXlsx: async (payload) => {
+    const res = await fetch(BASE + '/export/generic-xlsx', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload || {}),
+    })
+    if (!res.ok) throw new Error(`XLSX export failed (${res.status})`)
+    const blob = await res.blob()
+    const cd = res.headers.get('Content-Disposition') || ''
+    const m = cd.match(/filename="?([^"]+)"?/)
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
+    a.download = m ? m[1] : 'finops-export.xlsx'
+    document.body.appendChild(a); a.click()
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove() }, 1000)
   },
   getForecast:   (h, signal)      => request(`/forecast?horizon=${h}`, {}, signal),
   getCommitments: (signal)        => request('/commitments', {}, signal),
@@ -174,10 +211,10 @@ export const finopsApi = {
 
   // AI insights for a FinOps view (cached server-side per data fingerprint).
   // `scope` is an optional free-text focus area that narrows the analysis.
-  aiInsights: (view, data, filters, forceRefresh, signal, scope) =>
+  aiInsights: (view, data, filters, forceRefresh, signal, scope, context) =>
     request('/ai/insights', {
       method: 'POST',
-      body: JSON.stringify({ view, data, filters: filters || null, force_refresh: !!forceRefresh, scope: scope || null }),
+      body: JSON.stringify({ view, data, filters: filters || null, force_refresh: !!forceRefresh, scope: scope || null, context: context || null }),
     }, signal),
 
   // XLSX exports (blob downloads — no AbortController needed, short-lived)
@@ -233,6 +270,63 @@ export const finopsApi = {
   },
 
   clearCache: () => fetch(BASE + '/cache/clear', { method: 'POST' }).then(r => r.json()),
+
+  // ── Advanced: cost drill-down · dependencies/workloads · period comparison ──
+  /** Resources behind a cost slice (drill-down leaf). params: subscription_id,
+   *  resource_group, resource_type, region, tag_key, tag_value, environment,
+   *  search, min_cost, max_cost, limit. */
+  getCostResources: (params = {}, signal) => {
+    const qs = new URLSearchParams()
+    Object.entries(params).forEach(([k, v]) => { if (v != null && v !== '') qs.set(k, v) })
+    return request(`/cost-resources?${qs.toString()}`, {}, signal)
+  },
+  /** Workload / dependency cost roll-up. groupBy = dependency | resource_group | tag.
+   *  opts = { subscription_id, region } scope filters. */
+  getWorkloads: (groupBy = 'dependency', tagKey = null, opts = {}, signal) => {
+    const qs = new URLSearchParams({ group_by: groupBy })
+    if (tagKey) qs.set('tag_key', tagKey)
+    if (opts && opts.subscription_id) qs.set('subscription_id', opts.subscription_id)
+    if (opts && opts.region) qs.set('region', opts.region)
+    return request(`/workloads?${qs.toString()}`, {}, signal)
+  },
+  /** Period-over-period comparison (this month MTD vs last month) by dimension. */
+  getCompare: (dimension = 'ResourceGroupName', tagKey = null, signal) => {
+    const qs = new URLSearchParams({ dimension })
+    if (tagKey) qs.set('tag_key', tagKey)
+    return request(`/compare?${qs.toString()}`, {}, signal)
+  },
+  /** Multi-level cost flow for a Sankey diagram (subscription → RG → service). */
+  getCostFlow: (opts = {}, signal) => {
+    const qs = new URLSearchParams({ levels: opts.levels || 'subscription,resource_group,service' })
+    if (opts.subscription_id) qs.set('subscription_id', opts.subscription_id)
+    if (opts.resource_group) qs.set('resource_group', opts.resource_group)
+    if (opts.region) qs.set('region', opts.region)
+    if (opts.top_per_level) qs.set('top_per_level', opts.top_per_level)
+    return request(`/cost-flow?${qs.toString()}`, {}, signal)
+  },
+  /** Cost anomaly intelligence — rolling-baseline detection + AI root-cause. */
+  getAnomalies: (opts = {}, signal) => {
+    const qs = new URLSearchParams()
+    if (opts.days) qs.set('days', opts.days)
+    if (opts.z != null) qs.set('z', opts.z)
+    if (opts.include_ai === false) qs.set('include_ai', 'false')
+    return request(`/anomalies?${qs.toString()}`, {}, signal)
+  },
+  /** Cross-domain Cost Lens — spend tied to resiliency / security / governance signals. */
+  getCostLens: (lens = 'resiliency', signal) => request(`/cost-lens?lens=${encodeURIComponent(lens)}`, {}, signal),
+  simulateCommitment: (model, signal) =>
+    request('/commitments/simulate', { method: 'POST', body: JSON.stringify(model || {}) }, signal),
+  /** Budget burndown / scenario for the current month (user-set target + growth). */
+  budgetScenario: (model, signal) =>
+    request('/budget-scenario', { method: 'POST', body: JSON.stringify(model || {}) }, signal),
+  /** Warehouse-backed Analyze (Azure Cost Management parity) — scope + custom period +
+   *  group-by + accumulated/daily + actual/amortized, served from Azure SQL (no throttling). */
+  analyze: (model, signal) =>
+    request('/analyze', { method: 'POST', body: JSON.stringify(model || {}) }, signal),
+  getAnalyzeMeta: (signal) => request('/analyze/meta', {}, signal),
+  getCostInsights: (signal) => request('/cost-insights', {}, signal),
+  /** Existing Azure Cost Management alerts (portal "Cost alerts") across in-scope subs. */
+  getAzureCostAlerts: (signal) => request('/azure-cost-alerts', {}, signal),
 }
 
 export const TIME_RANGE_OPTIONS = [

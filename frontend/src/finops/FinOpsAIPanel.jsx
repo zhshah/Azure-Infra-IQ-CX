@@ -10,7 +10,7 @@
  * Rules of Hooks: every hook is declared unconditionally before any return.
  */
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { Brain, RefreshCw, AlertTriangle, Lightbulb, ChevronDown, ChevronRight, Sparkles, Crosshair, X, Check } from 'lucide-react'
+import { Brain, RefreshCw, AlertTriangle, Lightbulb, ChevronDown, ChevronRight, Sparkles, Crosshair, X, Check, SlidersHorizontal } from 'lucide-react'
 import { finopsApi, fmtUsd } from './finopsApi'
 
 const IMPACT_COLOR = { high: '#ef4444', medium: '#f59e0b', low: '#22c55e' }
@@ -24,7 +24,15 @@ const SCOPE_PRESETS = [
   'Tagging & cost allocation', 'Forecast & budget risk',
 ]
 
-export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI Cost Analysis', defaultOpen = true }) {
+// Structured business-context inputs — dropdowns that ground the AI's recommendations.
+const CONTEXT_FIELDS = [
+  { key: 'industry',    label: 'Industry',          options: ['Financial Services', 'Healthcare', 'Retail / e-Commerce', 'Manufacturing', 'Public Sector', 'Technology / SaaS', 'Education', 'Energy / Utilities', 'Media & Entertainment', 'Telecom', 'Other'] },
+  { key: 'org_size',    label: 'Organization size', options: ['Startup (<50)', 'SMB (50–500)', 'Mid-market (500–5k)', 'Enterprise (5k–50k)', 'Large enterprise (50k+)'] },
+  { key: 'environment', label: 'Environment mix',   options: ['Mostly Production', 'Mostly Dev/Test', 'Balanced Prod & Non-prod', 'Regulated / Compliance-heavy'] },
+  { key: 'priority',    label: 'Primary goal',      options: ['Reduce overall cost', 'Improve cost allocation / showback', 'Increase forecast accuracy', 'Optimize commitments (RI / SP)', 'Eliminate idle & waste', 'Strengthen governance & tagging', 'Cloud sustainability'] },
+]
+
+export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI Cost Analysis', defaultOpen = true, onInsights = null }) {
   const [insights, setInsights] = useState(null)
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState(null)
@@ -34,6 +42,11 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
   const [scopeOpen, setScopeOpen] = useState(false)
   const [scopeDraft, setScopeDraft] = useState('')
   const scopeRef = useRef('')
+  // Advanced “Business context” feature — ground the AI with industry / size / goals / notes.
+  const [context, setContext]           = useState({})
+  const [contextOpen, setContextOpen]   = useState(false)
+  const [contextDraft, setContextDraft] = useState({})
+  const contextRef = useRef({})
   const abortRef = useRef(null)
 
   // Stable fingerprint of the data so the effect only re-runs on real changes.
@@ -41,15 +54,16 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
     try { return JSON.stringify(data || {}).slice(0, 4000) } catch { return '' }
   }, [data])
 
-  const load = useCallback(async (force = false, scopeArg) => {
+  const load = useCallback(async (force = false, scopeArg, contextArg) => {
     if (abortRef.current) abortRef.current.abort()
     const ctrl = new AbortController()
     abortRef.current = ctrl
     const scopeVal = scopeArg !== undefined ? scopeArg : scopeRef.current
+    const ctxVal = contextArg !== undefined ? contextArg : contextRef.current
     setLoading(true); setError(null)
     try {
-      const res = await finopsApi.aiInsights(view, data || {}, filters, force, ctrl.signal, scopeVal || null)
-      if (!ctrl.signal.aborted) setInsights(res)
+      const res = await finopsApi.aiInsights(view, data || {}, filters, force, ctrl.signal, scopeVal || null, ctxVal && Object.keys(ctxVal).length ? ctxVal : null)
+      if (!ctrl.signal.aborted) { setInsights(res); if (onInsights) onInsights(res) }
     } catch (e) {
       if (e.name !== 'AbortError') setError(e.message)
     } finally {
@@ -73,6 +87,24 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
     load(true, '')
   }, [load])
 
+  // Apply / clear structured business context (forces a fresh, grounded generation).
+  const applyContext = useCallback(() => {
+    const clean = Object.fromEntries(
+      Object.entries(contextDraft || {}).filter(([, v]) => v && String(v).trim() && v !== '—')
+    )
+    contextRef.current = clean
+    setContext(clean)
+    setContextOpen(false)
+    load(true, undefined, clean)
+  }, [contextDraft, load])
+  const clearContext = useCallback(() => {
+    contextRef.current = {}
+    setContext({})
+    setContextDraft({})
+    setContextOpen(false)
+    load(true, undefined, {})
+  }, [load])
+
   // Auto-load when data meaningfully changes (and there is something to analyse).
   useEffect(() => {
     if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) return
@@ -85,11 +117,14 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
   const recs = insights?.recommendations || []
   const findings = insights?.key_findings || []
   const risks = insights?.risk_flags || []
+  const activeContextCount = Object.keys(context).length
+  const contextSummary = Object.entries(context)
+    .filter(([k]) => k !== 'notes').map(([, v]) => v).join(' · ') || (context.notes ? 'custom notes' : '')
 
   return (
     <div style={{ background: 'linear-gradient(180deg,var(--c-0c1322),var(--c-0a0f1a))', border: '1px solid var(--c-1e3a5f)', borderRadius: 12, overflow: 'hidden' }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '10px 16px', borderBottom: (open || scopeOpen) ? '1px solid var(--c-15233b)' : 'none' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '10px 16px', borderBottom: (open || scopeOpen || contextOpen) ? '1px solid var(--c-15233b)' : 'none' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           <button onClick={() => setOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-e2e8f0)' }}>
             {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
@@ -108,9 +143,23 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
               <X size={11} style={{ cursor: 'pointer', flexShrink: 0 }} onClick={clearScope} />
             </span>
           )}
+          {activeContextCount > 0 && (
+            <span title={`Business context: ${contextSummary}`} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9.5, color: '#c4b5fd', background: 'var(--c-1e1b4b)', border: '1px solid #6d28d9', borderRadius: 4, padding: '2px 6px', maxWidth: 240 }}>
+              <SlidersHorizontal size={9} style={{ flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{contextSummary}</span>
+              <X size={11} style={{ cursor: 'pointer', flexShrink: 0 }} onClick={clearContext} />
+            </span>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          <button onClick={() => { setScopeDraft(scope); setScopeOpen(o => !o) }} title="Scope this analysis to a specific area" style={{
+          <button onClick={() => { setContextDraft({ ...context }); setContextOpen(o => !o); setScopeOpen(false) }} title="Add business context to ground the recommendations" style={{
+            display: 'flex', alignItems: 'center', gap: 5, background: activeContextCount || contextOpen ? 'var(--c-1e1b4b)' : 'var(--c-0f172a)',
+            border: `1px solid ${activeContextCount || contextOpen ? '#6d28d9' : 'var(--c-1e293b)'}`, borderRadius: 6, padding: '5px 11px',
+            cursor: 'pointer', color: activeContextCount || contextOpen ? '#c4b5fd' : 'var(--c-94a3b8)', fontSize: 11, fontWeight: 600,
+          }}>
+            <SlidersHorizontal size={12} /> Context{activeContextCount ? ` (${activeContextCount})` : ''}
+          </button>
+          <button onClick={() => { setScopeDraft(scope); setScopeOpen(o => !o); setContextOpen(false) }} title="Scope this analysis to a specific area" style={{
             display: 'flex', alignItems: 'center', gap: 5, background: scope || scopeOpen ? 'var(--c-0d2b3f)' : 'var(--c-0f172a)',
             border: `1px solid ${scope || scopeOpen ? '#0e7490' : 'var(--c-1e293b)'}`, borderRadius: 6, padding: '5px 11px',
             cursor: 'pointer', color: scope || scopeOpen ? '#67e8f9' : 'var(--c-94a3b8)', fontSize: 11, fontWeight: 600,
@@ -165,6 +214,48 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
           </div>
           <div style={{ color: 'var(--c-475569)', fontSize: 10, marginTop: 6 }}>
             The summary, findings, recommendations & savings will focus on this area. Clear it to return to the full analysis.
+          </div>
+        </div>
+      )}
+
+      {/* Context popover — advanced: ground the AI with business context */}
+      {contextOpen && (
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--c-15233b)', background: 'var(--c-0a1018)' }}>
+          <div style={{ color: 'var(--c-94a3b8)', fontSize: 11, fontWeight: 700, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <SlidersHorizontal size={12} style={{ color: '#c4b5fd' }} /> Add business context for more grounded recommendations
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10, marginBottom: 10 }}>
+            {CONTEXT_FIELDS.map((f) => (
+              <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>{f.label}</span>
+                <select
+                  value={contextDraft[f.key] || ''}
+                  onChange={(e) => setContextDraft((d) => ({ ...d, [f.key]: e.target.value }))}
+                  style={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 6, padding: '7px 9px', color: 'var(--c-e2e8f0)', fontSize: 12, outline: 'none', cursor: 'pointer' }}
+                >
+                  <option value="">— Not specified —</option>
+                  {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </label>
+            ))}
+          </div>
+          <textarea
+            value={contextDraft.notes || ''}
+            onChange={(e) => setContextDraft((d) => ({ ...d, notes: e.target.value }))}
+            placeholder="Additional business context, e.g. 'Migrating our on-prem datacenter to Azure by Q4; budget freeze on non-production; prioritise reserved-instance coverage for steady-state VMs.'"
+            rows={3}
+            style={{ width: '100%', boxSizing: 'border-box', background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 6, padding: '8px 10px', color: 'var(--c-e2e8f0)', fontSize: 12, outline: 'none', resize: 'vertical', fontFamily: 'inherit' }}
+          />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+            <button onClick={applyContext} disabled={loading} style={{
+              display: 'flex', alignItems: 'center', gap: 5, background: loading ? 'var(--c-1e293b)' : '#6d28d9',
+              border: 'none', borderRadius: 6, padding: '7px 12px', cursor: loading ? 'not-allowed' : 'pointer',
+              color: loading ? 'var(--c-64748b)' : '#fff', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap',
+            }}><Check size={13} /> Apply context &amp; analyze</button>
+            {activeContextCount > 0 && (
+              <button onClick={clearContext} style={{ background: 'none', border: '1px solid var(--c-334155)', borderRadius: 6, padding: '7px 10px', cursor: 'pointer', color: 'var(--c-94a3b8)', fontSize: 12 }}>Clear context</button>
+            )}
+            <span style={{ color: 'var(--c-475569)', fontSize: 10, marginLeft: 'auto' }}>Grounds the AI in your industry, size, goals &amp; notes.</span>
           </div>
         </div>
       )}
@@ -240,8 +331,16 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
               )}
 
               {insights.generated_at && (
-                <div style={{ color: 'var(--c-475569)', fontSize: 10 }}>
-                  Generated {new Date(insights.generated_at).toLocaleString()}
+                <div style={{ color: 'var(--c-475569)', fontSize: 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                  {insights.grounded_on && insights.grounded_on.resources != null && (
+                    <span style={{ color: 'var(--c-64748b)' }}>
+                      🔎 Grounded on {insights.grounded_on.resources} resources
+                      {insights.grounded_on.spend_usd != null ? ` · ${fmtUsd(insights.grounded_on.spend_usd)} analyzed` : ''}
+                      {insights.grounded_on.tagged_pct != null ? ` · ${insights.grounded_on.tagged_pct}% tagged` : ''}
+                    </span>
+                  )}
+                  <span>Generated {new Date(insights.generated_at).toLocaleString()}</span>
+                  <span style={{ color: insights.cached ? '#f59e0b' : '#22c55e' }}>{insights.cached ? '· cached (click Refresh for a fresh run)' : '· fresh'}</span>
                 </div>
               )}
             </div>

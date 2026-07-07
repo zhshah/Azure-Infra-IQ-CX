@@ -8,13 +8,32 @@ import {
   BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
-import { Download, RefreshCw, AlertCircle, BarChart2, PieChart as PieIcon, TrendingUp, Search as SearchIcon } from 'lucide-react'
+import { Download, RefreshCw, AlertCircle, BarChart2, PieChart as PieIcon, TrendingUp, Search as SearchIcon, Bookmark, Save, Trash2, ChevronDown, ArrowRight } from 'lucide-react'
 import { finopsApi, getFilterOptions, fmtUsd, CHART_COLORS, DIMENSION_OPTIONS, consumeDrill } from './finopsApi'
 import FinOpsAIPanel from './FinOpsAIPanel'
 import DateRangePicker from './DateRangePicker'
 import AdvancedFilterBar, { EMPTY_FILTERS } from './AdvancedFilterBar'
 import SearchableSelect from '../components/shared/SearchableSelect'
 import EnterpriseCard from '../components/shared/EnterpriseCard'
+import { useDrill } from '../drill/DrillContext'
+
+// ── Saved views (localStorage) ──────────────────────────────────────────────
+const SAVED_VIEWS_KEY = 'finops:ce:savedviews:v1'
+function loadSavedViews() { try { return JSON.parse(localStorage.getItem(SAVED_VIEWS_KEY) || '[]') } catch { return [] } }
+function persistSavedViews(v) { try { localStorage.setItem(SAVED_VIEWS_KEY, JSON.stringify(v)) } catch { /* ignore */ } }
+
+// Map the current group-by dimension + a value to /cost-resources filter params so a
+// top-contributor row can drill straight to the resources behind it. Billing-only
+// dimensions (ServiceFamily / ServiceName / MeterCategory) aren't resource attributes.
+function drillParamsFor(dim, value) {
+  if (!dim) return null
+  if (dim === 'SubscriptionId')    return { subscription_id: value }
+  if (dim === 'ResourceGroupName') return { resource_group: value }
+  if (dim === 'ResourceType')      return { resource_type: value }
+  if (dim === 'ResourceLocation')  return { region: value }
+  if (dim.startsWith('TagKey:'))   return { tag_key: dim.split(':')[1], tag_value: value }
+  return null
+}
 
 const GRANULARITY_OPTIONS = [
   { value: 'Daily',   label: 'Daily' },
@@ -72,6 +91,12 @@ export default function CostExplorer() {
 
   // Advanced filters — now managed by AdvancedFilterBar
   const [advFilters, setAdvFilters] = useState(EMPTY_FILTERS)
+
+  // Advanced: drill-down + saved views
+  const { openResourceDrill } = useDrill()
+  const [savedViews, setSavedViews] = useState(loadSavedViews)
+  const [showViews, setShowViews]   = useState(false)
+  const [drillLabel, setDrillLabel] = useState(null)
 
   // Apply a pending drill-down (deep-link from another FinOps view) once on mount.
   useEffect(() => {
@@ -145,6 +170,49 @@ export default function CostExplorer() {
 
   // Cancel in-flight requests on unmount
   useEffect(() => () => { if (abortRef.current) abortRef.current.abort() }, [])
+
+  // ── Drill a top-contributor into its underlying resources ──
+  const canDrill = !!drillParamsFor(groupBy[0], 'x')
+  const drillContributor = useCallback(async (label) => {
+    const params = drillParamsFor(groupBy[0], label)
+    if (!params) return
+    if (!params.subscription_id && (advFilters.subscriptions || []).length === 1) {
+      params.subscription_id = advFilters.subscriptions[0]
+    }
+    params.limit = 1000
+    setDrillLabel(label)
+    try {
+      const res = await finopsApi.getCostResources(params)
+      openResourceDrill(`${label} — resources`, res.resources || [],
+        { subtitle: `${res.count} resources · ${fmtUsd(res.total_cost)} this month` })
+    } catch { /* ignore */ } finally { setDrillLabel(null) }
+  }, [groupBy, advFilters, openResourceDrill])
+
+  // ── Saved views ──
+  const saveCurrentView = useCallback(() => {
+    const name = window.prompt('Save this Cost Explorer view as:')
+    if (!name) return
+    const query = { timeRange, dateFrom, dateTo, granularity, groupBy, costType, advFilters }
+    const next = [...savedViews.filter(v => v.name !== name), { name, query }]
+    setSavedViews(next); persistSavedViews(next); setShowViews(false)
+  }, [timeRange, dateFrom, dateTo, granularity, groupBy, costType, advFilters, savedViews])
+
+  const applyView = useCallback((v) => {
+    const q = v.query || {}
+    if (q.timeRange) setTimeRange(q.timeRange)
+    setDateFrom(q.dateFrom || ''); setDateTo(q.dateTo || '')
+    if (q.granularity) setGranularity(q.granularity)
+    if (Array.isArray(q.groupBy)) setGroupBy(q.groupBy)
+    if (q.costType) setCostType(q.costType)
+    setAdvFilters({ ...EMPTY_FILTERS, ...(q.advFilters || {}) })
+    setShowViews(false)
+    setTimeout(() => run(), 120)
+  }, [run])
+
+  const deleteView = useCallback((name) => {
+    const next = savedViews.filter(v => v.name !== name)
+    setSavedViews(next); persistSavedViews(next)
+  }, [savedViews])
 
   const handleDownloadXlsx = () => {
     if (!result?._query) return
@@ -237,7 +305,38 @@ export default function CostExplorer() {
           <h2 style={{ color: 'var(--c-f1f5f9)', fontSize: 18, fontWeight: 700, margin: 0 }}>Cost Explorer</h2>
           <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: 0 }}>Live Azure Cost Management — same data as Azure Portal</p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* Saved views */}
+          <div style={{ position: 'relative' }}>
+            <button onClick={() => setShowViews(s => !s)} style={{
+              background: 'transparent', border: '1px solid var(--c-1e293b)', borderRadius: 7,
+              padding: '6px 12px', color: 'var(--c-94a3b8)', fontSize: 11, fontWeight: 500,
+              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5,
+            }}>
+              <Bookmark size={12} /> Saved views {savedViews.length > 0 ? `(${savedViews.length})` : ''} <ChevronDown size={11} />
+            </button>
+            {showViews && (
+              <div style={{ position: 'absolute', right: 0, top: '110%', zIndex: 60, background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 8, padding: 6, minWidth: 240, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
+                <button onClick={saveCurrentView} style={{ display: 'flex', alignItems: 'center', gap: 7, width: '100%', textAlign: 'left', background: 'none', border: 'none', borderRadius: 6, padding: '7px 10px', cursor: 'pointer', color: 'var(--c-4ade80)', fontSize: 12, fontWeight: 600 }}>
+                  <Save size={13} /> Save current view…
+                </button>
+                {savedViews.length > 0 && <div style={{ height: 1, background: 'var(--c-1e293b)', margin: '4px 0' }} />}
+                {savedViews.map(v => (
+                  <div key={v.name} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <button onClick={() => applyView(v)} style={{ flex: 1, textAlign: 'left', background: 'none', border: 'none', borderRadius: 6, padding: '7px 10px', cursor: 'pointer', color: 'var(--c-cbd5e1)', fontSize: 12 }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--c-1e293b)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'none'}>
+                      {v.name}
+                    </button>
+                    <button onClick={() => deleteView(v.name)} title="Delete" style={{ background: 'none', border: 'none', color: 'var(--c-64748b)', cursor: 'pointer', padding: 6 }}>
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+                {savedViews.length === 0 && <div style={{ color: 'var(--c-64748b)', fontSize: 11, padding: '6px 10px' }}>No saved views yet.</div>}
+              </div>
+            )}
+          </div>
           {result && (
             <button onClick={() => finopsApi.downloadCsv(groupBy[0], timeRange).catch(e => console.error('CSV export:', e))}
               style={{
@@ -360,16 +459,20 @@ export default function CostExplorer() {
 
       {/* ── Top contributors ── */}
       {result?.top_contributors?.length > 0 && (
-        <EnterpriseCard title="Top Contributors" icon={TrendingUp} iconColor="#f59e0b" collapsible>
+        <EnterpriseCard title="Top Contributors" icon={TrendingUp} iconColor="#f59e0b" collapsible
+          subtitle={canDrill ? 'Click a row to drill into the resources behind it' : undefined}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
-              <tr>{['Dimension', 'Cost (USD)', '% of Total'].map(h => (
+              <tr>{['Dimension', 'Cost (USD)', '% of Total', ''].map(h => (
                 <th key={h} style={{ textAlign: 'left', color: 'var(--c-475569)', padding: '6px 8px', borderBottom: '1px solid rgba(var(--rgb-slate), 0.5)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</th>
               ))}</tr>
             </thead>
             <tbody>
               {result.top_contributors.map((r, i) => (
-                <tr key={i} style={{ borderBottom: '1px solid rgba(15, 23, 42, 0.5)' }}>
+                <tr key={i} onClick={canDrill ? () => drillContributor(r.label) : undefined}
+                  style={{ borderBottom: '1px solid rgba(15, 23, 42, 0.5)', cursor: canDrill ? 'pointer' : 'default' }}
+                  onMouseEnter={canDrill ? (e => e.currentTarget.style.background = 'rgba(59,130,246,0.06)') : undefined}
+                  onMouseLeave={canDrill ? (e => e.currentTarget.style.background = 'transparent') : undefined}>
                   <td style={{ padding: '8px 8px', color: 'var(--c-e2e8f0)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <div style={{ width: 8, height: 8, borderRadius: '50%', background: CHART_COLORS[i % CHART_COLORS.length], flexShrink: 0 }} />
@@ -382,6 +485,11 @@ export default function CostExplorer() {
                       <div style={{ height: 4, width: `${Math.min(r.pct, 100)}%`, background: CHART_COLORS[i % CHART_COLORS.length], borderRadius: 2, maxWidth: 80 }} />
                       {r.pct}%
                     </div>
+                  </td>
+                  <td style={{ padding: '8px 8px', textAlign: 'right' }}>
+                    {canDrill && (drillLabel === r.label
+                      ? <RefreshCw size={12} style={{ color: 'var(--c-64748b)', animation: 'spin 1s linear infinite' }} />
+                      : <ArrowRight size={13} style={{ color: 'var(--c-475569)' }} />)}
                   </td>
                 </tr>
               ))}

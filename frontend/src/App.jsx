@@ -57,19 +57,15 @@ const NAV_SECTIONS = [
     { key: 'tags',        label: 'Tags',        icon: '/icons/general/10014-icon-service-Tag.svg' },
   ]},
   { heading: 'FinOps', collapsible: true, items: [
-    { key: 'finops-overview',   label: '⚡ FinOps Overview',    icon: '/icons/management + governance/00001-icon-service-Monitor.svg' },
-    { key: 'finops',          label: 'FinOps Dashboard',    icon: '/icons/management + governance/00001-icon-service-Monitor.svg' },
-    { key: 'cost-explorer',   label: 'Cost Explorer',       icon: '/icons/general/10015-icon-service-Dashboard.svg' },
-    { key: 'finops-budgets',  label: 'Budget Manager',      icon: '/icons/general/10003-icon-service-Reservations.svg' },
-    { key: 'finops-forecast', label: 'Forecast',            icon: '/icons/general/10008-icon-service-Marketplace.svg' },
-    { key: 'finops-alloc',    label: 'Cost Allocation',     icon: '/icons/general/10007-icon-service-Resource-Groups.svg' },
-    { key: 'finops-chargeback', label: 'Chargeback',        icon: '/icons/general/10014-icon-service-Tag.svg' },
-    { key: 'finops-commit',   label: 'Commitments & RI',   icon: '/icons/general/10349-icon-service-Resource-Explorer.svg' },
-    { key: 'finops-savings',  label: 'Savings Optimizer',   icon: '/icons/migrate/10281-icon-service-Azure-Migrate.svg' },
-    { key: 'finops-tags',     label: 'Tag Cost Analytics',  icon: '/icons/general/10001-icon-service-All-Resources.svg' },
-    { key: 'finops-alerts',   label: 'FinOps Alerts',       icon: '/icons/security/10241-icon-service-Microsoft-Defender-for-Cloud.svg' },
-    { key: 'finops-warehouse', label: 'Cost Warehouse',   icon: '/icons/databases/00036-icon-service-SQL-Data-Warehouses.svg' },
-    { key: 'finops-compliance', label: '✅ FinOps Compliance', icon: '/icons/management + governance/00003-icon-service-Advisor.svg' },
+    { key: 'finops-overview',   label: '⚡ Overview',          icon: '/icons/management + governance/00001-icon-service-Monitor.svg' },
+    { key: 'finops-analysis-hub', label: '📈 Cost Analysis',   icon: '/icons/general/10015-icon-service-Dashboard.svg' },
+    { key: 'finops-optimization', label: '🎯 Optimization',    icon: '/icons/management + governance/00003-icon-service-Advisor.svg' },
+    { key: 'finops-commitments-hub', label: '🧾 Commitments', icon: '/icons/general/10003-icon-service-Reservations.svg' },
+    { key: 'finops-budgets-hub', label: '💰 Budgets & Alerts', icon: '/icons/general/10003-icon-service-Reservations.svg' },
+    { key: 'finops-governance-hub', label: '🏷️ Governance & Allocation', icon: '/icons/general/10014-icon-service-Tag.svg' },
+    { key: 'finops-anomalies', label: '📊 Anomaly Intelligence', icon: '/icons/management + governance/00001-icon-service-Monitor.svg' },
+    { key: 'finops-studio',   label: '🎨 Cost Studio',      icon: '/icons/general/10015-icon-service-Dashboard.svg' },
+    { key: 'finops-exec',     label: '📄 Executive Report', icon: '/icons/general/10015-icon-service-Dashboard.svg' },
   ]},
   // Keep 'About' LAST so it always sits at the bottom of the left-hand menu.
   { heading: 'About', items: [
@@ -430,18 +426,31 @@ import UpdateManagementView   from './components/updates/UpdateManagementView'
 
 // ── FinOps Module ─────────────────────────────────────────────────────────────
 import FinOpsOverview    from './finops/FinOpsOverview'
+import CostStudio        from './finops/CostStudio'
+import UnitEconomics     from './finops/UnitEconomics'
+import RecommendationStudio from './finops/RecommendationStudio'
+import AnalyzeHub        from './finops/AnalyzeHub'
+import CostInsights      from './finops/CostInsights'
+import FinOpsHub         from './finops/FinOpsHub'
+import CostFlow          from './finops/CostFlow'
+import AnomalyIntelligence from './finops/AnomalyIntelligence'
+import CostLens          from './finops/CostLens'
 import FinOpsDashboard    from './finops/FinOpsDashboard'
-import CostExplorer       from './finops/CostExplorer'
 import BudgetManager      from './finops/BudgetManager'
+import BudgetScenario     from './finops/BudgetScenario'
 import ForecastPanel      from './finops/ForecastPanel'
 import AllocationView     from './finops/AllocationView'
 import ChargebackPanel    from './finops/ChargebackPanel'
 import CommitmentTracker  from './finops/CommitmentTracker'
+import CommitmentPlanner  from './finops/CommitmentPlanner'
 import SavingsSummary     from './finops/SavingsSummary'
 import TagAnalytics       from './finops/TagAnalytics'
 import FinOpsAlerts       from './finops/FinOpsAlerts'
 import FinOpsWarehouse    from './finops/FinOpsWarehouse'
 import FinOpsComplianceView from './finops/FinOpsComplianceView'
+import CostDependencies   from './finops/CostDependencies'
+import CostComparison     from './finops/CostComparison'
+import FinOpsExecutiveReport from './finops/FinOpsExecutiveReport'
 
 function ErrorView({ message, onRetry }) {
   return (
@@ -2323,19 +2332,65 @@ function AppInner() {
         )}
 
         {/* ── FinOps Module ── */}
-        {view === 'finops-overview' && <FinOpsOverview />}
+        {/* Consolidated hubs (tabbed). Old view keys below remain routable for deep-links/drills. */}
+        {view === 'finops-analysis-hub' && <FinOpsHub tabs={[
+          { key: 'analyze', label: 'Analyze', render: () => <AnalyzeHub /> },
+          { key: 'dashboard', label: 'Dashboard', render: () => <FinOpsDashboard /> },
+          { key: 'allocation', label: 'Allocation', render: () => <AllocationView /> },
+          { key: 'comparison', label: 'Comparison', render: () => <CostComparison /> },
+          { key: 'forecast', label: 'Forecast', render: () => <ForecastPanel /> },
+          { key: 'flow', label: 'Cost Flow', render: () => <CostFlow /> },
+          { key: 'dependencies', label: 'Dependencies', render: () => <CostDependencies /> },
+          { key: 'warehouse', label: 'Warehouse', render: () => <FinOpsWarehouse /> },
+        ]} />}
+        {view === 'finops-optimization' && <FinOpsHub storageKey="finops:hub:opt" tabs={[
+          { key: 'reco', label: 'Recommendation Studio', render: () => <RecommendationStudio /> },
+          { key: 'savings', label: 'Savings Optimizer', render: () => <SavingsSummary /> },
+        ]} />}
+        {view === 'finops-commitments-hub' && <FinOpsHub storageKey="finops:hub:commit" tabs={[
+          { key: 'tracker', label: 'Reservations & Savings Plans', render: () => <CommitmentTracker /> },
+          { key: 'planner', label: 'What-if Planner', render: () => <CommitmentPlanner /> },
+        ]} />}
+        {view === 'finops-budgets-hub' && <FinOpsHub storageKey="finops:hub:budgets" tabs={[
+          { key: 'budgets', label: 'Budgets', render: () => <BudgetManager /> },
+          { key: 'scenario', label: 'Scenario & Burndown', render: () => <BudgetScenario /> },
+          { key: 'alerts', label: 'Alerts', render: () => <FinOpsAlerts /> },
+        ]} />}
+        {view === 'finops-governance-hub' && <FinOpsHub storageKey="finops:hub:gov" tabs={[
+          { key: 'tags', label: 'Tag Analytics', render: () => <TagAnalytics /> },
+          { key: 'compliance', label: 'FinOps Compliance', render: () => <FinOpsComplianceView /> },
+          { key: 'lens', label: 'Cost Lens', render: () => <CostLens /> },
+          { key: 'chargeback', label: 'Chargeback', render: () => <ChargebackPanel /> },
+          { key: 'unit', label: 'Unit Economics', render: () => <UnitEconomics /> },
+        ]} />}
+        {view === 'finops-overview' && <FinOpsHub tabs={[
+          { key: 'summary', label: 'Summary', render: () => <FinOpsOverview /> },
+          { key: 'insights', label: 'Cost Insights', render: () => <CostInsights /> },
+        ]} />}
+        {view === 'finops-recommendations' && <RecommendationStudio />}
+        {view === 'finops-analyze' && <AnalyzeHub />}
+        {view === 'finops-costflow' && <CostFlow />}
+        {view === 'finops-anomalies' && <AnomalyIntelligence />}
+        {view === 'finops-cost-lens' && <CostLens />}
+        {view === 'finops-studio' && <CostStudio />}
         {view === 'finops' && <FinOpsDashboard />}
-        {view === 'cost-explorer' && <CostExplorer />}
+        {view === 'cost-explorer' && <AnalyzeHub />}
+        {view === 'finops-dependencies' && <CostDependencies />}
+        {view === 'finops-compare' && <CostComparison />}
         {view === 'finops-budgets' && <BudgetManager />}
+        {view === 'finops-budget-scenario' && <BudgetScenario />}
         {view === 'finops-forecast' && <ForecastPanel />}
         {view === 'finops-alloc' && <AllocationView />}
         {view === 'finops-chargeback' && <ChargebackPanel />}
+        {view === 'finops-unit-economics' && <UnitEconomics />}
         {view === 'finops-commit' && <CommitmentTracker />}
+        {view === 'finops-commit-planner' && <CommitmentPlanner />}
         {view === 'finops-savings' && <SavingsSummary />}
         {view === 'finops-tags' && <TagAnalytics />}
         {view === 'finops-alerts' && <FinOpsAlerts />}
         {view === 'finops-warehouse' && <FinOpsWarehouse />}
         {view === 'finops-compliance' && <FinOpsComplianceView />}
+        {view === 'finops-exec' && <FinOpsExecutiveReport />}
 
         {/* ── About / Features / FAQs ── */}
         {view === 'about' && <About tab="about" />}

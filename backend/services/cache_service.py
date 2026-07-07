@@ -123,23 +123,67 @@ def is_enabled() -> bool:
     return _client_or_none() is not None
 
 
+# ── In-process fallback cache (used when Redis is unavailable) ────────────────
+# Keeps single-process / no-Redis runs warm (e.g. AI insights, FinOps analyses)
+# instead of regenerating on every request. TTL-aware, size-bounded, thread-safe.
+_MEM_MAX = 1000
+_mem: dict = {}
+_mem_lock = threading.Lock()
+
+
+def _mem_get(key: str) -> Optional[Any]:
+    import time as _t
+    with _mem_lock:
+        item = _mem.get(key)
+        if not item:
+            return None
+        exp, val = item
+        if exp and exp < _t.time():
+            _mem.pop(key, None)
+            return None
+        return val
+
+
+def _mem_set(key: str, value: Any, ttl_seconds: Optional[int] = None) -> bool:
+    import time as _t
+    try:
+        val = json.loads(json.dumps(value, default=str))  # decouple from caller's object
+    except Exception:
+        val = value
+    exp = (_t.time() + ttl_seconds) if (ttl_seconds and ttl_seconds > 0) else 0
+    with _mem_lock:
+        if len(_mem) >= _MEM_MAX:
+            now = _t.time()
+            for k in [k for k, (e, _) in list(_mem.items()) if e and e < now][:200]:
+                _mem.pop(k, None)
+            if len(_mem) >= _MEM_MAX:
+                _mem.pop(next(iter(_mem)), None)
+        _mem[key] = (exp, val)
+    return True
+
+
+def _mem_del(key: str) -> None:
+    with _mem_lock:
+        _mem.pop(key, None)
+
+
 # ── Key/value JSON cache ──────────────────────────────────────────────────────
 def get_json(key: str) -> Optional[Any]:
     c = _client_or_none()
     if not c:
-        return None
+        return _mem_get(key)
     try:
         raw = c.get(key)
         return json.loads(raw) if raw else None
     except Exception as exc:
         logger.debug("cache_service.get_json(%s) failed: %s", key, exc)
-        return None
+        return _mem_get(key)
 
 
 def set_json(key: str, value: Any, ttl_seconds: Optional[int] = None) -> bool:
     c = _client_or_none()
     if not c:
-        return False
+        return _mem_set(key, value, ttl_seconds)
     try:
         payload = json.dumps(value, default=str)
         if ttl_seconds and ttl_seconds > 0:
@@ -149,13 +193,14 @@ def set_json(key: str, value: Any, ttl_seconds: Optional[int] = None) -> bool:
         return True
     except Exception as exc:
         logger.debug("cache_service.set_json(%s) failed: %s", key, exc)
-        return False
+        return _mem_set(key, value, ttl_seconds)
 
 
 def delete(key: str) -> bool:
+    _mem_del(key)
     c = _client_or_none()
     if not c:
-        return False
+        return True
     try:
         c.delete(key)
         return True

@@ -32,7 +32,6 @@ import {
   getWarehouseAnomalies, triggerWarehouseETL,
   fmtUsd, fmtPct, ageLabel, severityColor, serviceColor, CHART_PALETTE,
 } from './FinOpsWarehouseAPI'
-import FinOpsAIPanel from './FinOpsAIPanel'
 
 // ── Design tokens (consistent with rest of app) ───────────────────────────────
 const C = {
@@ -441,7 +440,6 @@ export default function FinOpsWarehouse() {
     <div style={{ background: C.bg, minHeight: '100%', padding: '20px 24px', fontFamily: 'system-ui, sans-serif', color: C.text }}>
 
       <div style={{ marginBottom: 16 }}>
-        <FinOpsAIPanel view="warehouse" data={hasData ? { kpis, by_service: byService.slice(0, 10), by_subscription: bySubscription.slice(0, 8), top_resources: topResources.slice(0, 8), anomaly_count: anomalies.length, anomalies: anomalies.slice(0, 5) } : {}} />
       </div>
 
       {/* ── Freshness Banner ─────────────────────────────────────────── */}

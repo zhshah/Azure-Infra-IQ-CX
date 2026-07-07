@@ -94,6 +94,33 @@ ANOMALY_SPIKE_THRESHOLDS = {
 
 ANOMALY_MIN_COST_USD = 5.0  # ignore spikes on resources costing < $5/day avg
 
+# ── Analyze (warehouse-backed Cost Analysis) dimensional grain ──────────────────
+# Daily cost grouped by dimensions that do NOT trigger Cost Management per-resource
+# (ResourceId) throttling. Powers the "Analyze" experience entirely from SQL.
+ANALYZE_DIMENSION_DAYS = 120          # rolling daily window for the dimension warehouse
+ANALYZE_DIMENSION_DAYS_INITIAL = 35   # fast first-run window
+ANALYZE_COST_TYPES = ("ActualCost", "AmortizedCost")
+# our dimension key → Azure Cost Management grouping dimension
+_ANALYZE_DIMS = {
+    "resource_group": "ResourceGroupName",
+    "service_name":   "ServiceName",
+    "service_family": "ServiceFamily",
+    "meter_category": "MeterCategory",
+    "location":       "ResourceLocation",
+}
+
+
+def _norm_date(v: Any) -> str:
+    """Normalise a cost-row date to YYYY-MM-DD (Cost Mgmt daily can be YYYYMMDD int)."""
+    s = str(v or "").strip()
+    if not s:
+        return ""
+    digits = s.replace("-", "")
+    if len(digits) >= 8 and digits[:8].isdigit():
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return s[:10]
+
+
 # ── DB context helper ─────────────────────────────────────────────────────────
 
 @contextmanager
@@ -147,6 +174,77 @@ def _finish_etl_run(run_id: str, counters: dict, error: Optional[str] = None) ->
             )
     except Exception as e:
         logger.error("ETL: failed to record run finish: %s", e)
+
+
+# ── ETL step: daily dimensional costs (warehouse-backed Analyze) ────────────────
+
+def _collect_daily_dimension_costs(sub_id: str, today: date, run_id: str,
+                                   days: int = ANALYZE_DIMENSION_DAYS,
+                                   cost_types: Tuple[str, ...] = ANALYZE_COST_TYPES,
+                                   dimensions: Optional[List[str]] = None) -> int:
+    """Daily cost grouped by RG / service / meter / location for actual + amortized,
+    upserted into finops_daily_dimension_costs. Non-throttled dimensions, so this
+    populates reliably where the per-resource grain cannot. `dimensions` limits which
+    dimension keys are collected (default all) — used to retry/gap-fill a lagging one."""
+    from_date = today - timedelta(days=days - 1)
+    scope = f"/subscriptions/{sub_id}"
+    cols = ["id", "snapshot_date", "subscription_id", "dimension", "dim_value",
+            "cost_type", "cost_usd", "currency", "etl_run_id"]
+    sql = upsert_conflict_sql("finops_daily_dimension_costs", cols, ["id"],
+                              [c for c in cols if c != "id"])
+    dim_items = [(k, v) for k, v in _ANALYZE_DIMS.items() if not dimensions or k in dimensions]
+    total = 0
+    for ct in cost_types:
+        ct_label = "amortized" if "amort" in ct.lower() else "actual"
+        for dim_key, az_dim in dim_items:
+            try:
+                rows = query_cost(scope=scope, from_date=from_date, to_date=today,
+                                  granularity="Daily", group_by=[az_dim],
+                                  cost_type=ct, use_cache=False)
+            except Exception as e:
+                logger.warning("ETL analyze %s/%s (%s) failed: %s", dim_key, ct, sub_id[:8], e)
+                continue
+            if not rows:
+                continue
+            norm = normalise_cost_rows(rows, [az_dim])
+            try:
+                with _conn() as con:
+                    for row in norm:
+                        sd = _norm_date(row.get("date", ""))
+                        if not sd:
+                            continue
+                        dv = str((row.get("dimensions", {}) or {}).get(az_dim, "") or "") or "(none)"
+                        cost = float(row.get("cost_usd", 0) or 0)
+                        rid = hashlib.sha256(f"{sd}|{sub_id}|{dim_key}|{dv}|{ct_label}".encode("utf-8")).hexdigest()
+                        con.execute(sql, (rid, sd, sub_id, dim_key, dv, ct_label, cost, "USD", run_id))
+                        total += 1
+            except Exception as e:
+                logger.error("ETL: dimension upsert failed (%s/%s): %s", dim_key, ct, e)
+            time.sleep(0.25)  # gentle pacing to stay under Cost Management limits
+    return total
+
+
+def backfill_analyze_dimensions(days: int = ANALYZE_DIMENSION_DAYS,
+                                cost_types: Tuple[str, ...] = ANALYZE_COST_TYPES,
+                                subscription_ids: Optional[List[str]] = None,
+                                dimensions: Optional[List[str]] = None,
+                                triggered_by: str = "manual") -> Dict[str, Any]:
+    """On-demand backfill of the daily dimensional warehouse (Analyze data source)."""
+    if not _DB_AVAILABLE or not _FINOPS_DATA_AVAILABLE:
+        return {"status": "error", "message": "Required services not available"}
+    if subscription_ids is None:
+        subscription_ids = get_subscription_ids()
+    run_id = _start_etl_run(triggered_by)
+    today = datetime.now(timezone.utc).date()
+    total = 0
+    for sub_id in (subscription_ids or []):
+        try:
+            total += _collect_daily_dimension_costs(sub_id, today, run_id, days=days, cost_types=cost_types, dimensions=dimensions)
+        except Exception as e:
+            logger.error("ETL: analyze backfill sub %s failed: %s", sub_id, e)
+    _finish_etl_run(run_id, {"subscriptions": len(subscription_ids or [])})
+    return {"status": "completed", "run_id": run_id, "rows": total,
+            "subscriptions": len(subscription_ids or []), "days": days}
 
 
 # ── Main ETL orchestrator ──────────────────────────────────────────────────────
@@ -220,6 +318,14 @@ def run_full_etl(
                 # d) Monthly tag breakdown
                 n = _collect_monthly_tag_costs(sub_id, today, run_id, months=tag_months)
                 counters["tag_costs"] += n
+
+                # e) Daily dimensional costs (warehouse-backed Analyze — RG/service/meter/location, actual+amortized)
+                try:
+                    dim_days = ANALYZE_DIMENSION_DAYS_INITIAL if initial else ANALYZE_DIMENSION_DAYS
+                    n = _collect_daily_dimension_costs(sub_id, today, run_id, days=dim_days)
+                    counters["service_costs"] += n
+                except Exception as _de:
+                    logger.warning("ETL: dimension costs for %s failed: %s", sub_id[:8], _de)
 
                 # Brief pause between subscriptions to be a good API citizen
                 time.sleep(2)

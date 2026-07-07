@@ -125,9 +125,27 @@ TABLES = [
         etl_run_id          TEXT NOT NULL DEFAULT ''
     )
     """,
-]
 
-# ── Indexes ───────────────────────────────────────────────────────────────────
+    # 7. finops_daily_dimension_costs — daily cost by non-throttled dimension
+    #    (resource_group / service_name / service_family / meter_category / location),
+    #    for actual AND amortized. Powers the warehouse-backed "Analyze" experience
+    #    (scope + custom period + group-by + accumulated/daily + actual/amortized)
+    #    WITHOUT hitting Cost Management at view time. Single hashed PK avoids the
+    #    Azure SQL composite-key index-width limit.
+    """
+    CREATE TABLE IF NOT EXISTS finops_daily_dimension_costs (
+        id                  TEXT PRIMARY KEY,
+        snapshot_date       TEXT NOT NULL,
+        subscription_id     TEXT NOT NULL DEFAULT '',
+        dimension           TEXT NOT NULL DEFAULT '',
+        dim_value           TEXT NOT NULL DEFAULT '',
+        cost_type           TEXT NOT NULL DEFAULT 'actual',
+        cost_usd            REAL NOT NULL DEFAULT 0,
+        currency            TEXT NOT NULL DEFAULT 'USD',
+        etl_run_id          TEXT NOT NULL DEFAULT ''
+    )
+    """,
+]
 
 INDEXES_SQLITE = [
     "CREATE INDEX IF NOT EXISTS idx_fw_daily_res_sub ON finops_daily_resource_costs (subscription_id, snapshot_date)",
@@ -140,6 +158,8 @@ INDEXES_SQLITE = [
     "CREATE INDEX IF NOT EXISTS idx_fw_anomalies_date ON finops_anomalies (detected_date)",
     "CREATE INDEX IF NOT EXISTS idx_fw_anomalies_sev ON finops_anomalies (severity, status)",
     "CREATE INDEX IF NOT EXISTS idx_fw_etl_status ON finops_etl_runs (status, started_at)",
+    "CREATE INDEX IF NOT EXISTS idx_fw_dim_date ON finops_daily_dimension_costs (snapshot_date)",
+    "CREATE INDEX IF NOT EXISTS idx_fw_dim_dimension ON finops_daily_dimension_costs (dimension)",
 ]
 
 INDEXES_AZURESQL = [
@@ -153,6 +173,8 @@ INDEXES_AZURESQL = [
     "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='idx_fw_anomalies_date') CREATE INDEX idx_fw_anomalies_date ON finops_anomalies (detected_date)",
     "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='idx_fw_anomalies_sev') CREATE INDEX idx_fw_anomalies_sev ON finops_anomalies (severity, status)",
     "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='idx_fw_etl_status') CREATE INDEX idx_fw_etl_status ON finops_etl_runs (status, started_at)",
+    "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='idx_fw_dim_date') CREATE INDEX idx_fw_dim_date ON finops_daily_dimension_costs (snapshot_date)",
+    "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='idx_fw_dim_dimension') CREATE INDEX idx_fw_dim_dimension ON finops_daily_dimension_costs (dimension)",
 ]
 
 
@@ -184,13 +206,13 @@ def run_migration():
             sql = create_table_sql(ddl, indexed_cols=idx_cols) if is_azure_sql() else ddl
             cursor.execute(sql)
             created += 1
-            print(f"  [{i}/6] ✓ {table_name}")
+            print(f"  [{i}/{len(TABLES)}] ✓ {table_name}")
         except Exception as e:
             err = str(e).lower()
             if "already" in err or "exists" in err or "duplicate" in err:
-                print(f"  [{i}/6] ⊘ {table_name} (already exists)")
+                print(f"  [{i}/{len(TABLES)}] ⊘ {table_name} (already exists)")
             else:
-                print(f"  [{i}/6] ✗ {table_name}: {e}")
+                print(f"  [{i}/{len(TABLES)}] ✗ {table_name}: {e}")
 
     indexes = INDEXES_AZURESQL if is_azure_sql() else INDEXES_SQLITE
     print(f"\nCreating {len(indexes)} indexes…")
