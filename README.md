@@ -651,7 +651,8 @@ Use this when the customer already has a Provisioned Throughput (PTU) or dedicat
     -OpenAIMode           "Existing" `
     -OpenAIResourceName   "<existing-openai-resource-name>" `
     -OpenAIResourceGroup  "<existing-openai-rg>" `
-    -OpenAIDeploymentName "sidra-prd-gpt-5-4-ptu" `
+    -OpenAISubscriptionId "<openai-subscription-id>" `   # omit if PTU is in the same subscription as the App Service
+    -OpenAIDeploymentName "<your-ptu-deployment-name>" `
     `
     -DeploymentMode                  "Private" `
     -VNetName                        "<vnet-name>" `
@@ -662,9 +663,12 @@ Use this when the customer already has a Provisioned Throughput (PTU) or dedicat
     -PrivateDnsZoneResourceGroupName "rg-private-dns-zones"
 ```
 
+> **Cross-subscription PTU**: `-OpenAISubscriptionId` is required when the existing OpenAI resource lives in a **different subscription** from the App Service. The script uses it for all control-plane lookups and to build the correct RBAC scope.
+
 **`Existing` mode behaviour:**
 - No new OpenAI account or model deployment is created
 - `-OpenAILocation` is not required and is never prompted
-- Endpoint and key are resolved automatically from `-OpenAIResourceName` + `-OpenAIResourceGroup`; supply `-OpenAIEndpoint` + `-OpenAIKey` directly to bypass control-plane lookups (useful when the deploying identity cannot read the OpenAI resource)
-- `Cognitive Services OpenAI User` RBAC is assigned to the App Service Managed Identity on the existing resource
+- `-OpenAISubscriptionId` defaults to the app subscription if omitted (same-subscription scenario)
+- Endpoint and key resolved from `-OpenAIResourceName` + `-OpenAIResourceGroup` + `-OpenAISubscriptionId`; supply `-OpenAIEndpoint` + `-OpenAIKey` to bypass control-plane lookups entirely (useful when the deploying identity cannot read the OpenAI resource cross-subscription)
+- `Cognitive Services OpenAI User` RBAC is assigned to the App Service Managed Identity scoped to the correct subscription/RG of the existing resource
 

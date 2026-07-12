@@ -207,6 +207,12 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$OpenAIResourceGroup = "",
 
+    # [Existing mode] Subscription ID that holds the customer's existing Azure OpenAI resource.
+    # Required when the PTU / existing OpenAI resource lives in a DIFFERENT subscription from the
+    # App Service. Defaults to $SubscriptionId (app subscription) when blank.
+    [Parameter(Mandatory = $false)]
+    [string]$OpenAISubscriptionId = "",
+
     # [Existing mode - optional] Provide the endpoint + key directly to SKIP any control-plane
     # (az cognitiveservices) lookups - useful when the deploying identity cannot read the OpenAI
     # resource but the customer supplies its endpoint/key. When blank, the script resolves them
@@ -1009,7 +1015,8 @@ Write-Step "Step 3: Azure OpenAI Resource"
 
 if ($OpenAIMode -eq "Existing") {
     # ── Reuse the customer's existing Azure OpenAI resource (e.g. PTU / Provisioned). ──
-    $oaiRg = if ([string]::IsNullOrWhiteSpace($OpenAIResourceGroup)) { $ResourceGroupName } else { $OpenAIResourceGroup }
+    $oaiRg  = if ([string]::IsNullOrWhiteSpace($OpenAIResourceGroup))    { $ResourceGroupName } else { $OpenAIResourceGroup }
+    $oaiSub = if ([string]::IsNullOrWhiteSpace($OpenAISubscriptionId))   { $SubscriptionId    } else { $OpenAISubscriptionId }
     if (-not [string]::IsNullOrWhiteSpace($OpenAIEndpoint) -and -not [string]::IsNullOrWhiteSpace($OpenAIKey)) {
         # Endpoint + key supplied directly — no control-plane read needed.
         $openaiEndpoint = $OpenAIEndpoint.TrimEnd('/') + "/"
@@ -1017,19 +1024,19 @@ if ($OpenAIMode -eq "Existing") {
         Write-Success "Using supplied existing OpenAI endpoint (no resource lookup needed)"
     } else {
         # Resolve endpoint + key from the existing resource.
-        az cognitiveservices account show --name $OpenAIResourceName --resource-group $oaiRg 2>&1 | Out-Null
+        az cognitiveservices account show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "Existing Azure OpenAI resource '$OpenAIResourceName' not found in resource group '$oaiRg'."
-            Write-Host "  Provide -OpenAIEndpoint and -OpenAIKey directly, or check the name / resource group." -ForegroundColor Yellow
+            Write-Error "Existing Azure OpenAI resource '$OpenAIResourceName' not found in resource group '$oaiRg' (subscription: $oaiSub)."
+            Write-Host "  Provide -OpenAIEndpoint and -OpenAIKey directly, or check the name / resource group / subscription." -ForegroundColor Yellow
             exit 1
         }
-        $openaiEndpoint = az cognitiveservices account show --name $OpenAIResourceName --resource-group $oaiRg --query "properties.endpoint" -o tsv
+        $openaiEndpoint = az cognitiveservices account show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --query "properties.endpoint" -o tsv
         if ([string]::IsNullOrWhiteSpace($OpenAIKey)) {
-            $openaiKey = az cognitiveservices account keys list --name $OpenAIResourceName --resource-group $oaiRg --query "key1" -o tsv
+            $openaiKey = az cognitiveservices account keys list --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --query "key1" -o tsv
         } else {
             $openaiKey = $OpenAIKey
         }
-        Write-Success "Resolved existing Azure OpenAI resource: $OpenAIResourceName (rg: $oaiRg)"
+        Write-Success "Resolved existing Azure OpenAI resource: $OpenAIResourceName (rg: $oaiRg, sub: $oaiSub)"
     }
     Write-Info "OpenAI Endpoint: $openaiEndpoint"
 } else {
@@ -1090,16 +1097,17 @@ $deployedCapacity = ""
 if ($OpenAIMode -eq "Existing") {
     # ── EXISTING resource (e.g. PTU): DO NOT create a model deployment. Use the customer's
     #    existing deployment name as-is; best-effort read of its real model for the summary. ──
-    $oaiRg = if ([string]::IsNullOrWhiteSpace($OpenAIResourceGroup)) { $ResourceGroupName } else { $OpenAIResourceGroup }
+    $oaiRg  = if ([string]::IsNullOrWhiteSpace($OpenAIResourceGroup))  { $ResourceGroupName } else { $OpenAIResourceGroup }
+    $oaiSub = if ([string]::IsNullOrWhiteSpace($OpenAISubscriptionId)) { $SubscriptionId    } else { $OpenAISubscriptionId }
     if ([string]::IsNullOrWhiteSpace($OpenAIDeploymentName)) {
         Write-Error "Existing OpenAI mode requires the model deployment name (-OpenAIDeploymentName). Aborting."
         exit 1
     }
     Write-Info "Using existing model deployment '$OpenAIDeploymentName' on '$OpenAIResourceName' (no new deployment created)."
     # Best-effort: read the real model/version/SKU (works when the identity can read the resource).
-    $deployedModel   = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --deployment-name $OpenAIDeploymentName --query "properties.model.name" -o tsv 2>$null
-    $deployedVersion = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --deployment-name $OpenAIDeploymentName --query "properties.model.version" -o tsv 2>$null
-    $deployedSku     = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --deployment-name $OpenAIDeploymentName --query "sku.name" -o tsv 2>$null
+    $deployedModel   = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --deployment-name $OpenAIDeploymentName --query "properties.model.name" -o tsv 2>$null
+    $deployedVersion = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --deployment-name $OpenAIDeploymentName --query "properties.model.version" -o tsv 2>$null
+    $deployedSku     = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --deployment-name $OpenAIDeploymentName --query "sku.name" -o tsv 2>$null
     if ($deployedSku) { Write-Success "Existing deployment SKU: $deployedSku (e.g. ProvisionedManaged = PTU)" }
 } else {
     # Deployment-name policy: blank = name the deployment after the ACTUAL model deployed (newest GPT first).
@@ -2170,8 +2178,9 @@ $mgScope     = "/providers/Microsoft.Management/managementGroups/$EntraTenantId"
 # authenticates with the KEY, so this RBAC grant is optional). Point the scope at the real RG so
 # any attempted grant targets the correct resource. Skip the scope entirely if endpoint+key were
 # supplied directly without a resource name.
-$openaiRgForScope = if ($OpenAIMode -eq "Existing" -and -not [string]::IsNullOrWhiteSpace($OpenAIResourceGroup)) { $OpenAIResourceGroup } else { $ResourceGroupName }
-$openaiScope = "/subscriptions/$SubscriptionId/resourceGroups/$openaiRgForScope/providers/Microsoft.CognitiveServices/accounts/$OpenAIResourceName"
+$openaiRgForScope  = if ($OpenAIMode -eq "Existing" -and -not [string]::IsNullOrWhiteSpace($OpenAIResourceGroup))    { $OpenAIResourceGroup    } else { $ResourceGroupName }
+$openaiSubForScope = if ($OpenAIMode -eq "Existing" -and -not [string]::IsNullOrWhiteSpace($OpenAISubscriptionId))   { $OpenAISubscriptionId   } else { $SubscriptionId    }
+$openaiScope = "/subscriptions/$openaiSubForScope/resourceGroups/$openaiRgForScope/providers/Microsoft.CognitiveServices/accounts/$OpenAIResourceName"
 $miRbacRef = @(
     @{ Role = "Reader";                         Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "Resource Graph / inventory reads across all subscriptions" },
     @{ Role = "Cost Management Reader";          Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "Cost analysis, spend trends, budgets" },
