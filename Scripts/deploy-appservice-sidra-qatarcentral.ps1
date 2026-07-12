@@ -528,9 +528,11 @@ Write-Success "Location: $Location"
 # 3b) Azure OpenAI region. OpenAI is NOT offered in some regions (e.g. Qatar
 # Central), so it may live in a different region than the app. Cross-region is
 # fine (in Private mode the Private Endpoint is created in the app's VNet).
+# For this Qatar Central variant the recommended OpenAI region is Sweden Central
+# (alternative: West Europe) - the app stays in Qatar Central, OpenAI elsewhere.
 $openAiCapableRegions = @("swedencentral","westeurope","northeurope","eastus","eastus2","francecentral","uksouth","switzerlandnorth")
 if ([string]::IsNullOrWhiteSpace($OpenAILocation)) {
-    if ($openAiCapableRegions -contains $Location.ToLower()) { $OpenAILocation = $Location } else { $OpenAILocation = "westeurope" }
+    if ($openAiCapableRegions -contains $Location.ToLower()) { $OpenAILocation = $Location } else { $OpenAILocation = "swedencentral" }
 }
 if (-not $PSBoundParameters.ContainsKey('OpenAILocation')) {
     $oaiLocInput = Read-Host "  Azure OpenAI region [default: $OpenAILocation]"
