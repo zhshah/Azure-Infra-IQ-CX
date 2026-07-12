@@ -25,7 +25,9 @@
     
     WHAT THIS SCRIPT DOES:
     ──────────────────────
-    1. Creates/reuses Azure OpenAI resource + deploys the newest available GPT model (GPT-5.5 first, graceful fallback)
+    1. Azure OpenAI — either CREATES a new resource + deploys the newest GPT model (GPT-5.5 first,
+       graceful fallback), OR REUSES an EXISTING resource + its model deployment (e.g. a PTU /
+       Provisioned deployment). Controlled by -OpenAIMode (New | Existing); asked interactively.
     2. Creates App Service Plan (Linux, Python 3.11)
     3. Creates Web App with System-Assigned Managed Identity
     4. Configures environment variables
@@ -190,6 +192,30 @@ param(
     
     [Parameter(Mandatory = $false)]
     [string]$OpenAIApiVersion = "2024-08-01-preview",
+
+    # ── Azure OpenAI source: create a NEW resource, or reuse an EXISTING one ──
+    # 'New'      = the script creates a new Azure OpenAI account + model deployment.
+    # 'Existing' = reuse a customer-provided Azure OpenAI resource + its existing model
+    #              deployment (e.g. a PTU / Provisioned deployment in Sweden Central).
+    #              No new OpenAI account or model deployment is created.
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("New", "Existing")]
+    [string]$OpenAIMode = "",
+
+    # [Existing mode] Resource group that holds the customer's existing Azure OpenAI resource
+    # (may differ from the app's resource group). Defaults to $ResourceGroupName when blank.
+    [Parameter(Mandatory = $false)]
+    [string]$OpenAIResourceGroup = "",
+
+    # [Existing mode - optional] Provide the endpoint + key directly to SKIP any control-plane
+    # (az cognitiveservices) lookups - useful when the deploying identity cannot read the OpenAI
+    # resource but the customer supplies its endpoint/key. When blank, the script resolves them
+    # from the existing resource via its name + resource group.
+    [Parameter(Mandatory = $false)]
+    [string]$OpenAIEndpoint = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$OpenAIKey = "",
     
     [Parameter(Mandatory = $false)]
     [ValidateSet("Auto", "P4mv3", "P4mv4", "P3mv4", "P3mv3", "P3v4", "P3v3", "P2v3", "P1v3", "P0v3", "P3v2", "P2v2", "P1v2", "S1", "S2", "S3", "B1", "B2", "B3")]
@@ -525,20 +551,65 @@ if (-not $PSBoundParameters.ContainsKey('Location')) {
 }
 Write-Success "Location: $Location"
 
-# 3b) Azure OpenAI region. OpenAI is NOT offered in some regions (e.g. Qatar
-# Central), so it may live in a different region than the app. Cross-region is
-# fine (in Private mode the Private Endpoint is created in the app's VNet).
-# For this Qatar Central variant the recommended OpenAI region is Sweden Central
-# (alternative: West Europe) - the app stays in Qatar Central, OpenAI elsewhere.
-$openAiCapableRegions = @("swedencentral","westeurope","northeurope","eastus","eastus2","francecentral","uksouth","switzerlandnorth")
-if ([string]::IsNullOrWhiteSpace($OpenAILocation)) {
-    if ($openAiCapableRegions -contains $Location.ToLower()) { $OpenAILocation = $Location } else { $OpenAILocation = "swedencentral" }
+# 3a) Azure OpenAI SOURCE — create a NEW resource, or reuse an EXISTING one (e.g. a PTU /
+# Provisioned deployment the customer already has in Sweden Central). Ask if not pre-supplied.
+if ([string]::IsNullOrWhiteSpace($OpenAIMode)) {
+    Write-Host ""
+    Write-Host "  Azure OpenAI — how should the app get its model?" -ForegroundColor White
+    Write-Host "    [1] Create a NEW Azure OpenAI resource + model deployment (default)" -ForegroundColor Gray
+    Write-Host "    [2] Use an EXISTING Azure OpenAI resource (e.g. your PTU / Provisioned model in Sweden Central)" -ForegroundColor Gray
+    $modeChoice = Read-Host "  Enter choice (1/2) [default: 1]"
+    if ($modeChoice.Trim() -eq '2') { $OpenAIMode = "Existing" } else { $OpenAIMode = "New" }
 }
-if (-not $PSBoundParameters.ContainsKey('OpenAILocation')) {
-    $oaiLocInput = Read-Host "  Azure OpenAI region [default: $OpenAILocation]"
-    if (-not [string]::IsNullOrWhiteSpace($oaiLocInput)) { $OpenAILocation = $oaiLocInput.Trim() }
+Write-Success "Azure OpenAI mode: $OpenAIMode"
+
+if ($OpenAIMode -eq "Existing") {
+    # Collect the existing resource details from the customer (interactive when not passed).
+    if ([string]::IsNullOrWhiteSpace($OpenAIResourceName) -or $OpenAIResourceName -eq "openai-azure-cost-optimizer") {
+        $v = Read-Host "  Existing Azure OpenAI resource NAME"
+        if (-not [string]::IsNullOrWhiteSpace($v)) { $OpenAIResourceName = $v.Trim() }
+    }
+    if ([string]::IsNullOrWhiteSpace($OpenAIResourceGroup)) {
+        $v = Read-Host "  Resource group of the existing Azure OpenAI [default: $ResourceGroupName]"
+        $OpenAIResourceGroup = if ([string]::IsNullOrWhiteSpace($v)) { $ResourceGroupName } else { $v.Trim() }
+    }
+    if ([string]::IsNullOrWhiteSpace($OpenAIDeploymentName)) {
+        $v = Read-Host "  Existing MODEL DEPLOYMENT name (the PTU / Provisioned deployment to use)"
+        if (-not [string]::IsNullOrWhiteSpace($v)) { $OpenAIDeploymentName = $v.Trim() }
+    }
+    # Endpoint + key: optional direct entry (skips control-plane reads if the identity can't read the resource).
+    if ([string]::IsNullOrWhiteSpace($OpenAIEndpoint)) {
+        $v = Read-Host "  Existing OpenAI ENDPOINT (blank = auto-resolve from the resource)"
+        if (-not [string]::IsNullOrWhiteSpace($v)) { $OpenAIEndpoint = $v.Trim() }
+    }
+    if ([string]::IsNullOrWhiteSpace($OpenAIKey)) {
+        $v = Read-Host "  Existing OpenAI API KEY (blank = auto-resolve from the resource)"
+        if (-not [string]::IsNullOrWhiteSpace($v)) { $OpenAIKey = $v.Trim() }
+    }
+    if ([string]::IsNullOrWhiteSpace($OpenAIResourceName) -or [string]::IsNullOrWhiteSpace($OpenAIDeploymentName)) {
+        if ([string]::IsNullOrWhiteSpace($OpenAIEndpoint) -or [string]::IsNullOrWhiteSpace($OpenAIKey)) {
+            Write-Error "Existing OpenAI mode needs either (resource name + resource group + deployment name) OR (endpoint + key + deployment name)."
+            exit 1
+        }
+    }
+    Write-Success "Using existing Azure OpenAI: resource='$OpenAIResourceName' rg='$OpenAIResourceGroup' deployment='$OpenAIDeploymentName'"
 }
-Write-Success "Azure OpenAI region: $OpenAILocation"
+
+# 3b) Azure OpenAI region — only relevant when CREATING a new resource. OpenAI is NOT offered in
+# some regions (e.g. Qatar Central), so it may live in a different region than the app. Cross-
+# region is fine (in Private mode the Private Endpoint is created in the app's VNet). For this
+# Qatar Central variant the recommended OpenAI region is Sweden Central (alternative: West Europe).
+if ($OpenAIMode -eq "New") {
+    $openAiCapableRegions = @("swedencentral","westeurope","northeurope","eastus","eastus2","francecentral","uksouth","switzerlandnorth")
+    if ([string]::IsNullOrWhiteSpace($OpenAILocation)) {
+        if ($openAiCapableRegions -contains $Location.ToLower()) { $OpenAILocation = $Location } else { $OpenAILocation = "swedencentral" }
+    }
+    if (-not $PSBoundParameters.ContainsKey('OpenAILocation')) {
+        $oaiLocInput = Read-Host "  Azure OpenAI region [default: $OpenAILocation]"
+        if (-not [string]::IsNullOrWhiteSpace($oaiLocInput)) { $OpenAILocation = $oaiLocInput.Trim() }
+    }
+    Write-Success "Azure OpenAI region: $OpenAILocation"
+}
 
 # Subscription scanning model (mirrors the local server): the app DYNAMICALLY discovers
 # every subscription its managed identity can read at runtime, so the picker always
@@ -932,49 +1003,77 @@ if ($LASTEXITCODE -eq 0) {
 Write-Success "Resource group ready: $ResourceGroupName"
 
 # ============================================
-# CREATE AZURE OPENAI RESOURCE
+# CREATE / REUSE AZURE OPENAI RESOURCE
 # ============================================
-Write-Step "Step 3: Creating Azure OpenAI Resource"
+Write-Step "Step 3: Azure OpenAI Resource"
 
-$openaiExists = az cognitiveservices account show --name $OpenAIResourceName --resource-group $ResourceGroupName 2>&1
-if ($LASTEXITCODE -eq 0) {
-    Write-Info "Azure OpenAI resource '$OpenAIResourceName' already exists"
+if ($OpenAIMode -eq "Existing") {
+    # ── Reuse the customer's existing Azure OpenAI resource (e.g. PTU / Provisioned). ──
+    $oaiRg = if ([string]::IsNullOrWhiteSpace($OpenAIResourceGroup)) { $ResourceGroupName } else { $OpenAIResourceGroup }
+    if (-not [string]::IsNullOrWhiteSpace($OpenAIEndpoint) -and -not [string]::IsNullOrWhiteSpace($OpenAIKey)) {
+        # Endpoint + key supplied directly — no control-plane read needed.
+        $openaiEndpoint = $OpenAIEndpoint.TrimEnd('/') + "/"
+        $openaiKey = $OpenAIKey
+        Write-Success "Using supplied existing OpenAI endpoint (no resource lookup needed)"
+    } else {
+        # Resolve endpoint + key from the existing resource.
+        az cognitiveservices account show --name $OpenAIResourceName --resource-group $oaiRg 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Existing Azure OpenAI resource '$OpenAIResourceName' not found in resource group '$oaiRg'."
+            Write-Host "  Provide -OpenAIEndpoint and -OpenAIKey directly, or check the name / resource group." -ForegroundColor Yellow
+            exit 1
+        }
+        $openaiEndpoint = az cognitiveservices account show --name $OpenAIResourceName --resource-group $oaiRg --query "properties.endpoint" -o tsv
+        if ([string]::IsNullOrWhiteSpace($OpenAIKey)) {
+            $openaiKey = az cognitiveservices account keys list --name $OpenAIResourceName --resource-group $oaiRg --query "key1" -o tsv
+        } else {
+            $openaiKey = $OpenAIKey
+        }
+        Write-Success "Resolved existing Azure OpenAI resource: $OpenAIResourceName (rg: $oaiRg)"
+    }
+    Write-Info "OpenAI Endpoint: $openaiEndpoint"
 } else {
-    Write-Info "Creating Azure OpenAI resource '$OpenAIResourceName'..."
-    Write-Info "This may take 2-3 minutes..."
-    
-    az cognitiveservices account create `
+    # ── Create a NEW Azure OpenAI resource. ──
+    $openaiExists = az cognitiveservices account show --name $OpenAIResourceName --resource-group $ResourceGroupName 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Info "Azure OpenAI resource '$OpenAIResourceName' already exists"
+    } else {
+        Write-Info "Creating Azure OpenAI resource '$OpenAIResourceName'..."
+        Write-Info "This may take 2-3 minutes..."
+
+        az cognitiveservices account create `
+            --name $OpenAIResourceName `
+            --resource-group $ResourceGroupName `
+            --location $OpenAILocation `
+            --kind OpenAI `
+            --sku S0 `
+            --custom-domain $OpenAIResourceName `
+            --output none
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to create Azure OpenAI resource"
+            Write-Host "  Note: Azure OpenAI requires registration. Apply here:" -ForegroundColor Yellow
+            Write-Host "  https://aka.ms/oai/access" -ForegroundColor Yellow
+            exit 1
+        }
+    }
+    Write-Success "Azure OpenAI resource ready: $OpenAIResourceName"
+
+    # Get OpenAI endpoint
+    $openaiEndpoint = az cognitiveservices account show `
         --name $OpenAIResourceName `
         --resource-group $ResourceGroupName `
-        --location $OpenAILocation `
-        --kind OpenAI `
-        --sku S0 `
-        --custom-domain $OpenAIResourceName `
-        --output none
-    
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to create Azure OpenAI resource"
-        Write-Host "  Note: Azure OpenAI requires registration. Apply here:" -ForegroundColor Yellow
-        Write-Host "  https://aka.ms/oai/access" -ForegroundColor Yellow
-        exit 1
-    }
+        --query "properties.endpoint" -o tsv
+
+    Write-Info "OpenAI Endpoint: $openaiEndpoint"
+
+    # Capture an API key - this app authenticates to Azure OpenAI with a key
+    # (AI_PROVIDER=azure_openai), not AAD.
+    $openaiKey = az cognitiveservices account keys list `
+        --name $OpenAIResourceName `
+        --resource-group $ResourceGroupName `
+        --query "key1" -o tsv
 }
-Write-Success "Azure OpenAI resource ready: $OpenAIResourceName"
-
-# Get OpenAI endpoint
-$openaiEndpoint = az cognitiveservices account show `
-    --name $OpenAIResourceName `
-    --resource-group $ResourceGroupName `
-    --query "properties.endpoint" -o tsv
-
-Write-Info "OpenAI Endpoint: $openaiEndpoint"
-
-# Capture an API key - this app authenticates to Azure OpenAI with a key
-# (AI_PROVIDER=azure_openai), not AAD.
-$openaiKey = az cognitiveservices account keys list `
-    --name $OpenAIResourceName `
-    --resource-group $ResourceGroupName `
-    --query "key1" -o tsv
 
 # ============================================
 # DEPLOY AZURE OPENAI MODEL
@@ -988,8 +1087,23 @@ $deployedVersion = ""
 $deployedSku = ""
 $deployedCapacity = ""
 
-# Deployment-name policy: blank = name the deployment after the ACTUAL model deployed (newest GPT first).
-$useModelAsName = [string]::IsNullOrWhiteSpace($OpenAIDeploymentName)
+if ($OpenAIMode -eq "Existing") {
+    # ── EXISTING resource (e.g. PTU): DO NOT create a model deployment. Use the customer's
+    #    existing deployment name as-is; best-effort read of its real model for the summary. ──
+    $oaiRg = if ([string]::IsNullOrWhiteSpace($OpenAIResourceGroup)) { $ResourceGroupName } else { $OpenAIResourceGroup }
+    if ([string]::IsNullOrWhiteSpace($OpenAIDeploymentName)) {
+        Write-Error "Existing OpenAI mode requires the model deployment name (-OpenAIDeploymentName). Aborting."
+        exit 1
+    }
+    Write-Info "Using existing model deployment '$OpenAIDeploymentName' on '$OpenAIResourceName' (no new deployment created)."
+    # Best-effort: read the real model/version/SKU (works when the identity can read the resource).
+    $deployedModel   = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --deployment-name $OpenAIDeploymentName --query "properties.model.name" -o tsv 2>$null
+    $deployedVersion = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --deployment-name $OpenAIDeploymentName --query "properties.model.version" -o tsv 2>$null
+    $deployedSku     = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --deployment-name $OpenAIDeploymentName --query "sku.name" -o tsv 2>$null
+    if ($deployedSku) { Write-Success "Existing deployment SKU: $deployedSku (e.g. ProvisionedManaged = PTU)" }
+} else {
+    # Deployment-name policy: blank = name the deployment after the ACTUAL model deployed (newest GPT first).
+    $useModelAsName = [string]::IsNullOrWhiteSpace($OpenAIDeploymentName)
 if ($useModelAsName) {
     # Idempotent re-runs: reuse the first existing deployment on the resource, if any.
     $existingName = az cognitiveservices account deployment list --name $OpenAIResourceName --resource-group $ResourceGroupName --query "[0].name" -o tsv 2>$null
@@ -1132,6 +1246,7 @@ if ($modelExists) {
         exit 1
     }
 }
+}
 # Friendly label that shows the REAL model behind the deployment alias.
 if ($deployedModel) {
     $modelDisplay = "$deployedModel $deployedVersion [$deployedSku" + $(if ($deployedCapacity) { ", ${deployedCapacity}K TPM" }) + "]"
@@ -1143,7 +1258,12 @@ Write-Success "Model deployed: $modelDisplay  (deployment name: '$OpenAIDeployme
 # ============================================
 # PRIVATE ENDPOINT FOR OPENAI (PRIVATE MODE)
 # ============================================
-if ($DeploymentMode -eq "Private") {
+if ($DeploymentMode -eq "Private" -and $OpenAIMode -eq "Existing") {
+    Write-Info "Existing OpenAI mode: skipping OpenAI Private Endpoint creation — the customer's existing"
+    Write-Info "Azure OpenAI resource keeps its own networking. Ensure the app can reach it (public key access,"
+    Write-Info "or an existing Private Endpoint/DNS the customer already has for that resource)."
+}
+if ($DeploymentMode -eq "Private" -and $OpenAIMode -ne "Existing") {
     Write-Step "Step 4b: Creating Private Endpoint for Azure OpenAI"
     
     Write-Info "Disabling public network access on Azure OpenAI..."
@@ -2046,7 +2166,12 @@ Write-Host "  ──────────────────────
 # collected in $permIssues and printed at the end with a ready-to-run command so an
 # admin can grant it manually later.
 $mgScope     = "/providers/Microsoft.Management/managementGroups/$EntraTenantId"
-$openaiScope = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.CognitiveServices/accounts/$OpenAIResourceName"
+# In Existing OpenAI mode the resource lives in the customer's own resource group (and the app
+# authenticates with the KEY, so this RBAC grant is optional). Point the scope at the real RG so
+# any attempted grant targets the correct resource. Skip the scope entirely if endpoint+key were
+# supplied directly without a resource name.
+$openaiRgForScope = if ($OpenAIMode -eq "Existing" -and -not [string]::IsNullOrWhiteSpace($OpenAIResourceGroup)) { $OpenAIResourceGroup } else { $ResourceGroupName }
+$openaiScope = "/subscriptions/$SubscriptionId/resourceGroups/$openaiRgForScope/providers/Microsoft.CognitiveServices/accounts/$OpenAIResourceName"
 $miRbacRef = @(
     @{ Role = "Reader";                         Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "Resource Graph / inventory reads across all subscriptions" },
     @{ Role = "Cost Management Reader";          Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "Cost analysis, spend trends, budgets" },
