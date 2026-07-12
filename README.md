@@ -196,7 +196,7 @@ OpenAI + model, optional SQL/Redis, the Container App with a Managed Identity, a
 ### Step 1 — Clone
 
 ```bash
-git clone https://github.com/zhshah/Azure-Infra-IQ-CX.git
+git clone -b FinOps-4-July https://github.com/zhshah/Azure-Infra-IQ-CX.git
 cd Azure-Infra-IQ-CX
 ```
 
@@ -206,6 +206,12 @@ Follow [docs/ENTRA_APP_SETUP.md](docs/ENTRA_APP_SETUP.md) and note the **Applica
 (client) ID** and **Directory (tenant) ID**.
 
 ### Step 3 — Run the deployment
+
+> **Before running** — if you see a *"cannot be loaded because running scripts is disabled"* or *"digitally signed"* error, run this once per terminal session:
+>
+> ```powershell
+> Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+> ```
 
 ```powershell
 az login
@@ -304,6 +310,12 @@ subscription** (the hub-spoke pattern most enterprises use).
    `-PrivateDnsZoneSubscriptionId` and `-PrivateDnsZoneResourceGroupName` (it prompts/defaults otherwise).
 
 ### Private deployment commands
+
+> **Before running** — if you see a *"cannot be loaded because running scripts is disabled"* or *"digitally signed"* error, run this once per terminal session:
+>
+> ```powershell
+> Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+> ```
 
 **Basic** — PE subnet auto-created, DNS zones in the deployment subscription:
 
