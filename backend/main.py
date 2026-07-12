@@ -4305,6 +4305,44 @@ def _dashboard_allocation(dimension: str) -> Optional[FinOpsAllocationReport]:
     )
 
 
+def _analyze_allocation(dimension: str, subscription_id: Optional[str] = None) -> Optional[FinOpsAllocationReport]:
+    """Subscription-scoped allocation via the warehouse Analyze query (context-aware).
+    Maps the allocation dimension to an Analyze group-by; returns None for dimensions
+    the warehouse can't scope (e.g. tag keys), so the caller falls back."""
+    try:
+        from models.schemas import FinOpsAllocationItem
+        from services import cost_analytics_service as _ca
+        dmap = {
+            "subscriptionid": "subscription", "resourcegroupname": "resource_group",
+            "servicename": "service_name", "servicefamily": "service_family",
+            "metercategory": "meter_category", "resourcelocation": "location",
+        }
+        gb = dmap.get((dimension or "").lower())
+        if not gb:
+            return None
+        subs = [subscription_id] if subscription_id else None
+        r = _ca.analyze(group_by=gb, period="last_30d", subscription_ids=subs, top=50)
+        total = r.get("period_total_usd") or r.get("total_cost") or 0.0
+        items = [
+            FinOpsAllocationItem(
+                dimension_value=(b.get("key") or "(unassigned)"),
+                cost_usd=round(b.get("cost", 0), 2),
+                cost_pct=round(b.get("cost", 0) / (total or 1) * 100, 1),
+            )
+            for b in (r.get("breakdown") or [])
+        ]
+        if not items:
+            return None
+        return FinOpsAllocationReport(
+            dimension=dimension, dimension_label=gb.replace("_", " ").title(), items=items,
+            total_usd=round(total, 2), period_label="Last 30 days (warehouse)",
+            data_source="finops_warehouse",
+        )
+    except Exception as exc:
+        logger.warning("analyze allocation (scoped) failed: %s", exc)
+        return None
+
+
 def _warehouse_allocation(dimension: str) -> Optional[FinOpsAllocationReport]:
     """Build a cost-allocation report from the warehouse (Azure SQL) so the tab
     loads instantly from stored data when live Cost Management is slow/throttled."""
@@ -4512,15 +4550,24 @@ def _warehouse_forecast(horizon_days: int = 90) -> Optional[FinOpsForecastResult
 async def finops_allocation(
     dimension: str = "SubscriptionId",
     time_range: str = "mtd",
+    subscription_id: Optional[str] = None,
 ):
     """
     Cost allocation by any Azure dimension. Serves instantly from the warehouse
     cache (stored database data) so the tab paints immediately and never hangs;
     only falls back to a bounded live Cost Management query when the warehouse
     has no data for the requested dimension.
+
+    When `subscription_id` is supplied the report is scoped to that subscription via
+    the warehouse Analyze query (context-aware), so the tab reflects the selected sub.
     """
     _require_finops()
     loop = asyncio.get_event_loop()
+    # 0. Subscription-scoped: use the sub-aware warehouse Analyze query.
+    if subscription_id:
+        scoped = await loop.run_in_executor(_pool, lambda: _analyze_allocation(dimension, subscription_id))
+        if scoped is not None and scoped.items:
+            return _apply_sub_names(scoped, dimension)
     # 1. Warehouse-first: instant paint from stored data (sub-second).
     wh = await loop.run_in_executor(_pool, lambda: _warehouse_allocation(dimension))
     if wh is not None and wh.items:
@@ -4778,6 +4825,18 @@ async def finops_budget_alerts():
     """Return all triggered budget alerts from log."""
     _require_finops()
     return budget_svc.get_budget_alerts()
+
+
+@app.get("/api/finops/azure-cost-alerts", tags=["FinOps"])
+async def finops_azure_cost_alerts():
+    """Read the customer's EXISTING Azure Cost Management alerts (portal 'Cost alerts')
+    across in-scope subscriptions — read-only, so their configured alerts are visible
+    in the tool."""
+    _require_finops()
+    loop = asyncio.get_event_loop()
+    alerts = await loop.run_in_executor(_pool, lambda: budget_svc.get_azure_cost_alerts())
+    return {"alerts": alerts, "count": len(alerts),
+            "generated_at": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/finops/budgets/{budget_id}", response_model=FinOpsBudgetDefinition, tags=["FinOps"])
@@ -5105,19 +5164,28 @@ def _finops_ai_grounding(filters: Optional[dict]) -> Optional[dict]:
     cur = sum(_c(r) for r in sel)
     prev = sum(float(getattr(r, "cost_previous_month", 0) or 0) for r in sel)
     by_svc, by_rg, by_sub, by_reg = defaultdict(float), defaultdict(float), defaultdict(float), defaultdict(float)
+    by_tag = defaultdict(float)
+    tagged_count = 0
     for r in sel:
         c = _c(r)
         by_svc[(getattr(r, "resource_type", "") or "other").split("/")[-1]] += c
         by_rg[getattr(r, "resource_group", "") or "(none)"] += c
         by_sub[subs.get(getattr(r, "subscription_id", "") or "", (getattr(r, "subscription_id", "") or "")[:8])] += c
         by_reg[getattr(r, "location", "") or "(none)"] += c
+        _tags = getattr(r, "tags", None) or {}
+        if _tags:
+            tagged_count += 1
+            for tk, tv in _tags.items():
+                by_tag[f"{tk}={tv}"] += c
     _top = lambda d, n=8: [{"name": k, "cost": round(v, 2)} for k, v in sorted(d.items(), key=lambda x: -x[1])[:n]]
     top_resources = [{
         "name": getattr(r, "resource_name", "") or getattr(r, "resource_id", ""),
         "type": (getattr(r, "resource_type", "") or "").split("/")[-1],
         "rg": getattr(r, "resource_group", "") or "", "region": getattr(r, "location", "") or "",
         "sub": subs.get(getattr(r, "subscription_id", "") or "", ""),
+        "sku": getattr(r, "sku", None),
         "cost": round(_c(r), 2), "util_pct": getattr(r, "primary_utilization_pct", None),
+        "tags": dict(list((getattr(r, "tags", None) or {}).items())[:5]),
     } for r in sorted(sel, key=_c, reverse=True)[:15]]
     orphans = [r for r in sel if getattr(r, "is_orphan", False)]
     oversized = [r for r in sel if getattr(r, "rightsize_sku", None)]
@@ -5141,10 +5209,13 @@ def _finops_ai_grounding(filters: Optional[dict]) -> Optional[dict]:
             "spend_last_month_usd": round(prev, 2),
             "mom_pct": round((cur - prev) / prev * 100, 1) if prev > 0 else 0.0,
             "untagged_resources": sum(1 for r in sel if not (getattr(r, "tags", None) or {})),
+            "tagged_resources": tagged_count,
+            "tagged_pct": round(tagged_count / len(sel) * 100, 1) if sel else 0.0,
         },
         "top_resources_by_cost": top_resources,
         "cost_by_service": _top(by_svc), "cost_by_resource_group": _top(by_rg),
         "cost_by_subscription": _top(by_sub), "cost_by_region": _top(by_reg),
+        "cost_by_tag": _top(by_tag, 10),
         "waste_candidates": waste,
         "waste_summary": {"orphaned_count": len(orphans), "oversized_count": len(oversized)},
     }
@@ -5440,6 +5511,133 @@ async def finops_cost_flow(levels: str = "subscription,resource_group,service",
         region=region, top_per_level=top_per_level, min_pct=min_pct))
     out["data_source"] = "dashboard_cache"
     return out
+
+
+# ── Analyze — warehouse-backed Cost Analysis (Azure Cost Management parity) ────
+
+class FinOpsAnalyzeRequest(BaseModel):
+    subscription_ids: Optional[List[str]] = None    # frontend resolves MG → subs
+    group_by: str = "service_name"                  # subscription|resource_group|service_name|service_family|meter_category|location
+    period: Optional[str] = None                    # today|last_7d|last_week|last_30d|this_month|last_month|last_3m ...
+    date_from: Optional[str] = None                 # custom range (YYYY-MM-DD)
+    date_to: Optional[str] = None
+    cost_type: str = "actual"                       # actual|amortized
+    resource_group: Optional[str] = None
+    top: int = 12
+    compare: bool = False                           # compare vs previous equal-length period
+    compare_from: Optional[str] = None              # explicit comparison range (overrides auto)
+    compare_to: Optional[str] = None
+
+
+@app.post("/api/finops/analyze", tags=["FinOps"])
+async def finops_analyze(req: FinOpsAnalyzeRequest):
+    """Warehouse-backed Analyze: cost by scope + custom period + group-by +
+    accumulated/daily + actual/amortized, served entirely from Azure SQL (no Cost
+    Management API at view time — immune to throttling)."""
+    _require_finops()
+    from services import cost_analytics_service as _ca
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, lambda: _ca.analyze(
+        subscription_ids=req.subscription_ids, group_by=req.group_by, period=req.period,
+        date_from=req.date_from, date_to=req.date_to, cost_type=req.cost_type,
+        resource_group=req.resource_group, top=req.top,
+        compare=req.compare, compare_from=req.compare_from, compare_to=req.compare_to))
+
+
+@app.get("/api/finops/analyze/meta", tags=["FinOps"])
+async def finops_analyze_meta():
+    """Analyze metadata: available group-by dimensions + warehouse data coverage
+    (data-through-date) so the UI can label freshness and show a real empty-state."""
+    _require_finops()
+    from services import cost_analytics_service as _ca
+    loop = asyncio.get_event_loop()
+    dims = _ca.available_dimensions()
+    cov = await loop.run_in_executor(_pool, _ca.coverage)
+    return {"dimensions": dims, "coverage": cov}
+
+
+@app.get("/api/finops/cost-insights", tags=["FinOps"])
+async def finops_cost_insights():
+    """Grounded, filter-ready per-resource cost dataset for the Cost Insights view.
+
+    Annotates every cached resource with its real run-rate cost PLUS the dimensions
+    that "translate cost into ideas": Azure service, region, subscription, RG, SKU tier,
+    storage redundancy (LRS/ZRS/GRS/GZRS — parsed from the sku), zone-resilience posture
+    + geo-redundancy (from the genuine BCDR zone assessment), protection posture, waste,
+    and modernization target + monthly saving. The client filters + charts this in-memory,
+    so every graph reacts instantly with no Cost Management API call (throttle-immune)."""
+    _require_finops()
+    from services import finops_insights_service as _ci
+
+    data = _cache.get("data:*") or _cache.get("data")
+    if not data:
+        return {"generated_at": None, "data_source": "no cached estate", "summary": {"total_resources": 0}, "rows": []}
+
+    # Resource dicts.
+    resources: list = []
+    for r in (data.resources or []):
+        try:
+            resources.append(r.model_dump())
+        except Exception:
+            continue
+
+    # Genuine zone assessment (cached) → {id: {zone_status, geo_redundant}}.
+    zone_by_id: dict = {}
+    try:
+        for a in _get_bcdr_assessments():
+            ad = a.to_dict() if hasattr(a, "to_dict") else dict(a)
+            rid = (ad.get("resource_id") or "").lower()
+            if rid:
+                zone_by_id[rid] = {"zone_status": ad.get("zone_status"), "geo_redundant": ad.get("geo_redundant")}
+    except Exception as exc:
+        logger.warning("cost-insights: zone assessment join failed: %s", exc)
+
+    # Modernization opportunities (real target + grounded $ = monthly_cost × savings%).
+    modern_by_id: dict = {}
+    try:
+        for mo in (data.modernization_opportunities or []):
+            d = mo.model_dump() if hasattr(mo, "model_dump") else dict(mo)
+            rid = (d.get("resource_id") or "").lower()
+            if not rid:
+                continue
+            sav = round((d.get("monthly_cost", 0) or 0) * (d.get("estimated_savings_pct", 0) or 0) / 100.0, 2)
+            current = d.get("current_config") or ""
+            target = d.get("target_service") or ""
+            modern_by_id[rid] = {
+                "opportunity_type": target or d.get("migration_category") or "Modernization",
+                "title": (f"{current} → {target}".strip(" →") or target),
+                "estimated_savings_usd": sav,
+                "complexity": d.get("complexity"),
+            }
+    except Exception as exc:
+        logger.warning("cost-insights: modernization join failed: %s", exc)
+
+    # Friendly subscription names.
+    sub_names: dict = {}
+    try:
+        for s in (settings_svc.get() or {}).get("subscriptions", []):
+            if s.get("id"):
+                sub_names[s["id"]] = s.get("name", "")
+        for sid, snm in (_sub_name_map() or {}).items():
+            if snm:
+                sub_names[sid] = snm
+    except Exception:
+        pass
+
+    loop = asyncio.get_event_loop()
+    # Authoritative estate total for THIS MONTH from the warehouse (throttle-immune,
+    # dimension-level) — the single source of truth so the headline reconciles with
+    # the Analyze tab; the per-resource sum is used only for the relative breakdown.
+    auth_total = 0.0
+    try:
+        from services import cost_analytics_service as _ca
+        auth_total = await loop.run_in_executor(_pool, lambda: _ca.estate_total(period="last_30d"))
+    except Exception as exc:
+        logger.debug("cost-insights authoritative total skipped: %s", exc)
+
+    return await loop.run_in_executor(
+        _pool, lambda: _ci.build_cost_insights(resources, zone_by_id, modern_by_id, sub_names, authoritative_total=auth_total)
+    )
 
 
 @app.get("/api/finops/anomalies", tags=["FinOps"])
@@ -5855,6 +6053,11 @@ def _style_bcdr_workbook(wb, max_fill_col: int = 12) -> None:
                     pass
 
 
+# FinOps deliverables reuse the SAME professional dark theme as the BCDR/BIA reports
+# so every exported workbook across the product shares one polished visual identity.
+_style_export_workbook = _style_bcdr_workbook
+
+
 # ── XLSX Export (cost-explorer query → formatted XLSX) ───────────────────────
 
 @app.post("/api/finops/export/xlsx", tags=["FinOps"])
@@ -5909,6 +6112,8 @@ async def finops_export_xlsx(query: FinOpsCostExplorerQuery):
             ws.column_dimensions[get_column_letter(col[0].column)].width = min(w + 4, 50)
 
     wb = openpyxl.Workbook()
+    CUR_FMT = '$#,##0.00'
+    PCT_FMT = '0.0"%"'
 
     # Sheet 1: Cost by Date
     ws1 = wb.active; ws1.title = "Cost by Date"
@@ -5918,17 +6123,19 @@ async def finops_export_xlsx(query: FinOpsCostExplorerQuery):
         ws1.cell(row=ri, column=1, value=dp.date)
         if dp.breakdown:
             for ci, lbl in enumerate(labels, 2):
-                ws1.cell(row=ri, column=ci, value=round(dp.breakdown.get(lbl, 0), 2))
+                c = ws1.cell(row=ri, column=ci, value=round(dp.breakdown.get(lbl, 0), 2))
+                c.number_format = CUR_FMT
         else:
-            ws1.cell(row=ri, column=2, value=round(dp.cost_usd, 2))
+            c = ws1.cell(row=ri, column=2, value=round(dp.cost_usd, 2))
+            c.number_format = CUR_FMT
 
     # Sheet 2: Top Contributors
     ws2 = wb.create_sheet("Top Contributors")
     _header(ws2, ["Dimension", "Cost (USD)", "% of Total"])
     for ri, tc in enumerate(result.top_contributors or [], 2):
         ws2.cell(row=ri, column=1, value=tc.get("label", ""))
-        ws2.cell(row=ri, column=2, value=round(tc.get("cost", 0), 2))
-        ws2.cell(row=ri, column=3, value=tc.get("pct", 0))
+        ws2.cell(row=ri, column=2, value=round(tc.get("cost", 0), 2)).number_format = CUR_FMT
+        ws2.cell(row=ri, column=3, value=tc.get("pct", 0)).number_format = PCT_FMT
 
     # Sheet 3: Summary
     ws3 = wb.create_sheet("Summary")
@@ -5949,6 +6156,7 @@ async def finops_export_xlsx(query: FinOpsCostExplorerQuery):
     for ws in [ws1, ws2, ws3]:
         _autowidth(ws)
 
+    _style_export_workbook(wb, max_fill_col=20)
     buf = BytesIO(); wb.save(buf); buf.seek(0)
     fname = f"azure-cost-{result.date_from}-to-{result.date_to}.xlsx"
     return StreamingResponse(buf,
@@ -5973,24 +6181,41 @@ async def finops_export_generic_xlsx(payload: Dict[str, Any] = Body(...)):
     sheets = [s for s in (payload.get("sheets") or []) if isinstance(s, dict)]
     wb = openpyxl.Workbook()
     hfill = PatternFill("solid", fgColor="1E3A5F"); hfont = Font(bold=True, color="FFFFFF")
+    CUR_FMT = '$#,##0.00'
+    PCT_FMT = '0.0"%"'
+
+    def _col_fmt(header: str):
+        """Infer a number format from the column header name."""
+        h = str(header or "").lower()
+        if any(t in h for t in ("usd", "cost", "savings", "amount", "spend", "price", "$")):
+            return CUR_FMT
+        if "%" in h or "pct" in h or "percent" in h:
+            return PCT_FMT
+        return None
+
     first = True
     for sh in sheets:
         name = (str(sh.get("name") or "Sheet"))[:31] or "Sheet"
         cols = sh.get("columns") or []
         rows = sh.get("rows") or []
+        col_fmts = [_col_fmt(c) for c in cols]
         ws = wb.active if first else wb.create_sheet()
         ws.title = name; first = False
         for ci, c in enumerate(cols, 1):
             cell = ws.cell(row=1, column=ci, value=str(c)); cell.font = hfont; cell.fill = hfill
         for ri, row in enumerate(rows, 2):
             for ci, val in enumerate(row if isinstance(row, list) else [row], 1):
-                ws.cell(row=ri, column=ci, value=val)
+                cell = ws.cell(row=ri, column=ci, value=val)
+                fmt = col_fmts[ci - 1] if ci - 1 < len(col_fmts) else None
+                if fmt and isinstance(val, (int, float)) and not isinstance(val, bool):
+                    cell.number_format = fmt
         for ci in range(1, max(1, len(cols)) + 1):
             widths = [len(str(cols[ci - 1])) if ci - 1 < len(cols) else 0]
             widths += [len(str(r[ci - 1])) for r in rows if isinstance(r, list) and ci - 1 < len(r)]
             ws.column_dimensions[get_column_letter(ci)].width = min(max(widths + [8]) + 2, 60)
     if first:
         wb.active.title = "Empty"
+    _style_export_workbook(wb, max_fill_col=20)
     buf = BytesIO(); wb.save(buf); buf.seek(0)
     safe = re.sub(r"[^A-Za-z0-9_-]+", "-", title.lower())[:40].strip("-") or "finops"
     fname = f"{safe}-{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
@@ -6000,6 +6225,266 @@ async def finops_export_generic_xlsx(payload: Dict[str, Any] = Body(...)):
 
 
 # ── Full FinOps Report XLSX ────────────────────────────────────────────────────
+
+class FinOpsReportBody(BaseModel):
+    report_type: str = "executive"
+    scope: Optional[List[str]] = None    # subscription ids; defaults to all scanned
+    customer: str = ""
+    use_ai: bool = True
+
+
+class FinOpsReportExportBody(BaseModel):
+    report: Dict[str, Any]
+
+
+@app.post("/api/finops/exec-report/generate", tags=["FinOps"])
+async def finops_exec_report_generate(body: FinOpsReportBody):
+    """Generate a consultant-grade, board-ready FinOps report (Executive Cost Summary,
+    Optimization & Savings, Allocation/Showback, Commitment Coverage, Budget & Forecast,
+    or Anomaly). EVERY figure is sourced from Azure Cost Management (the warehouse) — the
+    AI writes only the narrative, constrained to the supplied numbers."""
+    _require_finops()
+    from services import finops_report_service as _frs
+    from services import finops_metrics_service as _ms
+
+    sub_ids = [s for s in (body.scope or []) if s] or finops_data_svc.get_subscription_ids()
+
+    # Friendly subscription names — merge every available source so the report never shows
+    # raw GUIDs: settings ∪ SubscriptionClient (_resolve_all_subscription_names) ∪ _sub_name_map.
+    sub_names: Dict[str, str] = {}
+    try:
+        _settings = settings_svc.get()
+        for s in _settings.get("subscriptions", []):
+            if s.get("id") and s.get("name"):
+                sub_names[s["id"]] = s["name"]
+    except Exception:
+        pass
+    try:
+        for _sid, _snm in (_resolve_all_subscription_names() or {}).items():
+            if _snm:
+                sub_names[_sid] = _snm
+    except Exception:
+        pass
+    try:
+        for _sid, _snm in (_sub_name_map() or {}).items():
+            if _snm:
+                sub_names[_sid] = _snm
+    except Exception:
+        pass
+
+    # Subscription → management-group name map (immediate parent MG), reusing the scope-tree
+    # logic so the report can show which management group each subscription sits under.
+    sub_mg: Dict[str, str] = {}
+    try:
+        _mgdata = await list_management_groups()
+        for _mg in sorted((_mgdata.get("management_groups") or []), key=lambda m: m.get("level", 0)):
+            for _sid in (_mg.get("subscription_ids") or []):
+                sub_mg[_sid] = _mg.get("name") or _mg.get("id")  # deeper MG (later) overwrites → immediate parent
+    except Exception as exc:
+        logger.warning("exec-report: management-group map unavailable: %s", exc)
+
+    loop = asyncio.get_event_loop()
+
+    # Grounded context: per-resource cost-at-risk / coverage + canonical metrics.
+    try:
+        insights = await finops_cost_insights()
+    except Exception as exc:
+        logger.warning("exec-report: cost insights unavailable: %s", exc)
+        insights = {}
+    try:
+        metrics = await loop.run_in_executor(_pool, lambda: _ms.get_metrics_summary(subscription_ids=sub_ids))
+    except Exception as exc:
+        logger.warning("exec-report: metrics unavailable: %s", exc)
+        metrics = {}
+
+    try:
+        report = await loop.run_in_executor(_pool, lambda: _frs.generate_finops_report(
+            report_type=body.report_type,
+            subscription_ids=sub_ids,
+            sub_names=sub_names,
+            insights=insights,
+            metrics=metrics,
+            customer=body.customer,
+            use_ai=body.use_ai,
+            sub_mg=sub_mg,
+        ))
+    except Exception as exc:
+        logger.error("FinOps report generation failed: %s", exc)
+        _low = str(exc).lower()
+        if any(k in _low for k in ("connection error", "timeout", "getaddrinfo", "temporarily unavailable",
+                                   "service unavailable", "apiconnection")):
+            raise HTTPException(status_code=503, detail="AI service is unreachable. Verify the Azure OpenAI endpoint/key, then retry.")
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {exc}")
+    return report
+
+
+@app.post("/api/finops/exec-report/export.xlsx", tags=["FinOps"])
+async def finops_exec_report_export_xlsx(body: FinOpsReportExportBody):
+    """Export a generated FinOps report as a branded, multi-sheet Excel workbook
+    (parity with the on-screen report + the PDF export)."""
+    _require_finops()
+    rep = body.report or {}
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+    except ImportError:
+        raise HTTPException(status_code=500, detail="openpyxl is not installed on the server")
+    from io import BytesIO
+
+    HFILL = PatternFill("solid", fgColor="1E3A5F"); HFONT = Font(bold=True, color="FFFFFF", size=11)
+    TITLE = Font(bold=True, color="2D8CFF", size=15); SUBTLE = Font(color="64748B", italic=True, size=9)
+    BOLD = Font(bold=True); WRAP = Alignment(wrap_text=True, vertical="top"); CUR = '$#,##0.00'
+
+    def hdr(ws, headers, row=1):
+        for c, h in enumerate(headers, 1):
+            cell = ws.cell(row=row, column=c, value=h); cell.fill = HFILL; cell.font = HFONT
+            cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    def widths(ws, w):
+        for col, val in w.items():
+            ws.column_dimensions[col].width = val
+
+    def section(ws, title, row, span=5):
+        cell = ws.cell(row=row, column=1, value=title); cell.font = HFONT; cell.fill = HFILL
+        for c in range(2, span + 1):
+            ws.cell(row=row, column=c).fill = HFILL
+        return row + 1
+
+    def para(ws, text, row, span=5):
+        cell = ws.cell(row=row, column=1, value=text if text not in (None, "") else "—"); cell.alignment = WRAP
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span); return row + 1
+
+    def bullets(ws, items, row, span=5):
+        for x in (items or []):
+            txt = x if isinstance(x, str) else (
+                x.get("title") or x.get("action") or x.get("detail") or str(x) if isinstance(x, dict) else str(x))
+            cell = ws.cell(row=row, column=1, value=f"• {txt}"); cell.alignment = WRAP
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span); row += 1
+        return row
+
+    cover = rep.get("cover", {}); es = rep.get("executive_summary", {})
+    so = rep.get("spend_overview", {}); cust = cover.get("customer_name", "Customer")
+    wb = openpyxl.Workbook()
+
+    # 1 — Executive Summary
+    ws = wb.active; ws.title = "Executive Summary"
+    try:
+        _xlsx_brand_logo(ws, "E1")
+    except Exception:
+        pass
+    ws["A1"] = f"{cust} — {rep.get('report_type_label', 'FinOps Report')}"; ws["A1"].font = TITLE
+    ws["A2"] = (f"Prepared by {cover.get('prepared_by', '')}  ·  v{cover.get('report_version', '')}  ·  "
+                f"{cover.get('date', '')}  ·  {cover.get('period_label', '')}  ·  Confidential"); ws["A2"].font = SUBTLE
+    r = 4
+    for k, v in [("Estate Spend (30d)", so.get("total_30d")), ("Prior 30 days", so.get("prior_30d")),
+                 ("Change (MoM)", f"{so.get('delta_pct')}%" if so.get("delta_pct") is not None else "—"),
+                 ("Forecast (run-rate)", so.get("forecast_eom")),
+                 ("Efficiency Score", f"{rep.get('efficiency_score', '—')} / 100"),
+                 ("Subscriptions", rep.get("grounding", {}).get("subscriptions_count", 0)),
+                 ("Data through", rep.get("grounding", {}).get("data_through", "—")),
+                 ("AI Model", rep.get("model", "—"))]:
+        ws.cell(row=r, column=1, value=k).font = BOLD
+        c2 = ws.cell(row=r, column=2, value=v)
+        if isinstance(v, (int, float)) and k in ("Estate Spend (30d)", "Prior 30 days", "Forecast (run-rate)"):
+            c2.number_format = CUR
+        r += 1
+    r += 1; r = section(ws, "Headline", r); r = para(ws, es.get("headline", ""), r)
+    r += 1; r = section(ws, "Executive Narrative", r); r = para(ws, es.get("narrative", ""), r)
+    r += 1; r = section(ws, "Key Findings", r); r = bullets(ws, es.get("key_findings", []), r)
+    widths(ws, {"A": 34, "B": 60, "C": 16, "D": 16, "E": 16})
+
+    # 2 — Spend Overview (services / regions / resource groups)
+    ws = wb.create_sheet("Spend Overview")
+    ws["A1"] = "Spend Overview"; ws["A1"].font = TITLE
+    row = 3; row = section(ws, "Top Services (by service family)", row)
+    hdr(ws, ["Service family", "Cost (USD)", "Prev (USD)", "MoM Δ (USD)", "MoM Δ %"], row); row += 1
+    for s in (so.get("by_service") or []):
+        ws.cell(row=row, column=1, value=s.get("name"))
+        ws.cell(row=row, column=2, value=s.get("cost")).number_format = CUR
+        if s.get("prev") is not None:
+            ws.cell(row=row, column=3, value=s.get("prev")).number_format = CUR
+        if s.get("delta_usd") is not None:
+            ws.cell(row=row, column=4, value=s.get("delta_usd")).number_format = CUR
+        if s.get("delta_pct") is not None:
+            ws.cell(row=row, column=5, value=f"{s.get('delta_pct')}%")
+        row += 1
+    row += 1; row = section(ws, "Top Regions", row)
+    hdr(ws, ["Region", "Cost (USD)"], row); row += 1
+    for s in (so.get("by_region") or []):
+        ws.cell(row=row, column=1, value=s.get("name"))
+        ws.cell(row=row, column=2, value=s.get("cost")).number_format = CUR; row += 1
+    row += 1; row = section(ws, "Top Resource Groups", row)
+    hdr(ws, ["Resource Group", "Cost (USD)"], row); row += 1
+    for s in (so.get("by_resource_group") or []):
+        ws.cell(row=row, column=1, value=s.get("name"))
+        ws.cell(row=row, column=2, value=s.get("cost")).number_format = CUR; row += 1
+    widths(ws, {"A": 40, "B": 16, "C": 16, "D": 16, "E": 12})
+
+    # 3 — Subscriptions
+    ws = wb.create_sheet("Subscriptions")
+    ws["A1"] = "Cost by Subscription"; ws["A1"].font = TITLE
+    hdr(ws, ["Subscription", "Management group", "Cost (USD)", "Prev (USD)", "MoM Δ %", "Share %", "Top services"], 3)
+    row = 4
+    for s in (rep.get("subscriptions") or []):
+        ws.cell(row=row, column=1, value=s.get("name"))
+        ws.cell(row=row, column=2, value=s.get("management_group") or "—")
+        ws.cell(row=row, column=3, value=s.get("total")).number_format = CUR
+        if s.get("prev") is not None:
+            ws.cell(row=row, column=4, value=s.get("prev")).number_format = CUR
+        if s.get("delta_pct") is not None:
+            ws.cell(row=row, column=5, value=f"{s.get('delta_pct')}%")
+        if s.get("share_pct") is not None:
+            ws.cell(row=row, column=6, value=f"{s.get('share_pct')}%")
+        ws.cell(row=row, column=7, value=", ".join(f"{x.get('name')} (${x.get('cost'):,.0f})"
+                                                    for x in (s.get("top_services") or [])[:5])).alignment = WRAP
+        row += 1
+    widths(ws, {"A": 30, "B": 24, "C": 16, "D": 16, "E": 12, "F": 10, "G": 56})
+
+    # 4 — Savings & Cost at Risk
+    ws = wb.create_sheet("Savings & Risk")
+    ws["A1"] = "Savings & Cost at Risk"; ws["A1"].font = TITLE
+    sav = rep.get("savings", {}); car = rep.get("cost_at_risk", {})
+    row = 3; row = section(ws, "Identified Savings", row)
+    for k, v in [("Monthly run-rate", sav.get("monthly_run_rate")), ("Annualised potential", sav.get("annualized_potential")),
+                 ("Advisor (monthly)", sav.get("advisor_monthly")), ("Rightsize (monthly)", sav.get("rightsize_monthly")),
+                 ("Orphaned (monthly)", sav.get("orphaned_monthly")), ("Modernization (monthly)", sav.get("modernization_monthly")),
+                 ("Waste", sav.get("waste_usd"))]:
+        ws.cell(row=row, column=1, value=k).font = BOLD
+        ws.cell(row=row, column=2, value=v).number_format = CUR; row += 1
+    row += 1; row = section(ws, "Cost at Risk", row)
+    for k, v in [("Unprotected (no backup)", car.get("unprotected_usd")), ("Not zone-redundant", car.get("non_zone_redundant_usd")),
+                 ("Untagged (unallocated)", car.get("untagged_usd")), ("Idle / orphaned", car.get("idle_orphaned_usd"))]:
+        ws.cell(row=row, column=1, value=k).font = BOLD
+        ws.cell(row=row, column=2, value=v).number_format = CUR; row += 1
+    widths(ws, {"A": 34, "B": 18})
+
+    # 5 — Recommendations
+    ws = wb.create_sheet("Recommendations")
+    ws["A1"] = "Recommendations"; ws["A1"].font = TITLE
+    hdr(ws, ["Priority", "Recommendation", "Detail", "Impact", "Effort"], 3)
+    row = 4
+    for rec in (rep.get("recommendations") or []):
+        if not isinstance(rec, dict):
+            continue
+        ws.cell(row=row, column=1, value=rec.get("priority", ""))
+        ws.cell(row=row, column=2, value=rec.get("title", ""))
+        ws.cell(row=row, column=3, value=rec.get("detail", "")).alignment = WRAP
+        ws.cell(row=row, column=4, value=rec.get("impact", ""))
+        ws.cell(row=row, column=5, value=rec.get("effort", "")); row += 1
+    widths(ws, {"A": 12, "B": 40, "C": 60, "D": 20, "E": 12})
+
+    try:
+        _style_export_workbook(wb, max_fill_col=20)
+    except Exception:
+        pass
+
+    buf = BytesIO(); wb.save(buf); buf.seek(0)
+    _rt = (rep.get("report_type") or "finops").replace(" ", "-")
+    fname = f"{cust.replace(' ', '-')}-FinOps-{_rt}-{datetime.now().strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
 
 @app.get("/api/finops/report/xlsx", tags=["FinOps"])
 async def finops_report_xlsx():
@@ -6062,6 +6547,8 @@ async def finops_report_xlsx():
             ws.column_dimensions[get_column_letter(col[0].column)].width = min(w + 4, 50)
 
     wb = openpyxl.Workbook()
+    CUR_FMT = '$#,##0.00'
+    PCT_FMT = '0.0"%"'
 
     # ── Sheet 1: Executive Summary ────────────────────────────────────────────
     ws_kpi = wb.active; ws_kpi.title = "Executive Summary"
@@ -6095,12 +6582,17 @@ async def finops_report_xlsx():
     if not isinstance(alloc, Exception):
         for ri, item in enumerate(alloc.items or [], 2):
             ws_alloc.cell(row=ri, column=1, value=item.dimension_value)
-            ws_alloc.cell(row=ri, column=2, value=round(item.cost_usd, 2))
-            ws_alloc.cell(row=ri, column=3, value=item.cost_pct)
-            ws_alloc.cell(row=ri, column=4, value=getattr(item, "mom_delta_pct", None))
+            ws_alloc.cell(row=ri, column=2, value=round(item.cost_usd, 2)).number_format = CUR_FMT
+            ws_alloc.cell(row=ri, column=3, value=item.cost_pct).number_format = PCT_FMT
+            _mom = getattr(item, "mom_delta_pct", None)
+            if _mom is None:
+                ws_alloc.cell(row=ri, column=4, value="N/A")
+            else:
+                ws_alloc.cell(row=ri, column=4, value=round(_mom, 1)).number_format = PCT_FMT
         total_row = len(alloc.items or []) + 2
         ws_alloc.cell(row=total_row, column=1, value="TOTAL").font = Font(bold=True)
-        ws_alloc.cell(row=total_row, column=2, value=round(alloc.total_usd, 2)).font = Font(bold=True)
+        _tc = ws_alloc.cell(row=total_row, column=2, value=round(alloc.total_usd, 2))
+        _tc.font = Font(bold=True); _tc.number_format = CUR_FMT
 
     # ── Sheet 3: Chargeback ───────────────────────────────────────────────────
     ws_cb = wb.create_sheet("Chargeback")
@@ -6108,8 +6600,8 @@ async def finops_report_xlsx():
     if not isinstance(chargeback, Exception):
         for ri, entry in enumerate(chargeback.entries or [], 2):
             ws_cb.cell(row=ri, column=1, value=entry.cost_center)
-            ws_cb.cell(row=ri, column=2, value=round(entry.allocated_cost_usd, 2))
-            ws_cb.cell(row=ri, column=3, value=round(entry.coverage_pct, 1))
+            ws_cb.cell(row=ri, column=2, value=round(entry.allocated_cost_usd, 2)).number_format = CUR_FMT
+            ws_cb.cell(row=ri, column=3, value=round(entry.coverage_pct, 1)).number_format = PCT_FMT
             ws_cb.cell(row=ri, column=4, value=entry.resource_count)
             ws_cb.cell(row=ri, column=5, value=getattr(entry, "subscription_count", 0))
 
@@ -6121,7 +6613,7 @@ async def finops_report_xlsx():
             ws_sav.cell(row=ri, column=1, value=opp.resource_name)
             ws_sav.cell(row=ri, column=2, value=opp.category)
             ws_sav.cell(row=ri, column=3, value=opp.action)
-            ws_sav.cell(row=ri, column=4, value=round(opp.potential_savings_usd, 2))
+            ws_sav.cell(row=ri, column=4, value=round(opp.potential_savings_usd, 2)).number_format = CUR_FMT
             ws_sav.cell(row=ri, column=5, value=opp.effort)
             ws_sav.cell(row=ri, column=6, value=opp.confidence)
 
@@ -6139,7 +6631,7 @@ async def finops_report_xlsx():
                     ws_adv.cell(row=ri, column=3, value=r.resource_group)
                     ws_adv.cell(row=ri, column=4, value=rec.impact)
                     ws_adv.cell(row=ri, column=5, value=rec.short_description)
-                    ws_adv.cell(row=ri, column=6, value=round(rec.potential_savings, 2))
+                    ws_adv.cell(row=ri, column=6, value=round(rec.potential_savings, 2)).number_format = CUR_FMT
                     ri += 1
 
     # ── Sheet 6: Resource Optimization ───────────────────────────────────────
@@ -6153,14 +6645,15 @@ async def finops_report_xlsx():
                 ws_opt.cell(row=ri, column=2, value=r.resource_type)
                 ws_opt.cell(row=ri, column=3, value=r.sku)
                 ws_opt.cell(row=ri, column=4, value=r.rightsize_sku)
-                ws_opt.cell(row=ri, column=5, value=r.avg_cpu_pct)
-                ws_opt.cell(row=ri, column=6, value=round(r.cost_current_month * r.rightsize_savings_pct / 100, 2))
+                ws_opt.cell(row=ri, column=5, value=r.avg_cpu_pct).number_format = PCT_FMT
+                ws_opt.cell(row=ri, column=6, value=round(r.cost_current_month * r.rightsize_savings_pct / 100, 2)).number_format = CUR_FMT
                 ws_opt.cell(row=ri, column=7, value=round(r.final_score, 1))
                 ri += 1
 
     for ws in wb.worksheets:
         _autowidth(ws)
 
+    _style_export_workbook(wb, max_fill_col=20)
     buf = BytesIO(); wb.save(buf); buf.seek(0)
     fname = f"finops-report-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
     return StreamingResponse(buf,

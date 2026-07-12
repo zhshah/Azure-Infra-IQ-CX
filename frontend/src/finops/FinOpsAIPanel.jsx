@@ -331,8 +331,16 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
               )}
 
               {insights.generated_at && (
-                <div style={{ color: 'var(--c-475569)', fontSize: 10 }}>
-                  Generated {new Date(insights.generated_at).toLocaleString()}
+                <div style={{ color: 'var(--c-475569)', fontSize: 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                  {insights.grounded_on && insights.grounded_on.resources != null && (
+                    <span style={{ color: 'var(--c-64748b)' }}>
+                      🔎 Grounded on {insights.grounded_on.resources} resources
+                      {insights.grounded_on.spend_usd != null ? ` · ${fmtUsd(insights.grounded_on.spend_usd)} analyzed` : ''}
+                      {insights.grounded_on.tagged_pct != null ? ` · ${insights.grounded_on.tagged_pct}% tagged` : ''}
+                    </span>
+                  )}
+                  <span>Generated {new Date(insights.generated_at).toLocaleString()}</span>
+                  <span style={{ color: insights.cached ? '#f59e0b' : '#22c55e' }}>{insights.cached ? '· cached (click Refresh for a fresh run)' : '· fresh'}</span>
                 </div>
               )}
             </div>

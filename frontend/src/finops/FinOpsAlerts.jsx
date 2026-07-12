@@ -269,6 +269,7 @@ const SEV_RANK = { critical: 0, high: 1, medium: 2, low: 3, info: 4 }
 
 export default function FinOpsAlerts() {
   const [budgetAlerts, setBudgetAlerts] = useState([])
+  const [azureAlerts, setAzureAlerts] = useState([])
   const [kpi,     setKpi]     = useState(null)
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState(null)
@@ -283,6 +284,20 @@ export default function FinOpsAlerts() {
         finopsApi.getBudgetAlerts().catch(() => []),
         finopsApi.getSummary().catch(() => null),
       ])
+      // Existing Azure Cost Management alerts (portal "Cost alerts") — read-only, non-blocking.
+      finopsApi.getAzureCostAlerts().then(r => {
+        const az = (r?.alerts || []).map(a => ({
+          source: 'azure',
+          title: a.description || `Azure ${a.category || 'cost'} alert`,
+          budget_name: a.description || 'Azure Cost Alert',
+          severity: (a.status || '').toLowerCase() === 'active' ? 'high' : 'info',
+          threshold_pct: a.threshold || 0,
+          message: `${a.category || 'Cost'} alert${a.status ? ` (${a.status})` : ''}` +
+            (a.current_spend ? ` — current ${fmtUsd(a.current_spend)}` : '') +
+            (a.amount ? ` of ${fmtUsd(a.amount)}` : '') + '.',
+        }))
+        setAzureAlerts(az)
+      }).catch(() => setAzureAlerts([]))
       const mapped = (raw || []).map(a => ({
         ...a,
         source:            'budget',
@@ -311,8 +326,8 @@ export default function FinOpsAlerts() {
   // Live rule evaluation against the FinOps KPIs, merged with Azure budget alerts.
   const ruleAlerts = useMemo(() => evaluateRules(rules, kpi), [rules, kpi])
   const alerts = useMemo(
-    () => [...ruleAlerts, ...budgetAlerts].sort((a, b) => (SEV_RANK[a.severity] ?? 9) - (SEV_RANK[b.severity] ?? 9)),
-    [ruleAlerts, budgetAlerts],
+    () => [...ruleAlerts, ...budgetAlerts, ...azureAlerts].sort((a, b) => (SEV_RANK[a.severity] ?? 9) - (SEV_RANK[b.severity] ?? 9)),
+    [ruleAlerts, budgetAlerts, azureAlerts],
   )
 
   // Rule CRUD (persisted to localStorage via the effect above).

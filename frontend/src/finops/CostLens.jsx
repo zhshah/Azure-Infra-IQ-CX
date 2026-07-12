@@ -5,7 +5,7 @@
  */
 import React, { useState, useEffect, useCallback } from 'react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
-import { ShieldAlert, ShieldCheck, Landmark, RefreshCw, AlertCircle, ExternalLink, ChevronRight } from 'lucide-react'
+import { ShieldAlert, ShieldCheck, Landmark, RefreshCw, AlertCircle, ExternalLink, ChevronRight, Download } from 'lucide-react'
 import { finopsApi, fmtUsd } from './finopsApi'
 
 const card      = { background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }
@@ -39,6 +39,18 @@ export default function CostLens() {
   const chartData = buckets.map(b => ({ name: b.label, value: b.monthly_usd, count: b.resource_count }))
   const meta = LENSES.find(l => l.id === lens) || LENSES[0]
 
+  const exportXlsx = () => {
+    if (!buckets.length) return
+    finopsApi.exportGenericXlsx({
+      title: `Cost Lens - ${meta.label}`,
+      sheets: [{
+        name: meta.label,
+        columns: ['Bucket', 'Monthly cost (USD)', 'Resource count'],
+        rows: buckets.map(b => [b.label, b.monthly_usd, b.resource_count]),
+      }],
+    }).catch(() => {})
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div>
@@ -65,6 +77,11 @@ export default function CostLens() {
           )
         })}
         <div style={{ flex: 1 }} />
+        {buckets.length > 0 && (
+          <button onClick={exportXlsx} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6, padding: '7px 12px', cursor: 'pointer', color: 'var(--c-cbd5e1)', fontSize: 12 }}>
+            <Download size={13} /> Export
+          </button>
+        )}
         <button onClick={() => load(lens)} disabled={loading} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6, padding: '7px 12px', cursor: 'pointer', color: 'var(--c-cbd5e1)', fontSize: 12 }}>
           <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Refresh
         </button>

@@ -7,13 +7,27 @@ import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
 import { Download, RefreshCw, AlertCircle, Layers } from 'lucide-react'
-import { finopsApi, fmtUsd, fmtPct, CHART_COLORS, DIMENSION_OPTIONS } from './finopsApi'
-import FinOpsAIPanel from './FinOpsAIPanel'
+import { finopsApi, fmtUsd, fmtPct, CHART_COLORS, DIMENSION_OPTIONS, getSubscriptions } from './finopsApi'
 import DateRangePicker from './DateRangePicker'
 import SearchableSelect from '../components/shared/SearchableSelect'
 import EnterpriseCard from '../components/shared/EnterpriseCard'
+import { useDrill } from '../drill/DrillContext'
+
+// Map an allocation dimension + value to /cost-resources params so a chart segment
+// or table row can open the resources behind it. Billing-only dimensions
+// (ServiceName / ServiceFamily / MeterCategory) and subscription NAMES aren't
+// resource attributes, so those return null (not drillable).
+function _allocDrillParams(dim, value) {
+  if (!value || value === '(unassigned)') return null
+  if (dim === 'ResourceGroupName') return { resource_group: value }
+  if (dim === 'ResourceType') return { resource_type: value }
+  if (dim === 'ResourceLocation') return { region: value }
+  if (dim && dim.startsWith('TagKey:')) return { tag_key: dim.split(':')[1], tag_value: value }
+  return null
+}
 
 export default function AllocationView() {
+  const { openResourceDrill } = useDrill()
   const [data,      setData]      = useState(null)
   const [loading,   setLoading]   = useState(false)
   const [error,     setError]     = useState(null)
@@ -23,9 +37,15 @@ export default function AllocationView() {
   const [dateTo,    setDateTo]    = useState('')
   const [view,      setView]      = useState('bar')   // 'bar' | 'donut'
   const [tablePage, setTablePage] = useState(0)
+  const [subFilter, setSubFilter] = useState('')
+  const [subOpts,   setSubOpts]   = useState([])
   const PAGE_SIZE = 20
   const abortRef  = useRef(null)
   const debounceRef = useRef(null)
+
+  useEffect(() => {
+    getSubscriptions().then(s => setSubOpts((s || []).map(x => ({ value: x.subscription_id, label: x.subscription_name || x.subscription_id })))).catch(() => {})
+  }, [])
 
   const load = async () => {
     if (abortRef.current) abortRef.current.abort()
@@ -33,7 +53,7 @@ export default function AllocationView() {
     abortRef.current = ctrl
     setLoading(true); setError(null); setTablePage(0)
     try {
-      const d = await finopsApi.getAllocation(dimension, timeRange, dateFrom || undefined, dateTo || undefined, ctrl.signal)
+      const d = await finopsApi.getAllocation(dimension, timeRange, dateFrom || undefined, dateTo || undefined, subFilter || undefined, ctrl.signal)
       if (!ctrl.signal.aborted) setData(d)
     } catch (e) { if (e.name !== 'AbortError') setError(e.message) }
     finally { if (!ctrl.signal.aborted) setLoading(false) }
@@ -43,7 +63,7 @@ export default function AllocationView() {
     clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => load(), 300)
     return () => clearTimeout(debounceRef.current)
-  }, [dimension, timeRange, dateFrom, dateTo])
+  }, [dimension, timeRange, dateFrom, dateTo, subFilter])
 
   // Cleanup on unmount
   useEffect(() => () => { if (abortRef.current) abortRef.current.abort() }, [])
@@ -55,9 +75,20 @@ export default function AllocationView() {
     items.map((it, i) => ({ name: it.dimension_value, value: it.cost_usd, color: CHART_COLORS[i % CHART_COLORS.length] }))
   ), [items])
 
+  // Drillable only when the current dimension maps to a resource attribute.
+  const drillable = ['ResourceGroupName', 'ResourceType', 'ResourceLocation'].includes(dimension) || (dimension || '').startsWith('TagKey:')
+  const drillValue = async (value) => {
+    const params = _allocDrillParams(dimension, value)
+    if (!params) return
+    try {
+      const res = await finopsApi.getCostResources({ ...params, limit: 300 })
+      const rows = res?.resources || []
+      openResourceDrill(`${value} (${rows.length} resource${rows.length === 1 ? '' : 's'})`, rows)
+    } catch { /* ignore */ }
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <FinOpsAIPanel view="allocation" data={data ? { dimension, time_range: timeRange, total_usd: data.total_usd, unallocated_usd: data.unallocated_usd, unallocated_pct: data.unallocated_pct, top_items: (data.items || []).slice(0, 10).map(i => ({ name: i.dimension_value, cost: i.cost_usd })) } : {}} />
       {/* Header + controls */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
         <div>
@@ -65,6 +96,9 @@ export default function AllocationView() {
           <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: 0 }}>Live Azure data — group by any dimension to allocate costs</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ width: 190 }}>
+            <SearchableSelect value={subFilter} onChange={v => setSubFilter(v || '')} options={subOpts} placeholder="All subscriptions" searchPlaceholder="Search subscriptions…" compact />
+          </div>
           <div style={{ width: 170 }}>
             <SearchableSelect value={dimension} onChange={setDimension} options={DIMENSION_OPTIONS} placeholder="Group by…" compact />
           </div>
@@ -144,16 +178,17 @@ export default function AllocationView() {
                   <XAxis type="number" tick={{ fill: '#475569', fontSize: 10 }} tickFormatter={v => '$' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v)} />
                   <YAxis type="category" dataKey="dimension_value" tick={{ fill: '#94a3b8', fontSize: 10 }} width={140} />
                   <Tooltip contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }} formatter={v => fmtUsd(v, 2)} />
-                  <Bar dataKey="cost_usd" name="Cost (USD)" radius={[0, 4, 4, 0]}>
-                    {items.slice(0, 20).map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                  <Bar dataKey="cost_usd" name="Cost (USD)" radius={[0, 4, 4, 0]} onClick={drillable ? (d) => d && drillValue(d.dimension_value ?? d.payload?.dimension_value) : undefined} cursor={drillable ? 'pointer' : undefined}>
+                    {items.slice(0, 20).map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} cursor={drillable ? 'pointer' : undefined} />)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             ) : (
               <ResponsiveContainer width="100%" height={280}>
                 <PieChart>
-                  <Pie data={pieData.slice(0, 12)} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={110} innerRadius={55} paddingAngle={2}>
-                    {pieData.slice(0, 12).map((d, i) => <Cell key={i} fill={d.color} />)}
+                  <Pie data={pieData.slice(0, 12)} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={110} innerRadius={55} paddingAngle={2}
+                    onClick={drillable ? (d) => d && drillValue(d.name ?? d.payload?.name) : undefined} style={drillable ? { cursor: 'pointer' } : undefined}>
+                    {pieData.slice(0, 12).map((d, i) => <Cell key={i} fill={d.color} cursor={drillable ? 'pointer' : undefined} />)}
                   </Pie>
                   <Tooltip formatter={v => fmtUsd(v, 2)} contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }} />
                   <Legend iconSize={10} wrapperStyle={{ fontSize: 11, color: 'var(--c-94a3b8)' }} />
@@ -175,7 +210,9 @@ export default function AllocationView() {
                 {items.slice(tablePage * PAGE_SIZE, (tablePage + 1) * PAGE_SIZE).map((it, i) => {
                   const globalIdx = tablePage * PAGE_SIZE + i
                   return (
-                    <tr key={globalIdx} style={{ borderBottom: '1px solid var(--c-0f172a)' }}>
+                    <tr key={globalIdx} onClick={drillable ? () => drillValue(it.dimension_value) : undefined}
+                      title={drillable ? 'View resources behind this' : undefined}
+                      style={{ borderBottom: '1px solid var(--c-0f172a)', cursor: drillable ? 'pointer' : 'default' }}>
                       <td style={{ padding: '6px 8px', color: 'var(--c-e2e8f0)', display: 'flex', alignItems: 'center', gap: 6 }}>
                         <div style={{ width: 8, height: 8, borderRadius: '50%', background: CHART_COLORS[globalIdx % CHART_COLORS.length], flexShrink: 0 }} />
                         <span style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.dimension_value}>{it.dimension_value}</span>

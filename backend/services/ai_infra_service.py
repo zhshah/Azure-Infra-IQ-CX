@@ -1463,16 +1463,37 @@ Focus on:
             )
             raw = response.content[0].text.strip()
         else:  # azure_openai
-            response = client.chat.completions.create(
+            # gpt-5.x / o-series are reasoning models: they reject a custom `temperature`
+            # (only the default is accepted) and need token headroom. Non-reasoning models
+            # (gpt-4o etc.) keep temperature=0.3. A retry strips any rejected param.
+            _bcdr_reasoning = any(k in (model or "").lower() for k in ("gpt-5", "gpt5", "o1", "o3", "o4"))
+            _bcdr_kw = dict(
                 model=model,
                 messages=[
                     {"role": "system", "content": "You are an expert Azure Solutions Architect specializing in BCDR planning and resilience engineering."},
                     {"role": "user", "content": prompt_content}
                 ],
-                max_completion_tokens=MAX_TOKENS_ANALYSIS,
-                temperature=0.3,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
+            if _bcdr_reasoning:
+                _bcdr_kw["max_completion_tokens"] = max(int(MAX_TOKENS_ANALYSIS) + 8000, 16000)
+                _bcdr_kw["reasoning_effort"] = "low"
+            else:
+                _bcdr_kw["max_completion_tokens"] = MAX_TOKENS_ANALYSIS
+                _bcdr_kw["temperature"] = 0.3
+            try:
+                response = client.chat.completions.create(**_bcdr_kw)
+            except Exception as _pe:
+                _es = str(_pe).lower(); _changed = False
+                if "reasoning_effort" in _es and "reasoning_effort" in _bcdr_kw:
+                    _bcdr_kw.pop("reasoning_effort", None); _changed = True
+                if "temperature" in _es and "temperature" in _bcdr_kw:
+                    _bcdr_kw.pop("temperature", None); _changed = True
+                if ("max_completion_tokens" in _es or "unsupported_parameter" in _es) and "max_completion_tokens" in _bcdr_kw:
+                    _bcdr_kw["max_tokens"] = _bcdr_kw.pop("max_completion_tokens"); _bcdr_kw.pop("reasoning_effort", None); _changed = True
+                if not _changed:
+                    raise
+                response = client.chat.completions.create(**_bcdr_kw)
             raw = response.choices[0].message.content.strip()
         _latency_s = round(_time.perf_counter() - _t0, 2)
         
@@ -2707,16 +2728,36 @@ CRITICAL INSTRUCTIONS FOR HIGH-QUALITY OUTPUT:
             )
             raw = response.content[0].text.strip()
         else:
-            response = client.chat.completions.create(
+            # Reasoning models (gpt-5.x / o-series) reject a custom temperature; keep it only
+            # for non-reasoning models (gpt-4o etc.). Retry strips any rejected parameter.
+            _net_reasoning = any(k in (model or "").lower() for k in ("gpt-5", "gpt5", "o1", "o3", "o4"))
+            _net_kw = dict(
                 model=model,
                 messages=[
                     {"role": "system", "content": _SYS_NETWORKING},
                     {"role": "user", "content": prompt},
                 ],
-                max_completion_tokens=MAX_TOKENS_NETWORKING,
-                temperature=0.2,
                 response_format={"type": "json_object"},
             )
+            if _net_reasoning:
+                _net_kw["max_completion_tokens"] = max(int(MAX_TOKENS_NETWORKING) + 8000, 16000)
+                _net_kw["reasoning_effort"] = "low"
+            else:
+                _net_kw["max_completion_tokens"] = MAX_TOKENS_NETWORKING
+                _net_kw["temperature"] = 0.2
+            try:
+                response = client.chat.completions.create(**_net_kw)
+            except Exception as _pe:
+                _es = str(_pe).lower(); _changed = False
+                if "reasoning_effort" in _es and "reasoning_effort" in _net_kw:
+                    _net_kw.pop("reasoning_effort", None); _changed = True
+                if "temperature" in _es and "temperature" in _net_kw:
+                    _net_kw.pop("temperature", None); _changed = True
+                if ("max_completion_tokens" in _es or "unsupported_parameter" in _es) and "max_completion_tokens" in _net_kw:
+                    _net_kw["max_tokens"] = _net_kw.pop("max_completion_tokens"); _net_kw.pop("reasoning_effort", None); _changed = True
+                if not _changed:
+                    raise
+                response = client.chat.completions.create(**_net_kw)
             raw = response.choices[0].message.content.strip()
 
         # Strip markdown fences

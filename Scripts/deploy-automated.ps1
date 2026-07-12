@@ -14,7 +14,7 @@
     - Azure SQL (General Purpose, 4 vCores) logical server + database (SQL auth)  [optional]
     - Azure Cache for Redis (Standard C2)                                       [optional]
       - Container App with a SYSTEM-ASSIGNED managed identity
-      - RBAC: Reader + Cost Management Reader + Monitoring Reader on each scanned subscription
+      - RBAC: Reader + Cost Management Reader on each scanned subscription
       - Microsoft Graph application permissions on the managed identity
       - Registers the Container App URL as a SPA redirect URI on the Entra app
 
@@ -22,9 +22,9 @@
     so NO client secret is deployed. Azure OpenAI uses an API key.
 
     The embedded "Architecture Map" (ZureMap) engine ships INSIDE the same image and
-    is served same-origin under /zuremap/ behind an auth-gated reverse proxy.
-    By default it uses the Container App managed identity; optional SP credentials can
-    be provided via -ZureMapClientSecret for non-MI environments.
+    is served same-origin under /zuremap/ behind an auth-gated reverse proxy. Provide
+    a service principal (with a secret + Reader) via -ZureMapClientSecret to enable it;
+    omit it and the app still deploys (the Architecture Map then shows a sign-in prompt).
 
 .EXAMPLE
     # Public deployment (simplest)
@@ -65,24 +65,9 @@ param(
     [string]$ContainerAppEnvName = "azure-infra-iq-env",
     [string]$ImageName           = "azure-infra-iq",
     [string]$ImageTag            = "",   # set to reuse an already-built tag and SKIP the build
-    # Optional Docker Hub credentials for an AUTHENTICATED base-image import (avoids the
-    # anonymous 'toomanyrequests' pull rate limit). A free Docker Hub account + a read-only
-    # access token works. If omitted, the base image is imported anonymously (usually fine).
-    [string]$DockerHubUsername   = "",
-    [string]$DockerHubToken      = "",
-    # ZureMap "Architecture Map" engine base image — the combined runtime is built ON TOP of
-    # it. It is imported into the customer ACR at deploy time so the build pulls it from THIS
-    # registry instead of a live anonymous ghcr.io pull (which fails with 'denied' if the
-    # upstream package's visibility changed, or 'toomanyrequests' on shared build agents).
-    # Pass -GhcrUsername/-GhcrToken (a GitHub PAT with read:packages) if the source image is
-    # private, or point -ZureMapImage at any registry you can access (e.g. a mirror you own).
-    [string]$ZureMapImage        = "ghcr.io/natechsa/zuremap:latest",
-    [string]$GhcrUsername        = "",
-    [string]$GhcrToken           = "",
     [string]$LogAnalyticsName    = "azure-infra-iq-logs",
-    # Optional: customer-provided existing Log Analytics workspace credentials.
-    # If omitted, deployment defaults to logs-destination=none unless
-    # -CreateLogAnalyticsWorkspace $true is set.
+    # Use customer-provided Log Analytics workspace by default. If you do not pass
+    # these, set -CreateLogAnalyticsWorkspace $true to let the script create one.
     [string]$ExistingLogAnalyticsWorkspaceId = "",
     [string]$ExistingLogAnalyticsWorkspaceKey = "",
     [bool]$CreateLogAnalyticsWorkspace = $false,
@@ -92,29 +77,25 @@ param(
     [string]$OpenAILocation      = "",   # defaults to $Location
     [string]$OpenAIDeploymentName = "",   # blank = name the deployment after the ACTUAL model deployed (newest GPT first)
 
-    # Entra ID app registration used for USER LOGIN (SPA, no secret). REQUIRED — the
-    # script PROMPTS for these if not supplied. Create the app registration first
-    # (see docs/ENTRA_APP_SETUP.md): Single-page application platform, delegated User.Read.
-    [string]$EntraAppClientId = "",
-    [string]$EntraTenantId    = "",
+    # Entra ID app registration used for USER LOGIN (SPA, no secret).
+    # Defaults to the existing zahir.cloud app registration.
+    [string]$EntraAppClientId = "228ee759-0242-408d-af80-fb949cb9025c",
+    [string]$EntraTenantId    = "8d7622f8-d815-4120-b5b8-bee841c23a1c",
 
-    # Optional service-principal credentials for the embedded ZureMap engine.
-    # If omitted, ZureMap uses the Container App managed identity by default.
+    # Service principal for the embedded ZureMap "Architecture Map" engine. Its `az`
+    # CLI logs in with this SECRET; the SP also needs Reader on the scanned subs.
+    # Defaults to the same app registration used for login. Leave the secret empty to
+    # deploy the app without the Architecture Map enabled.
     [string]$ZureMapClientId     = "",   # defaults to $EntraAppClientId
-    [string]$ZureMapClientSecret = "",   # optional; only for SP login mode
+    [string]$ZureMapClientSecret = "",   # required to ENABLE the Architecture Map
     [string]$ZureMapTenantId     = "",   # defaults to $EntraTenantId
 
     # Target subscription for the deployment. Defaults to the active az subscription.
     [string]$SubscriptionId = "",
 
     # Comma-separated subscriptions the app should SCAN (AZURE_SUBSCRIPTION_IDS).
-    # Default: the app AUTO-DISCOVERS every subscription the managed identity can read
-    # (the identity is granted tenant-root Reader in Step 9), so the multi-subscription
-    # dropdown is fully populated — matching local behaviour. Pin a subset with
-    # -SubscriptionIds "id1,id2". Use -DiscoverAllSubscriptions $true to ALSO grant a
-    # per-subscription Reader on every enabled subscription at deploy time.
+    # Defaults to the deployment subscription.
     [string]$SubscriptionIds = "",
-    [bool]$DiscoverAllSubscriptions = $false,
 
     # Azure SQL (Prompt Library / scan-history persistence)
     [bool]$DeploySql        = $true,
@@ -122,45 +103,19 @@ param(
     [string]$SqlDatabaseName = "infraiqdb",
     [string]$SqlAdminUser   = "infraiqadmin",
     [string]$SqlAdminPassword = "",      # auto-generated if empty
-    # Azure SQL service objective. DEFAULT 'GP_Gen5_4' (General Purpose, vCore). When -SqlServiceObjective
-    # is NOT passed on the command line, the deploy shows an early prompt: [1] GP_Gen5_4 (default) or
-    # [2] Basic (DTU-based — lightest / most capacity-resilient for constrained regions like West Europe).
-    # When deployed on a DTU tier, the summary advises upgrading to General Purpose post-deploy.
+    # vCore-based SQL objective for medium profile.
     [string]$SqlServiceObjective = "GP_Gen5_4",
-    # General Purpose target SKU shown in the SKU prompt + post-deploy upgrade guidance.
-    [string]$SqlTargetServiceObjective = "GP_Gen5_4",
 
-    # Azure Managed Redis (optional L2 cache). NOTE: classic "Azure Cache for Redis"
-    # (Microsoft.Cache/Redis) is RETIRED — new creates are rejected — so this uses
-    # Azure Managed Redis (Microsoft.Cache/redisEnterprise) via `az redisenterprise`.
+    # Azure Cache for Redis (optional L2 cache)
     [bool]$DeployRedis = $true,
     [string]$RedisName = "",
-    # Azure Managed Redis SKU. Default ComputeOptimized_X5 = 6 GB cache / 4 vCPU with
-    # High-Availability (primary + replica) enabled by default. See `az redisenterprise create -h`
-    # for other SKUs (Balanced_B*, ComputeOptimized_X*, MemoryOptimized_M*).
-    [string]$RedisSku  = "ComputeOptimized_X5",
-    [string]$RedisVmSize = "",   # [deprecated] classic-only; ignored for Azure Managed Redis
+    [string]$RedisSku  = "Standard",
+    [string]$RedisVmSize = "c2",
 
-    # ── Container Apps capacity selection ─────────────────────────────────────
-    # Choose how the workload profile (SKU size) for the Container App is picked:
-    #   'Automatic' : try a fallback ladder D8x2 -> D8x1 -> D4x2 -> D4x1 -> Consumption
-    #                 until one succeeds (most resilient against regional capacity limits).
-    #   'Manual'    : use exactly ONE profile you pick (1-5). If -ManualProfileChoice is
-    #                 omitted in Manual mode, the script shows a 1-5 menu to choose from.
-    #                 Manual is FASTER (no ladder iteration) and fully deterministic.
-    [ValidateSet("Automatic","Manual")]
-    [string]$CapacityMode = "Automatic",
-    #   1 = Consumption (serverless, up to 4 vCPU / 8 GiB) - lightest, best for capacity-constrained regions
-    #   2 = D4 x 1 (4 vCPU / 16 GiB, 1 node)    3 = D4 x 2 (4 vCPU / 16 GiB, 2 nodes)
-    #   4 = D8 x 1 (8 vCPU / 32 GiB, 1 node)    5 = D8 x 2 (8 vCPU / 32 GiB, 2 nodes)
-    [ValidateSet("","1","2","3","4","5")]
-    [string]$ManualProfileChoice = "",
-    # [Deprecated] Backward compatible: -EnableDedicatedCapacityFallback $false is
-    # treated as Manual mode (defaults to profile 2 = D4 x 1 when no choice is given).
-    [bool]$EnableDedicatedCapacityFallback = $true,
-    # Legacy single-profile sizing override (unused by the 1-5 menu profiles).
-    [string]$Cpu    = "8.0",
-    [string]$Memory = "32.0Gi",
+    # Container sizing (Consumption profile — valid CPU:memory pairs up to 4 vCPU / 8Gi).
+    # 4.0 vCPU / 8.0Gi medium+ profile (AI analysis, multi-sub scanning, diagram + PDF rendering).
+    [string]$Cpu    = "4.0",
+    [string]$Memory = "8.0Gi",
 
     # ── Private / VNet-integrated deployment ──────────────────────────────────
     # 'Public'  : Container Apps environment with a public ingress (default).
@@ -230,12 +185,10 @@ function Write-Warn2($m)   { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m)          { Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot   # Scripts/.. = repo root (Dockerfile lives here)
-$ScriptVersion = "2026-06-11.24"
 
 Write-Host "============================================================" -ForegroundColor Blue
 Write-Host "  Azure Infra IQ — Container Apps deployment" -ForegroundColor Blue
 Write-Host "  AI-Powered Azure Infrastructure Management and Insights" -ForegroundColor Blue
-Write-Host "  Script version: $ScriptVersion" -ForegroundColor Blue
 Write-Host "============================================================" -ForegroundColor Blue
 
 # ── Step 0: Prerequisites & tooling bootstrap ─────────────────────────────-
@@ -301,35 +254,18 @@ $acct = az account show -o json | ConvertFrom-Json
 Write-Ok "Subscription: $($acct.name) ($($acct.id))"
 Write-Ok "Tenant:       $($acct.tenantId)"
 
-# If the RG already exists in another region, align deployment region to RG region.
-$existingRgLocation = az group show --name $ResourceGroupName --query location -o tsv 2>$null
-if (-not [string]::IsNullOrWhiteSpace($existingRgLocation) -and $existingRgLocation.ToLowerInvariant() -ne $Location.ToLowerInvariant()) {
-    Write-Warn2 "Resource group '$ResourceGroupName' already exists in '$existingRgLocation'. Overriding -Location '$Location' -> '$existingRgLocation'."
-    $Location = $existingRgLocation
-}
-
-# Entra ID app registration for USER SIGN-IN (REQUIRED). Create it first (SPA platform,
-# delegated User.Read) — see docs/ENTRA_APP_SETUP.md — then provide its Application
-# (client) ID + Directory (tenant) ID (here, or as -EntraAppClientId / -EntraTenantId).
-# Users sign in with MSAL; no client secret is deployed.
-while ([string]::IsNullOrWhiteSpace($EntraAppClientId)) { $EntraAppClientId = (Read-Host "  Entra App (client) ID for user sign-in").Trim() }
-while ([string]::IsNullOrWhiteSpace($EntraTenantId))    { $EntraTenantId    = (Read-Host "  Entra tenant (directory) ID").Trim() }
-
-# Subscription scanning model:
-#   * -SubscriptionIds "id1,id2" -> pin to an explicit list.
-#   * -DiscoverAllSubscriptions $true OR -SubscriptionIds "auto" -> discover all enabled AND
-#     grant a per-subscription Reader on each at deploy time.
-#   * default -> app AUTO-DISCOVERS all subscriptions the identity can read (via the tenant-root
-#     Reader grant); only the deployment subscription gets an explicit per-sub Reader grant.
-$normalizedSubs = if ([string]::IsNullOrWhiteSpace($SubscriptionIds)) { "" } else { $SubscriptionIds.Trim() }
-$discoverAll = $DiscoverAllSubscriptions -or ($normalizedSubs.ToLowerInvariant() -eq "auto")
-$explicitSubs = (-not [string]::IsNullOrWhiteSpace($normalizedSubs)) -and (-not $discoverAll)
+# Subscription scanning model (mirrors the local server): the app DYNAMICALLY discovers
+# every subscription its managed identity can read at runtime, so the portal's picker
+# always reflects exactly what the identity has access to — no hard-coded list to drift.
+#   * No -SubscriptionIds  -> AZURE_SUBSCRIPTION_IDS=auto (runtime discovery) and we grant
+#                             the identity Reader on every enabled subscription we can see.
+#   * -SubscriptionIds set -> pin to that explicit list (grant + scan only those).
+$explicitSubs = -not [string]::IsNullOrWhiteSpace($SubscriptionIds)
 if ($explicitSubs) {
-    $SubscriptionIds = $normalizedSubs
     $ScanSubscriptionsEnv = $SubscriptionIds
     Write-Ok "Subscription scope: pinned to provided list"
-} elseif ($discoverAll) {
-    $ScanSubscriptionsEnv = "auto"
+} else {
+    $ScanSubscriptionsEnv = "auto"   # backend discovers all subs the identity can read
     Write-Host "  Discovering accessible subscriptions (for RBAC grants)..." -ForegroundColor DarkGray
     $allSubs = az account list --query "[?state=='Enabled'].id" -o tsv 2>$null
     $subList = @($allSubs -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -338,24 +274,13 @@ if ($explicitSubs) {
         Write-Ok "Found $($subList.Count) enabled subscription(s) — granting identity Reader on each; app discovers them at runtime"
     } else {
         $SubscriptionIds = $SubscriptionId
-        $ScanSubscriptionsEnv = $SubscriptionId
-        Write-Warn2 "Could not list subscriptions; using current subscription only ($SubscriptionId)."
+        Write-Host "  Could not list subscriptions; granting on current ($SubscriptionId)" -ForegroundColor Yellow
     }
-} else {
-    # Default: the app AUTO-DISCOVERS every subscription the managed identity can read at
-    # runtime (AZURE_SUBSCRIPTION_IDS=auto), so the full multi-subscription dropdown is
-    # populated — matching the local server. Cross-subscription visibility comes from the
-    # tenant-root Reader + Cost Management Reader grants (Step 9); only the deployment
-    # subscription gets an explicit per-sub grant here, so there is NO deploy-time per-sub
-    # RBAC flood across large tenants.
-    $SubscriptionIds = $SubscriptionId
-    $ScanSubscriptionsEnv = "auto"
-    Write-Ok "Subscription scope: auto-discover all readable subscriptions (tenant-root Reader granted; deployment sub gets explicit Reader)"
 }
+if ([string]::IsNullOrWhiteSpace($OpenAILocation))  { $OpenAILocation  = $Location }
 if ([string]::IsNullOrWhiteSpace($ZureMapClientId)) { $ZureMapClientId = $EntraAppClientId }
 if ([string]::IsNullOrWhiteSpace($ZureMapTenantId)) { $ZureMapTenantId = $EntraTenantId }
-$deployZureMap = $true
-$useZureMapSp = -not [string]::IsNullOrWhiteSpace($ZureMapClientSecret)
+$deployZureMap = -not [string]::IsNullOrWhiteSpace($ZureMapClientSecret)
 $zuremapSessionKey = -join ((48..57)+(97..122) | Get-Random -Count 48 | ForEach-Object { [char]$_ })
 
 # ── Private (VNet-integrated) networking resolution ────────────────────────-
@@ -363,18 +288,10 @@ $zuremapSessionKey = -join ((48..57)+(97..122) | Get-Random -Count 48 | ForEach-
 # missing. $isPrivate / $ingressMode / $InfraSubnetId / $VNetId / $PeSubnetId are
 # ALWAYS defined so the environment + app + private-endpoint steps reference them safely.
 $isPrivate     = ($DeploymentMode -eq "Private")
-# App ingress is ALWAYS 'external'. Privacy comes from the ENVIRONMENT being internal-only
-# (--internal-only true, set in Step 4), which gives the load balancer a PRIVATE IP only.
-# On an internal-only environment, 'external' means "reachable from the whole VNet (and
-# peered networks / on-prem) via that private IP" — it is NOT public. Using 'internal'
-# would scope the app to other apps INSIDE the Container Apps environment only, so VMs
-# elsewhere in the VNet cannot reach it, and the app FQDN would gain an extra '.internal.'
-# label that the private-DNS wildcard record (Step 8b) does not cover.
-$ingressMode   = "external"
+$ingressMode   = if ($isPrivate) { "internal" } else { "external" }
 $InfraSubnetId = ""
 $VNetId        = ""
 $PeSubnetId    = ""
-$VNetLocation  = ""
 
 # Suggest the LAST /27 of the VNet (subnets are usually allocated from the start) as a
 # default when the PE subnet must be auto-created. Returns "" if it cannot be computed.
@@ -403,14 +320,7 @@ if ($isPrivate) {
     $vnet = az network vnet show --resource-group $VNetResourceGroupName --name $VNetName -o json 2>$null | ConvertFrom-Json
     if (-not $vnet) { Fail "VNet '$VNetName' not found in resource group '$VNetResourceGroupName'." }
     $VNetId = $vnet.id
-    $VNetLocation = "$($vnet.location)"
     Write-Ok "VNet: $VNetName ($VNetResourceGroupName)"
-
-    # ACA environment region must match the VNet region.
-    if (-not [string]::IsNullOrWhiteSpace($VNetLocation) -and $VNetLocation.ToLowerInvariant() -ne $Location.ToLowerInvariant()) {
-        Write-Warn2 "Private mode requires Container Apps environment region to match VNet region. Overriding -Location '$Location' -> '$VNetLocation'."
-        $Location = $VNetLocation
-    }
 
     # 1) Container Apps infrastructure subnet (delegated to Microsoft.App/environments).
     $subnet = az network vnet subnet show --resource-group $VNetResourceGroupName --vnet-name $VNetName --name $SubnetName -o json 2>$null | ConvertFrom-Json
@@ -431,154 +341,6 @@ if ($isPrivate) {
         if ($LASTEXITCODE -eq 0) { Write-Ok "Subnet delegated to Microsoft.App/environments" }
         else { Write-Warn2 "Could not delegate the subnet — delegate it to 'Microsoft.App/environments' manually before re-running." }
     } else { Write-Ok "Subnet already delegated to Microsoft.App/environments" }
-
-    # ── Subnet cleanliness pre-flight ─────────────────────────────────────────
-    # Container Apps requires the subnet to be 100 % empty. A previous failed
-    # deployment can leave the subnet "claimed" (IP configs, load balancer NICs, or
-    # an ACA environment still in CreateFailed state). Detect this BEFORE attempting
-    # the environment create so the admin gets a clear, actionable message instead of
-    # a cryptic ARM error deep inside the retry loop.
-    Write-Info "Checking subnet '$SubnetName' is clean and unoccupied..."
-
-    # 1) IP-configuration check: any allocation = subnet is not empty
-    $subnetIpConfigs = @()
-    if ($subnet.ipConfigurations) { $subnetIpConfigs = @($subnet.ipConfigurations) }
-    $subnetHasIpConfigs = $subnetIpConfigs.Count -gt 0
-
-    # 2) Find any Container Apps environment that references this exact subnet ID.
-    #    Search the deployment RG first (fast), then fall back to subscription-wide.
-    $linkedEnv   = $null
-    $linkedEnvRg = $null
-
-    $envsInRg = az containerapp env list --resource-group $ResourceGroupName --subscription $SubscriptionId --output json 2>$null
-    if ($envsInRg) {
-        ($envsInRg | ConvertFrom-Json) | ForEach-Object {
-            $es = $_.properties.vnetConfiguration.infrastructureSubnetId
-            if ($es -and $es.ToLowerInvariant() -eq $InfraSubnetId.ToLowerInvariant()) {
-                $linkedEnv = $_; $linkedEnvRg = $ResourceGroupName
-            }
-        }
-    }
-    if (-not $linkedEnv) {
-        # Broader subscription-level search (covers envs in other resource groups).
-        # Normalize both IDs: lowercase + trim to avoid silent comparison misses
-        # when the ARM API returns IDs with different casing.
-        $normInfraId = $InfraSubnetId.ToLowerInvariant().Trim()
-        $allEnvs = az containerapp env list --subscription $SubscriptionId --output json 2>$null
-        if ($allEnvs) {
-            ($allEnvs | ConvertFrom-Json) | ForEach-Object {
-                $es = $_.properties.vnetConfiguration.infrastructureSubnetId
-                if ($es -and $es.ToLowerInvariant().Trim() -eq $normInfraId) {
-                    $linkedEnv = $_; $linkedEnvRg = ($_.id -split '/')[4]
-                }
-            }
-        }
-    }
-
-    # 3) Evaluate what we found and decide how to proceed.
-    $subnetBlocked = $false
-    $sep = "  " + ("─" * 72)
-    if ($linkedEnv) {
-        $linkedEnvName  = $linkedEnv.name
-        $linkedEnvState = $linkedEnv.properties.provisioningState
-
-        if ($linkedEnvState -eq "Succeeded" -and
-            $linkedEnvName  -eq $ContainerAppEnvName -and
-            $linkedEnvRg    -eq $ResourceGroupName) {
-            # Same environment, same RG, healthy → this is a re-run. No action needed.
-            Write-Ok "Subnet is held by existing healthy environment '$linkedEnvName' (re-run detected — OK)"
-
-        } elseif ($linkedEnvState -eq "Succeeded") {
-            # A DIFFERENT healthy environment owns this subnet.
-            $subnetBlocked = $true
-            Write-Host ""
-            Write-Host $sep                                                          -ForegroundColor Yellow
-            Write-Host "  SUBNET IN USE  —  $SubnetName"                           -ForegroundColor Yellow
-            Write-Host $sep                                                          -ForegroundColor Yellow
-            Write-Host "  An active Container Apps environment already owns this subnet:" -ForegroundColor Yellow
-            Write-Host "    Environment : $linkedEnvName"                           -ForegroundColor Cyan
-            Write-Host "    State       : $linkedEnvState"                          -ForegroundColor Cyan
-            Write-Host "    Resource group: $linkedEnvRg"                           -ForegroundColor Cyan
-            Write-Host ""
-            Write-Host "  You have two options:"                                    -ForegroundColor Yellow
-            Write-Host "  Option A — Re-run this deployment pointing at a DIFFERENT subnet:" -ForegroundColor White
-            Write-Host "    -SubnetName '<new-empty-subnet-name>'"                  -ForegroundColor Cyan
-            Write-Host "  Option B — Delete the existing environment (only if you own it):" -ForegroundColor White
-            Write-Host "    az containerapp env delete --name $linkedEnvName ``"   -ForegroundColor Cyan
-            Write-Host "        --resource-group $linkedEnvRg --yes"               -ForegroundColor Cyan
-            Write-Host $sep                                                          -ForegroundColor Yellow
-            Write-Host ""
-
-        } elseif ($linkedEnvState -in @("CreateFailed","Failed","Canceled","Error")) {
-            # A FAILED environment is still holding the subnet.
-            $subnetBlocked = $true
-            Write-Host ""
-            Write-Host $sep                                                          -ForegroundColor Red
-            Write-Host "  SUBNET BLOCKED  —  $SubnetName"                          -ForegroundColor Red
-            Write-Host $sep                                                          -ForegroundColor Red
-            Write-Host "  A FAILED Container Apps environment is still associated with this subnet." -ForegroundColor Red
-            Write-Host "  Azure will reject every new environment create until it is removed."       -ForegroundColor Red
-            Write-Host ""
-            Write-Host "    Environment : $linkedEnvName"                           -ForegroundColor Cyan
-            Write-Host "    State       : $linkedEnvState"                          -ForegroundColor Red
-            Write-Host "    Resource group: $linkedEnvRg"                           -ForegroundColor Cyan
-            Write-Host ""
-            Write-Host "  To fix — run BOTH commands (in order) and then re-run this script:" -ForegroundColor Yellow
-            Write-Host ""
-            Write-Host "    Step 1: Delete the failed environment"                  -ForegroundColor White
-            Write-Host "      az containerapp env delete ``"                        -ForegroundColor Cyan
-            Write-Host "          --name $linkedEnvName ``"                         -ForegroundColor Cyan
-            Write-Host "          --resource-group $linkedEnvRg --yes"             -ForegroundColor Cyan
-            Write-Host ""
-            Write-Host "    Step 2 (optional): If the subnet delegation is stuck after deletion" -ForegroundColor White
-            Write-Host "      az network vnet subnet update ``"                     -ForegroundColor Cyan
-            Write-Host "          --resource-group $VNetResourceGroupName ``"       -ForegroundColor Cyan
-            Write-Host "          --vnet-name $VNetName ``"                         -ForegroundColor Cyan
-            Write-Host "          --name $SubnetName --remove delegations"          -ForegroundColor Cyan
-            Write-Host ""
-            Write-Host "    Alternative: Re-run with a brand-new empty subnet:"    -ForegroundColor White
-            Write-Host "      -SubnetName '<new-empty-subnet-name>'"                -ForegroundColor Cyan
-            Write-Host $sep                                                          -ForegroundColor Red
-            Write-Host ""
-
-        } else {
-            # Provisioning / updating — environment is in transition
-            Write-Warn2 "Environment '$linkedEnvName' in RG '$linkedEnvRg' is currently in state '$linkedEnvState' on this subnet. Proceeding with caution."
-        }
-
-    } elseif ($subnetHasIpConfigs) {
-        # No ACA environment found, but the subnet has connected IP configurations
-        # (e.g. NICs or load balancers left over from a deleted environment).
-        $subnetBlocked = $true
-        $configList = ($subnetIpConfigs | ForEach-Object {
-            $parts = $_.id -split '/'
-            if ($parts.Count -ge 9) { "  • $($parts[6])/$($parts[7])/$($parts[8])" } else { "  • $($_.id)" }
-        }) -join "`n"
-        Write-Host ""
-        Write-Host $sep                                                              -ForegroundColor Red
-        Write-Host "  SUBNET NOT EMPTY  —  $SubnetName"                            -ForegroundColor Red
-        Write-Host $sep                                                              -ForegroundColor Red
-        Write-Host "  The subnet has $($subnetIpConfigs.Count) connected resource(s) but no Container Apps environment was found." -ForegroundColor Red
-        Write-Host "  Container Apps requires a 100% empty, dedicated subnet."     -ForegroundColor Red
-        Write-Host ""
-        Write-Host "  Connected resources:"                                         -ForegroundColor Yellow
-        Write-Host $configList                                                       -ForegroundColor Cyan
-        Write-Host ""
-        Write-Host "  Options:"                                                      -ForegroundColor Yellow
-        Write-Host "  Option A — Remove those resources from '$SubnetName' and retry." -ForegroundColor White
-        Write-Host "  Option B — Re-run with a different, empty subnet:"            -ForegroundColor White
-        Write-Host "    -SubnetName '<new-empty-subnet-name>'"                      -ForegroundColor Cyan
-        Write-Host $sep                                                              -ForegroundColor Red
-        Write-Host ""
-
-    } else {
-        Write-Ok "Subnet '$SubnetName' is clean — no connected resources or blocked environments found"
-    }
-
-    if ($subnetBlocked) {
-        Fail "Subnet '$SubnetName' is not available for a new Container Apps deployment. See the instructions above."
-    }
-    # ── End subnet cleanliness pre-flight ─────────────────────────────────────
 
     # 2) Private Endpoint subnet (OpenAI/SQL/Redis PEs). MUST differ from the ACA subnet
     #    (delegated subnets can't host PEs). Use the provided one, or auto-create it.
@@ -623,86 +385,13 @@ if ([string]::IsNullOrWhiteSpace($SqlAdminPassword)) {
 $reuseImage = -not [string]::IsNullOrWhiteSpace($ImageTag)
 $imageTag = if ($reuseImage) { $ImageTag } else { "v$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" }
 
-if ([string]::IsNullOrWhiteSpace($OpenAILocation))  { $OpenAILocation  = $Location }
-
-# Final guardrail: do not continue to build/deploy if private mode region still mismatches VNet.
-if ($isPrivate -and -not [string]::IsNullOrWhiteSpace($VNetLocation) -and $VNetLocation.ToLowerInvariant() -ne $Location.ToLowerInvariant()) {
-    Fail "Private deployment region mismatch: VNet is in '$VNetLocation' but deployment location is '$Location'. Use -Location '$VNetLocation'."
-}
-
 Write-Info "Region:            $Location"
 Write-Info "Resource group:    $ResourceGroupName"
 Write-Info "Container registry:$ContainerRegistryName"
 Write-Info "Container app:     $ContainerAppName"
 Write-Info "OpenAI:            $OpenAIResourceName ($OpenAILocation) / $(if ($OpenAIDeploymentName) { $OpenAIDeploymentName } else { 'newest GPT available' })"
 Write-Info "Deploy SQL:        $DeploySql   Deploy Redis: $DeployRedis"
-if ($ScanSubscriptionsEnv -eq "auto") {
-    Write-Info "Scan subscriptions: auto (app discovers every subscription the identity can read)"
-} else {
-    $scanList = @($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    if ($scanList.Count -gt 10) {
-        $preview = ($scanList | Select-Object -First 5) -join ','
-        Write-Info "Scan subscriptions: $($scanList.Count) total (first 5: $preview ...)"
-    } else {
-        Write-Info "Scan subscriptions: $($scanList -join ',')"
-    }
-}
-
-# ── Resolve Container Apps dedicated capacity selection (EARLY, before the long
-#    image build) so any interactive menu is shown up front and the rest of the
-#    deployment runs unattended. The chosen profile is APPLIED later in Step 8. ──
-$capacityProfiles = @(
-    @{ Choice="1"; Kind="Consumption"; Type="Consumption"; Name="Consumption"; MinNodes=0; MaxNodes=0; Cpu="2.0"; Memory="4.0Gi";  MaxReplicas=2; Label="Consumption  (serverless, up to 4 vCPU / 8 GiB) - lightest, best for capacity-constrained regions" },
-    @{ Choice="2"; Kind="Dedicated";  Type="D4"; Name="infraiq-d4"; MinNodes=1; MaxNodes=1; Cpu="4.0"; Memory="16.0Gi"; MaxReplicas=1; Label="D4 x 1  (4 vCPU / 16 GiB, 1 node)"  },
-    @{ Choice="3"; Kind="Dedicated";  Type="D4"; Name="infraiq-d4"; MinNodes=2; MaxNodes=2; Cpu="4.0"; Memory="16.0Gi"; MaxReplicas=2; Label="D4 x 2  (4 vCPU / 16 GiB, 2 nodes)" },
-    @{ Choice="4"; Kind="Dedicated";  Type="D8"; Name="infraiq-d8"; MinNodes=1; MaxNodes=1; Cpu="8.0"; Memory="32.0Gi"; MaxReplicas=2; Label="D8 x 1  (8 vCPU / 32 GiB, 1 node)"  },
-    @{ Choice="5"; Kind="Dedicated";  Type="D8"; Name="infraiq-d8"; MinNodes=2; MaxNodes=2; Cpu="8.0"; Memory="32.0Gi"; MaxReplicas=2; Label="D8 x 2  (8 vCPU / 32 GiB, 2 nodes)" }
-)
-# Backward compatibility: the old -EnableDedicatedCapacityFallback $false flag = Manual mode.
-$effectiveMode = $CapacityMode
-if (-not $EnableDedicatedCapacityFallback -and $CapacityMode -eq "Automatic") {
-    $effectiveMode = "Manual"
-    if ([string]::IsNullOrWhiteSpace($ManualProfileChoice)) { $ManualProfileChoice = "2" }
-    Write-Info "Legacy -EnableDedicatedCapacityFallback `$false detected -> Manual capacity mode (profile $ManualProfileChoice)."
-}
-if ($effectiveMode -eq "Manual" -and [string]::IsNullOrWhiteSpace($ManualProfileChoice)) {
-    Write-Host ""
-    Write-Host "  Select the Container Apps capacity profile (Manual mode):" -ForegroundColor Yellow
-    foreach ($p in $capacityProfiles) { Write-Host "    [$($p.Choice)] $($p.Label)" -ForegroundColor Cyan }
-    Write-Host ""
-    Write-Host "  Tip: pick [1] Consumption if a region is capacity-constrained, then scale up later." -ForegroundColor DarkGray
-    Write-Host ""
-    while ($ManualProfileChoice -notin @("1","2","3","4","5")) {
-        $ManualProfileChoice = (Read-Host "  Enter choice (1-5)").Trim()
-    }
-}
-if ($effectiveMode -eq "Manual") {
-    $selProfile = $capacityProfiles | Where-Object { $_.Choice -eq $ManualProfileChoice } | Select-Object -First 1
-    Write-Info "Capacity mode:     Manual -> $($selProfile.Label)"
-} else {
-    Write-Info "Capacity mode:     Automatic -> ladder D8x2 -> D8x1 -> D4x2 -> D4x1 -> Consumption"
-}
-
-# ── Resolve Azure SQL SKU (EARLY, before the long image build) so the prompt is shown up
-#    front and the rest of the deploy runs unattended. The chosen SKU is APPLIED later in Step 6.
-#    Skipped if SQL deployment is disabled, or if the caller pinned -SqlServiceObjective explicitly. ──
-if ($DeploySql -and -not $PSBoundParameters.ContainsKey('SqlServiceObjective')) {
-    Write-Host ""
-    Write-Host "  Select the Azure SQL SKU:" -ForegroundColor Yellow
-    Write-Host "    [1] $SqlServiceObjective  (General Purpose, vCore - production performance) [Default]" -ForegroundColor Cyan
-    Write-Host "    [2] Basic      (DTU-based - lightest, most capacity-resilient for constrained regions)" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "  Tip: pick [2] Basic if the region is capacity-constrained (e.g. West Europe 'RegionDoesNotAllowProvisioning'), then upgrade to General Purpose later." -ForegroundColor DarkGray
-    Write-Host ""
-    # do/while so the prompt is ALWAYS shown at least once; Enter (empty) accepts the [1] default.
-    do {
-        $sqlSkuChoice = (Read-Host "  Enter choice (1-2) [1]").Trim()
-    } while ($sqlSkuChoice -notin @("","1","2"))
-    if ($sqlSkuChoice -eq "2") { $SqlServiceObjective = "Basic" }
-}
-if ($DeploySql) {
-    Write-Info "Azure SQL SKU:     $(if ($SqlServiceObjective -eq 'Basic') { 'Basic (DTU-based) - upgrade to General Purpose post-deploy' } else { "$SqlServiceObjective (General Purpose)" })"
-}
+Write-Info "Scan subscriptions:$SubscriptionIds"
 
 # ── Providers + containerapp extension ─────────────────────────────────────────
 Write-Step "Step 1: Registering providers and CLI extension"
@@ -715,16 +404,7 @@ Write-Ok "containerapp extension ready"
 
 # ── Resource group ─────────────────────────────────────────────────────────────
 Write-Step "Step 2: Resource group"
-$rgLocation = az group show --name $ResourceGroupName --query location -o tsv 2>$null
-if (-not [string]::IsNullOrWhiteSpace($rgLocation)) {
-    if ($rgLocation.ToLowerInvariant() -ne $Location.ToLowerInvariant()) {
-        Write-Warn2 "Resource group '$ResourceGroupName' exists in '$rgLocation'. Continuing with that region."
-        $Location = $rgLocation
-    }
-} else {
-    az group create --name $ResourceGroupName --location $Location --output none
-    if ($LASTEXITCODE -ne 0) { Fail "Failed to create resource group '$ResourceGroupName' in '$Location'." }
-}
+az group create --name $ResourceGroupName --location $Location --output none
 Write-Ok "Resource group ready: $ResourceGroupName"
 
 # ── Azure Container Registry + image build ─────────────────────────────────────
@@ -741,155 +421,30 @@ Write-Ok "ACR ready: $acrLoginServer"
 if ($reuseImage) {
     Write-Ok "Reusing existing image tag '$imageTag' (skipping build)"
 } else {
-# Pre-import the Docker Hub Node base image into the customer's ACR so the build pulls it
-# from THIS registry (implicitly authenticated) instead of Docker Hub anonymously — which
-# avoids the 'toomanyrequests' anonymous pull-rate-limit on shared ACR build agents. Once
-# cached the build never touches Docker Hub again (idempotent across re-runs).
-$nodeAcrPath = "base/node:20-bookworm-slim"
-$buildArgs = @()
-$importOk = $false
-if (az acr repository show --name $ContainerRegistryName --image $nodeAcrPath 2>$null) {
-    $importOk = $true
-    Write-Ok "Node base image already cached in ACR: $acrLoginServer/$nodeAcrPath"
-} else {
-    $importArgs = @("acr","import","--name",$ContainerRegistryName,"--source","docker.io/library/node:20-bookworm-slim","--image",$nodeAcrPath,"--force")
-    if (-not [string]::IsNullOrWhiteSpace($DockerHubUsername) -and -not [string]::IsNullOrWhiteSpace($DockerHubToken)) {
-        $importArgs += @("--username",$DockerHubUsername,"--password",$DockerHubToken)
-        Write-Info "Optimization: caching Node base image in ACR (authenticated)..."
-    } else {
-        Write-Info "Optimization: caching Node base image in ACR to dodge Docker Hub limits (best-effort)..."
-    }
-    for ($i = 1; $i -le 2; $i++) {
-        az @importArgs --output none 2>$null
-        if ($LASTEXITCODE -eq 0) { $importOk = $true; break }
-        if ($i -lt 2) { Write-Info "  ACR cache not ready; one more try in 15s (non-blocking)..."; Start-Sleep -Seconds 15 }
-    }
-}
-if ($importOk) {
-    $buildArgs = @("--build-arg","NODE_IMAGE=$acrLoginServer/$nodeAcrPath")
-    Write-Ok "Node base image cached in ACR — the build will not touch Docker Hub."
-} else {
-    Write-Info "ACR cache unavailable — build will pull the base image directly during the build. This is a NORMAL fallback, not an error."
-}
-
-# Pre-import the ZureMap "Architecture Map" engine base image into the customer's ACR so the
-# build pulls it from THIS registry (implicitly authenticated) instead of a live anonymous
-# ghcr.io pull — which fails with 'denied' if the upstream package's visibility changed, or
-# 'toomanyrequests' on shared ACR build agents. Idempotent across re-runs.
-$zuremapAcrPath = "base/zuremap:latest"
-$zmImportOk = $false
-if (az acr repository show --name $ContainerRegistryName --image $zuremapAcrPath 2>$null) {
-    $zmImportOk = $true
-    Write-Ok "ZureMap engine image already cached in ACR: $acrLoginServer/$zuremapAcrPath"
-} else {
-    $zmArgs = @("acr","import","--name",$ContainerRegistryName,"--source",$ZureMapImage,"--image",$zuremapAcrPath,"--force")
-    if (-not [string]::IsNullOrWhiteSpace($GhcrUsername) -and -not [string]::IsNullOrWhiteSpace($GhcrToken)) {
-        $zmArgs += @("--username",$GhcrUsername,"--password",$GhcrToken)
-        Write-Info "Importing ZureMap engine image into ACR (authenticated to ghcr.io)..."
-    } else {
-        Write-Info "Importing ZureMap engine image ($ZureMapImage) into ACR (best-effort)..."
-    }
-    for ($i = 1; $i -le 2; $i++) {
-        az @zmArgs --output none 2>$null
-        if ($LASTEXITCODE -eq 0) { $zmImportOk = $true; break }
-        if ($i -lt 2) { Write-Info "  ZureMap import not ready; one more try in 15s..."; Start-Sleep -Seconds 15 }
-    }
-}
-
-# AUTO-SEED from the LOCAL Docker image cache. The engine image is PRIVATE on ghcr.io, so a
-# fresh ACR cannot import it — but the machine running this deploy typically has it cached
-# (it is the same image the Architecture Map uses locally). Push that cached copy into the
-# ACR ONCE; the Dockerfile grafts the pure-JS engine via COPY --from, so the cached image's
-# ARCHITECTURE does not matter. This makes deploys to a brand-new ACR seamless with no manual
-# seeding step. Idempotent — skipped once the image is cached in the ACR.
-if (-not $zmImportOk -and (Get-Command docker -ErrorAction SilentlyContinue)) {
-    docker image inspect $ZureMapImage *> $null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Info "Seeding the ZureMap engine into the ACR from the local Docker cache ($ZureMapImage)."
-        Write-Info "  (one-time per registry; pushes ~1-2 GB — later deploys reuse the cached copy)"
-        az acr login --name $ContainerRegistryName --output none 2>$null
-        docker tag $ZureMapImage "$acrLoginServer/$zuremapAcrPath" 2>$null
-        docker push "$acrLoginServer/$zuremapAcrPath" 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            $zmImportOk = $true
-            Write-Ok "ZureMap engine seeded into the ACR from the local Docker cache."
-        } else {
-            Write-Warn2 "Could not push the local ZureMap image to the ACR (check 'az acr login' / ACR reachability)."
+Write-Info "Building combined image remotely (SPA build + backend + ODBC + ZureMap engine). This takes ~10-15 min..."
+Push-Location $RepoRoot
+az acr build --registry $ContainerRegistryName --image "${ImageName}:${imageTag}" --file "Dockerfile" .
+$acrBuildExit = $LASTEXITCODE
+Pop-Location
+if ($acrBuildExit -ne 0) {
+    # az's Windows log-streaming can crash AFTER the remote build was queued (the
+    # server-side build keeps running). Distinguish that from a real build failure by
+    # polling the actual run STATUS: fail fast on Failed/Canceled, wait while Running,
+    # continue once it Succeeds.
+    Write-Warn2 "az acr build reported exit $acrBuildExit — checking the remote build run status..."
+    $ok = $false
+    for ($i = 0; $i -lt 80; $i++) {
+        $run = az acr task list-runs --registry $ContainerRegistryName --top 1 -o json 2>$null | ConvertFrom-Json
+        $st = if ($run) { $run[0].status } else { $null }
+        if ($st -eq "Succeeded") { $ok = $true; break }
+        if ($st -in @("Failed","Canceled","Error","Timeout")) {
+            Fail "ACR build run '$($run[0].runId)' $st. Inspect: az acr task logs --registry $ContainerRegistryName --run-id $($run[0].runId)"
         }
-    } else {
-        Write-Info "ZureMap engine not in the local Docker cache ($ZureMapImage) — cannot auto-seed (is Docker Desktop running?)."
+        Start-Sleep -Seconds 15
     }
+    if ($ok) { Write-Ok "Remote ACR build Succeeded — continuing." }
+    else { Fail "ACR build did not complete in time." }
 }
-
-if ($zmImportOk) {
-    $buildArgs += @("--build-arg","ZUREMAP_IMAGE=$acrLoginServer/$zuremapAcrPath")
-    Write-Ok "ZureMap engine image cached in ACR — the build will not touch ghcr.io."
-} else {
-    # The combined image GRAFTS the ZureMap engine from this image (Dockerfile: COPY --from),
-    # so a real engine image MUST be available — there is no silent "build without the engine"
-    # fallback (that would break the COPY --from and is not what we want anyway). The engine
-    # image (ghcr.io/natechsa/zuremap) is PRIVATE, so it must be seeded into the ACR once.
-    Write-Warn2 "ZureMap 'Architecture Map' engine image is not cached in the ACR, and it could not be auto-seeded or imported."
-    Write-Host ""
-    Write-Host "  This script AUTO-SEEDS the engine from your LOCAL Docker cache, which needs"        -ForegroundColor Yellow
-    Write-Host "  Docker Desktop RUNNING with the image present. Start Docker Desktop, then re-run."  -ForegroundColor Yellow
-    Write-Host "  (The Architecture Map running locally puts the image in your cache.)"               -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "  OR seed it manually ONCE (any architecture — the build grafts the pure-JS engine):" -ForegroundColor Yellow
-    Write-Host "    az acr login --name $ContainerRegistryName"                                       -ForegroundColor Cyan
-    Write-Host "    docker tag $ZureMapImage $acrLoginServer/$zuremapAcrPath"                          -ForegroundColor Cyan
-    Write-Host "    docker push $acrLoginServer/$zuremapAcrPath"                                       -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "  OR re-run this script with -GhcrUsername <github-user> -GhcrToken <PAT: read:packages>" -ForegroundColor Yellow
-    Write-Host ""
-    Fail "ZureMap engine image unavailable. Start Docker Desktop (auto-seed), or seed '$acrLoginServer/$zuremapAcrPath' manually / pass GHCR creds, then re-run."
-}
-
-Write-Info "Building combined image remotely (SPA build + backend + ODBC + Architecture Map engine). This takes ~10-15 min..."
-$buildOk = $false
-for ($attempt = 1; $attempt -le 3; $attempt++) {
-    Push-Location $RepoRoot
-    az acr build --registry $ContainerRegistryName --image "${ImageName}:${imageTag}" --file "Dockerfile" @buildArgs .
-    $acrBuildExit = $LASTEXITCODE
-    Pop-Location
-    if ($acrBuildExit -eq 0) { $buildOk = $true; break }
-
-    # az's Windows log-streaming can crash AFTER the build was queued (the server-side
-    # build keeps running). Poll the real run STATUS before deciding.
-    Write-Warn2 "az acr build reported exit $acrBuildExit (attempt $attempt/3) — checking the remote run status..."
-    $run   = az acr task list-runs --registry $ContainerRegistryName --top 1 -o json 2>$null | ConvertFrom-Json
-    $runId = if ($run) { $run[0].runId } else { $null }
-    $st    = if ($run) { $run[0].status } else { $null }
-    if ($st -in @("Running","Queued","Started")) {
-        for ($i = 0; $i -lt 80; $i++) {
-            $run = az acr task list-runs --registry $ContainerRegistryName --top 1 -o json 2>$null | ConvertFrom-Json
-            $st = if ($run) { $run[0].status } else { $null }
-            if ($st -in @("Succeeded","Failed","Canceled","Error","Timeout")) { break }
-            Start-Sleep -Seconds 15
-        }
-    }
-    if ($st -eq "Succeeded") { $buildOk = $true; break }
-
-    # Look for a transient Docker Hub rate-limit signature in the run logs.
-    $logTxt = ""
-    if ($runId) { $logTxt = (az acr task logs --registry $ContainerRegistryName --run-id $runId 2>$null | Out-String) }
-    $isRateLimited = $logTxt -match "toomanyrequests|pull rate limit|429 Too Many Requests"
-    if ($isRateLimited -and $attempt -lt 3) {
-        Write-Warn2 "Docker Hub anonymous pull rate limit hit on the build agent. Retrying in 90s (a fresh agent/IP usually clears it)..."
-        Start-Sleep -Seconds 90
-        continue
-    }
-    if ($isRateLimited) {
-        Fail "ACR build failed: Docker Hub anonymous pull rate limit ('toomanyrequests'). Re-run with -DockerHubUsername/-DockerHubToken (a free Docker Hub account + read-only access token) for an authenticated, rate-limit-free import. Logs: az acr task logs --registry $ContainerRegistryName --run-id $runId"
-    }
-    if ($attempt -lt 3 -and [string]::IsNullOrWhiteSpace($st)) {
-        Write-Warn2 "Could not determine the build status; retrying in 30s..."
-        Start-Sleep -Seconds 30
-        continue
-    }
-    Fail "ACR build run '$runId' $st. Inspect: az acr task logs --registry $ContainerRegistryName --run-id $runId"
-}
-if (-not $buildOk) { Fail "ACR build did not complete after retries." }
 }
 $fullImage = "$acrLoginServer/${ImageName}:${imageTag}"
 Write-Ok "Image built: $fullImage"
@@ -897,15 +452,13 @@ Write-Ok "Image built: $fullImage"
 $acrUser = az acr credential show --name $ContainerRegistryName --query username -o tsv
 $acrPass = az acr credential show --name $ContainerRegistryName --query "passwords[0].value" -o tsv
 
-# ── Monitoring + Container Apps environment ─────────────────────────────────
-Write-Step "Step 4: Monitoring + Container Apps environment"
+# ── Log Analytics + Container Apps environment ─────────────────────────────────
+Write-Step "Step 4: Log Analytics + Container Apps environment"
 $lawCustomerId = ""
 $lawKey = ""
-$useLogAnalytics = $false
 if (-not [string]::IsNullOrWhiteSpace($ExistingLogAnalyticsWorkspaceId) -and -not [string]::IsNullOrWhiteSpace($ExistingLogAnalyticsWorkspaceKey)) {
     $lawCustomerId = $ExistingLogAnalyticsWorkspaceId
     $lawKey = $ExistingLogAnalyticsWorkspaceKey
-    $useLogAnalytics = $true
     Write-Info "Using customer-provided Log Analytics workspace credentials (no workspace creation)."
 } elseif ($CreateLogAnalyticsWorkspace) {
     $lawExists = az monitor log-analytics workspace show --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName 2>$null
@@ -914,10 +467,9 @@ if (-not [string]::IsNullOrWhiteSpace($ExistingLogAnalyticsWorkspaceId) -and -no
     }
     $lawCustomerId = az monitor log-analytics workspace show --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query customerId -o tsv
     $lawKey        = az monitor log-analytics workspace get-shared-keys --resource-group $ResourceGroupName --workspace-name $LogAnalyticsName --query primarySharedKey -o tsv
-    $useLogAnalytics = $true
     Write-Info "Created/used deployment-owned Log Analytics workspace '$LogAnalyticsName'."
 } else {
-    Write-Info "No Log Analytics workspace configured. Environment logs destination: none."
+    Fail "Log Analytics workspace credentials are required. Pass -ExistingLogAnalyticsWorkspaceId and -ExistingLogAnalyticsWorkspaceKey, or set -CreateLogAnalyticsWorkspace `$true."
 }
 
 $envProvState = az containerapp env show --name $ContainerAppEnvName --resource-group $ResourceGroupName --query "properties.provisioningState" -o tsv 2>$null
@@ -930,145 +482,15 @@ if (-not $envProvState) {
     $envCreateArgs = @(
         "containerapp","env","create",
         "--name",$ContainerAppEnvName,"--resource-group",$ResourceGroupName,"--location",$Location,
-        # Explicitly a workload-profiles environment: guarantees the built-in 'Consumption'
-        # profile is available AND that dedicated D-series profiles can be added/switched to
-        # later (the manual 'deploy on Consumption, scale up afterwards' path).
-        "--enable-workload-profiles","true"
+        "--logs-workspace-id",$lawCustomerId,"--logs-workspace-key",$lawKey
     )
-    if ($useLogAnalytics) {
-        $envCreateArgs += @("--logs-destination","log-analytics","--logs-workspace-id",$lawCustomerId,"--logs-workspace-key",$lawKey)
-    } else {
-        $envCreateArgs += @("--logs-destination","none")
-    }
     if ($isPrivate) {
         # Inject into the customer VNet with an internal-only load balancer (no public IP).
         $envCreateArgs += @("--infrastructure-subnet-resource-id",$InfraSubnetId,"--internal-only","true")
         Write-Info "Private mode: environment -> subnet '$SubnetName' (internal-only ingress)."
     }
-    $envCreated = $false
-    $lastEnvError = ""
-    for ($attempt = 1; $attempt -le 4; $attempt++) {
-        # Before each attempt: if the environment already exists in a non-Succeeded/non-pending
-        # state (e.g. CreateFailed from a previous attempt), delete it so the create can proceed.
-        $existingProvState = az containerapp env show --name $ContainerAppEnvName --resource-group $ResourceGroupName --query "properties.provisioningState" -o tsv 2>$null
-        if ($existingProvState -and $existingProvState -notin @("Succeeded","Waiting","InProgress","Pending")) {
-            Write-Warn2 "Environment '$ContainerAppEnvName' is in '$existingProvState' state — deleting before retry (attempt $attempt/4)..."
-            az containerapp env delete --name $ContainerAppEnvName --resource-group $ResourceGroupName --yes --output none 2>$null
-            # Wait up to 3 minutes for deletion to complete before retrying
-            $deleted = $false
-            for ($dw = 1; $dw -le 12; $dw++) {
-                $chk = az containerapp env show --name $ContainerAppEnvName --resource-group $ResourceGroupName 2>$null
-                if (-not $chk) { $deleted = $true; break }
-                Write-Info "Waiting for environment deletion... ($($dw * 15)s)"
-                Start-Sleep -Seconds 15
-            }
-            if (-not $deleted) { Write-Warn2 "Environment deletion may still be in progress; proceeding with create anyway." }
-        }
-
-        Write-Info "Creating Container Apps environment (attempt $attempt/4)..."
-        $envErr = az @envCreateArgs --output none 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            $envCreated = $true
-            break
-        }
-
-        $lastEnvError = "$envErr"
-
-        # ── Hard-stop: subnet already owned by another environment ───────────────
-        # ManagedEnvironmentSubnetInUse is a CONFIGURATION error, not a capacity error.
-        # No amount of retrying or SKU switching will fix it — only deleting the
-        # conflicting environment (or using a different subnet) will. Surface it
-        # immediately with exact remediation commands and exit.
-        if ($lastEnvError -match "ManagedEnvironmentSubnetInUse") {
-            $ceName = "unknown"; $ceRg = "unknown"
-            if ($lastEnvError -match "managedEnvironments/([^'`"\s]+)") { $ceName = $Matches[1] }
-            if ($lastEnvError -match "/resourceGroups/([^/]+)/providers/Microsoft\.App")  { $ceRg  = $Matches[1] }
-            $sep = "  " + ("─" * 70)
-            Write-Host ""
-            Write-Host $sep                                                                         -ForegroundColor Red
-            Write-Host "  SUBNET IN USE  —  '$SubnetName' is already claimed by another environment" -ForegroundColor Red
-            Write-Host $sep                                                                         -ForegroundColor Red
-            Write-Host "  Conflicting environment : $ceName"                                        -ForegroundColor Cyan
-            Write-Host "  Resource group          : $ceRg"                                          -ForegroundColor Cyan
-            Write-Host ""
-            Write-Host "  This is a configuration error — retrying or changing SKU will NOT fix it." -ForegroundColor Yellow
-            Write-Host "  Run BOTH commands below, then re-run this script:"                         -ForegroundColor Yellow
-            Write-Host ""
-            Write-Host "  Step 1 — Delete the conflicting environment:"                              -ForegroundColor White
-            Write-Host "    az containerapp env delete ``"                                           -ForegroundColor Cyan
-            Write-Host "        --name $ceName ``"                                                   -ForegroundColor Cyan
-            Write-Host "        --resource-group $ceRg --yes"                                       -ForegroundColor Cyan
-            Write-Host ""
-            Write-Host "  Step 2 — If the subnet delegation is still stuck after deletion:"          -ForegroundColor White
-            Write-Host "    az network vnet subnet update ``"                                        -ForegroundColor Cyan
-            Write-Host "        --resource-group $VNetResourceGroupName ``"                         -ForegroundColor Cyan
-            Write-Host "        --vnet-name $VNetName ``"                                           -ForegroundColor Cyan
-            Write-Host "        --name $SubnetName --remove delegations"                            -ForegroundColor Cyan
-            Write-Host ""
-            Write-Host "  Alternative — re-run with a brand-new empty subnet:"                      -ForegroundColor White
-            Write-Host "    -SubnetName '<new-empty-subnet-name>'"                                  -ForegroundColor Cyan
-            Write-Host $sep                                                                         -ForegroundColor Red
-            Write-Host ""
-            Fail "Subnet '$SubnetName' is already claimed by '$ceName' (RG: $ceRg). Delete that environment first, then re-run."
-        }
-
-        # ── Regional capacity exhaustion (ManagedEnvironmentCapacityHeavyUsageError /
-        #    AKSCapacityHeavyUsage): Azure has no capacity to create a NEW environment in
-        #    this region right now. Retrying rarely helps, so give ONE quick retry then
-        #    fail FAST with clear, region-specific guidance (instead of churning 4x with
-        #    slow environment deletions between attempts).
-        $isCapacityError = ($lastEnvError -match "CapacityHeavyUsage")
-        if ($isCapacityError) {
-            if ($attempt -lt 2) {
-                Write-Warn2 "Region '$Location' is at capacity for NEW Container Apps environments. One quick retry in 60s..."
-                Start-Sleep -Seconds 60
-                continue
-            }
-            $sep = "  " + ("─" * 70)
-            Write-Host ""
-            Write-Host $sep                                                                       -ForegroundColor Red
-            Write-Host "  REGIONAL CAPACITY UNAVAILABLE  —  $Location"                            -ForegroundColor Red
-            Write-Host $sep                                                                       -ForegroundColor Red
-            Write-Host "  Azure cannot create a NEW Container Apps environment in '$Location'"     -ForegroundColor Yellow
-            Write-Host "  right now due to high demand. This is an Azure CAPACITY limit — NOT a"    -ForegroundColor Yellow
-            Write-Host "  problem with this script, your subnet, or the capacity mode you chose."   -ForegroundColor Yellow
-            Write-Host "  (Note: the Consumption/D-series choice does not affect this — it happens" -ForegroundColor DarkGray
-            Write-Host "   at environment creation, before any workload profile is applied.)"       -ForegroundColor DarkGray
-            Write-Host ""
-            if ($isPrivate) {
-                Write-Host "  PRIVATE mode requires the environment to be in the SAME region as your" -ForegroundColor White
-                Write-Host "  VNet '$VNetName' ($Location) — so just changing -Location will NOT work" -ForegroundColor White
-                Write-Host "  unless you also use a VNet + dedicated subnet in the new region." -ForegroundColor White
-                Write-Host ""
-            }
-            Write-Host "  Options:"                                                                -ForegroundColor White
-            Write-Host "   1) Retry later — regional capacity fluctuates; it often clears within"  -ForegroundColor Cyan
-            Write-Host "      a few hours (no script changes needed)."                             -ForegroundColor Cyan
-            Write-Host "   2) Use an alternate region end-to-end: a VNet + dedicated subnet in e.g." -ForegroundColor Cyan
-            Write-Host "      northeurope / swedencentral / francecentral, then re-run with that"   -ForegroundColor Cyan
-            Write-Host "      VNet, -SubnetName, and -Location set to that region."                -ForegroundColor Cyan
-            if (-not $isPrivate) {
-                Write-Host "   3) Public mode: simply re-run with a different -Location (no VNet needed)." -ForegroundColor Cyan
-            }
-            Write-Host ""
-            Write-Host "  Azure regions list: https://aka.ms/acaregions"                           -ForegroundColor DarkGray
-            Write-Host $sep                                                                       -ForegroundColor Red
-            Write-Host ""
-            Fail "Container Apps environment capacity is unavailable in '$Location' (ManagedEnvironmentCapacityHeavyUsageError). Retry later or use an alternate region — see the guidance above."
-        }
-
-        # ── Other transient ARM state errors (e.g. a prior CreateFailed env) ─────
-        $isRetryable = ($lastEnvError -match "InCreateFailedState")
-        if ($isRetryable -and $attempt -lt 4) {
-            Write-Warn2 "Container Apps environment create failed (transient). Waiting 30 seconds before retry $($attempt + 1)/4..."
-            Start-Sleep -Seconds 30
-            continue
-        }
-        break
-    }
-    if (-not $envCreated) {
-        Fail "Failed to create Container Apps environment after retries. Last error: $lastEnvError"
-    }
+    az @envCreateArgs --output none
+    if ($LASTEXITCODE -ne 0) { Fail "Failed to create Container Apps environment (region capacity/quota, or the infrastructure subnet is unusable — needs >= /27 (/23 recommended), empty, delegated to Microsoft.App/environments). Try a different -Location." }
     $envProvState = az containerapp env show --name $ContainerAppEnvName --resource-group $ResourceGroupName --query "properties.provisioningState" -o tsv 2>$null
     if ($envProvState -ne "Succeeded") { Fail "Container Apps environment did not provision successfully (state: $envProvState). Try a different -Location with available capacity." }
 }
@@ -1179,36 +601,11 @@ if ($depExists) {
 $sqlConnectionString = ""
 if ($DeploySql) {
     Write-Step "Step 6: Azure SQL ($SqlServiceObjective)"
-    # ── Capacity-resilience banner ───────────────────────────────────────────────
-    # Some regions (notably West Europe) intermittently gate NEW SQL provisioning with
-    # 'RegionDoesNotAllowProvisioning'. The DTU 'Basic' tier is the lightest footprint and the
-    # most likely to provision in a constrained region, so we deploy on it FIRST to keep the
-    # overall app deployment moving, then advise upgrading to General Purpose afterwards.
-    if ($SqlServiceObjective -in @("Basic","S0","S1","S2","S3")) {
-        Write-Info "To cover regional capacity limits (e.g. 'RegionDoesNotAllowProvisioning'), Azure SQL is being deployed on the DTU '$SqlServiceObjective' tier. RECOMMENDED: after this script completes, upgrade the database to '$SqlTargetServiceObjective' (General Purpose) — the summary prints the exact command."
-    }
     $sqlExists = az sql server show --name $SqlServerName --resource-group $ResourceGroupName 2>$null
     if (-not $sqlExists) {
-        # The SQL *logical server* create is what hits 'RegionDoesNotAllowProvisioning' — a regional
-        # gate independent of the database SKU. Retry a few times in case the gate is transient.
-        $sqlSrvErr = ""
-        for ($sqlSrvTry = 1; $sqlSrvTry -le 3; $sqlSrvTry++) {
-            $sqlSrvErr = az sql server create --name $SqlServerName --resource-group $ResourceGroupName --location $Location `
-                --admin-user $SqlAdminUser --admin-password $SqlAdminPassword --output none 2>&1
-            if ($LASTEXITCODE -eq 0) { break }
-            if ("$sqlSrvErr" -match "RegionDoesNotAllowProvisioning|ProvisioningDisabled|Capacity") {
-                Write-Warn2 "SQL server create attempt $sqlSrvTry/3 hit a regional capacity gate in '$Location'. Retrying in 30s..."
-                Start-Sleep -Seconds 30
-            } else { break }
-        }
-        if ($LASTEXITCODE -ne 0) {
-            $sqlSrvMsg = ("$sqlSrvErr" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
-            if ("$sqlSrvErr" -match "RegionDoesNotAllowProvisioning") {
-                Fail "Azure is temporarily not accepting NEW SQL servers in '$Location' (RegionDoesNotAllowProvisioning). This is a REGIONAL capacity gate on the logical server, independent of the database SKU — switching to DTU/Basic does not bypass it. Options: (1) re-run later (the gate usually clears within a few hours); (2) deploy to an alternate region via -Location; or (3) pre-create the SQL server in an available region and re-run (the script reuses an existing server). Last error: $sqlSrvMsg"
-            } else {
-                Fail "Failed to create SQL server. $sqlSrvMsg"
-            }
-        }
+        az sql server create --name $SqlServerName --resource-group $ResourceGroupName --location $Location `
+            --admin-user $SqlAdminUser --admin-password $SqlAdminPassword --output none
+        if ($LASTEXITCODE -ne 0) { Fail "Failed to create SQL server." }
         az sql server firewall-rule create --resource-group $ResourceGroupName --server $SqlServerName `
             --name "AllowAzureServices" --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0 --output none 2>$null
     } else {
@@ -1228,14 +625,6 @@ if ($DeploySql) {
     if (-not $dbExists) {
         az sql db create --name $SqlDatabaseName --server $SqlServerName --resource-group $ResourceGroupName `
             --service-objective $SqlServiceObjective --backup-storage-redundancy Local --output none
-        if ($LASTEXITCODE -ne 0 -and $SqlServiceObjective -ne "Basic") {
-            # DB-level capacity fallback: if the requested (e.g. General Purpose) objective is
-            # capacity-constrained, drop to DTU 'Basic' so the deploy continues; upgrade post-deploy.
-            Write-Warn2 "SQL database create on '$SqlServiceObjective' failed (often regional capacity). Falling back to the DTU 'Basic' tier — upgrade to '$SqlTargetServiceObjective' (General Purpose) after deployment."
-            $SqlServiceObjective = "Basic"
-            az sql db create --name $SqlDatabaseName --server $SqlServerName --resource-group $ResourceGroupName `
-                --service-objective $SqlServiceObjective --backup-storage-redundancy Local --output none
-        }
         if ($LASTEXITCODE -ne 0) { Fail "Failed to create SQL database." }
     }
     $sqlConnectionString = "Driver={ODBC Driver 18 for SQL Server};Server=tcp:$SqlServerName.database.windows.net,1433;Database=$SqlDatabaseName;Uid=$SqlAdminUser;Pwd=$SqlAdminPassword;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
@@ -1245,61 +634,23 @@ if ($DeploySql) {
 # ── Azure Cache for Redis ──────────────────────────────────────────────────────
 $redisUrl = ""
 if ($DeployRedis) {
-    # Back-compat: legacy classic SKUs are invalid for Azure Managed Redis — map to the default tier.
-    if ($RedisSku -in @("Basic","Standard","Premium")) {
-        Write-Info "Mapping legacy Redis SKU '$RedisSku' -> Azure Managed Redis 'ComputeOptimized_X5'."
-        $RedisSku = "ComputeOptimized_X5"
-    }
-    Write-Step "Step 7: Azure Managed Redis ($RedisSku, High-Availability)"
-    az extension add -n redisenterprise --only-show-errors --output none 2>$null
-    $redisExists = az redisenterprise show --cluster-name $RedisName --resource-group $ResourceGroupName 2>$null
+    Write-Step "Step 7: Azure Cache for Redis ($RedisSku $RedisVmSize)"
+    $redisExists = az redis show --name $RedisName --resource-group $ResourceGroupName 2>$null
     if (-not $redisExists) {
-        Write-Info "Creating Azure Managed Redis (this can take ~5-10 minutes)..."
-        # --public-network-access is REQUIRED as of redisEnterprise API 2025-07-01 (CLI >= 2.86).
-        #   Created Enabled here; in Private mode Step "Private Endpoints" flips it to Disabled
-        #   (properties.publicNetworkAccess) after the PE + private DNS are wired — same pattern
-        #   as OpenAI/SQL. --access-keys-auth Enabled keeps key-based auth (the app connects with
-        #   the primary key via REDIS_URL); the CLI default is changing to Disabled, so pin it.
-        $redisErr = az redisenterprise create --cluster-name $RedisName --resource-group $ResourceGroupName --location $Location `
-            --sku $RedisSku --public-network-access Enabled --access-keys-auth Enabled --output none 2>&1
+        Write-Info "Creating Redis (this can take 15-20 minutes)..."
+        $redisErr = az redis create --name $RedisName --resource-group $ResourceGroupName --location $Location `
+            --sku $RedisSku --vm-size $RedisVmSize --minimum-tls-version 1.2 --output none 2>&1
         if ($LASTEXITCODE -ne 0) {
-            Write-Warn2 "Could not create Azure Managed Redis - the app runs fine WITHOUT it (no caching). Continuing."
-            Write-Warn2 ("Redis error: " + (("$redisErr" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)))
+            Write-Warn2 "Could not create Redis - the app runs fine WITHOUT it (no caching). Continuing."
+            if ("$redisErr" -match "retir") { Write-Warn2 "Azure Cache for Redis is being retired; use Azure Managed Redis (az redisenterprise) or pass -DeployRedis `$false." }
             $DeployRedis = $false
         }
     }
     if ($DeployRedis) {
-        # Azure Managed Redis (redisenterprise) has exactly ONE database, always named "default",
-        # auto-created by 'az redisenterprise create'. CRITICAL: 'database list-keys' accepts ONLY
-        # --cluster-name / --resource-group -- there is NO --database-name argument (redisenterprise
-        # ext 1.4.0). The old call passed '--database-name default', which made the command fail, so
-        # the key came back empty and the deploy fell back to "host/key not readable". Read host+key
-        # with a short retry in case the default database is still settling right after create.
-        $redisHost = ""; $redisKey = ""; $redisReadErr = ""
-        for ($redisTry = 1; $redisTry -le 8; $redisTry++) {
-            if (-not $redisHost) {
-                $redisHost = az redisenterprise show --cluster-name $RedisName --resource-group $ResourceGroupName --query "hostName" -o tsv 2>$null
-                if ([string]::IsNullOrWhiteSpace($redisHost)) {
-                    $redisHost = az redisenterprise show --cluster-name $RedisName --resource-group $ResourceGroupName --query "properties.hostName" -o tsv 2>$null
-                }
-            }
-            if (-not $redisKey) {
-                $keyOut = az redisenterprise database list-keys --cluster-name $RedisName --resource-group $ResourceGroupName --query "primaryKey" -o tsv 2>&1
-                if ($LASTEXITCODE -eq 0) { $redisKey = ("$keyOut").Trim() } else { $redisReadErr = "$keyOut" }
-            }
-            if ($redisHost -and $redisKey) { break }
-            Start-Sleep -Seconds 10
-        }
-        if ($redisHost -and $redisKey) {
-            # Azure Managed Redis listens on 10000 (TLS). The app reads REDIS_URL (rediss://).
-            $redisUrl  = "rediss://:$redisKey@${redisHost}:10000"
-            Write-Ok "Azure Managed Redis ready: $redisHost"
-        } else {
-            Write-Warn2 "Azure Managed Redis host/key not readable after retries - continuing without Redis caching."
-            if ([string]::IsNullOrWhiteSpace($redisHost)) { Write-Warn2 "  hostName empty (cluster '$RedisName' not ready or wrong name)." }
-            if ([string]::IsNullOrWhiteSpace($redisKey))  { Write-Warn2 ("  key read failed: " + (("$redisReadErr" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1))) }
-            $DeployRedis = $false
-        }
+        $redisHost = az redis show --name $RedisName --resource-group $ResourceGroupName --query hostName -o tsv
+        $redisKey  = az redis list-keys --name $RedisName --resource-group $ResourceGroupName --query primaryKey -o tsv
+        $redisUrl  = "rediss://:$redisKey@${redisHost}:6380"
+        Write-Ok "Redis ready: $redisHost"
     }
 }
 
@@ -1311,8 +662,8 @@ $secrets = @("openai-key=$openaiKey")
 if ($DeploySql)   { $secrets += "sql-conn=$sqlConnectionString" }
 if ($redisUrl)    { $secrets += "redis-url=$redisUrl" }
 if ($deployZureMap) {
+    $secrets += "zuremap-secret=$ZureMapClientSecret"
     $secrets += "zuremap-session-key=$zuremapSessionKey"
-    if ($useZureMapSp) { $secrets += "zuremap-secret=$ZureMapClientSecret" }
 }
 
 # Environment contract (the app's real env — see backend/services/*).
@@ -1337,98 +688,34 @@ if ($redisUrl)  { $envVars += "REDIS_URL=secretref:redis-url" }
 # Embedded Architecture Map (ZureMap). ZUREMAP_* are deliberately NOT named AZURE_*
 # so they never override the app's managed identity (DefaultAzureCredential).
 if ($deployZureMap) {
-    $envVars += @("ZUREMAP_EMBED=proxy", "ZUREMAP_SESSION_KEY=secretref:zuremap-session-key")
-    if ($useZureMapSp) {
-        $envVars += @(
-            "ZUREMAP_USE_MANAGED_IDENTITY=false",
-            "ZUREMAP_CLIENT_ID=$ZureMapClientId",
-            "ZUREMAP_TENANT_ID=$ZureMapTenantId",
-            "ZUREMAP_CLIENT_SECRET=secretref:zuremap-secret"
-        )
-    } else {
-        $envVars += @("ZUREMAP_USE_MANAGED_IDENTITY=true")
-    }
+    $envVars += @(
+        "ZUREMAP_EMBED=proxy",
+        "ZUREMAP_CLIENT_ID=$ZureMapClientId",
+        "ZUREMAP_TENANT_ID=$ZureMapTenantId",
+        "ZUREMAP_CLIENT_SECRET=secretref:zuremap-secret",
+        "ZUREMAP_SESSION_KEY=secretref:zuremap-session-key"
+    )
 }
 
 $appExists = az containerapp show --name $ContainerAppName --resource-group $ResourceGroupName 2>$null
-
-# Capacity selection was resolved early (before the image build). Build the profile
-# list to apply: a single chosen profile in Manual mode, or the full ladder in Automatic.
-if ($effectiveMode -eq "Manual") {
-    $sel = $capacityProfiles | Where-Object { $_.Choice -eq $ManualProfileChoice } | Select-Object -First 1
-    $profileLadder = @($sel)
-    Write-Info "Applying Manual capacity profile: $($sel.Label)"
+if (-not $appExists) {
+    az containerapp create --name $ContainerAppName --resource-group $ResourceGroupName --environment $ContainerAppEnvName `
+        --image $fullImage --target-port 8000 --ingress $ingressMode --transport auto `
+        --registry-server $acrLoginServer --registry-username $acrUser --registry-password $acrPass `
+        --system-assigned `
+        --cpu $Cpu --memory $Memory --min-replicas 1 --max-replicas 2 `
+        --secrets $secrets --env-vars $envVars --output none
+    if ($LASTEXITCODE -ne 0) { Fail "Failed to create Container App." }
 } else {
-    # Automatic: heaviest first, falling back to lighter, with Consumption as the final
-    # safety net so capacity-constrained regions still succeed.
-    $profileLadder = @("5","4","3","2","1" | ForEach-Object { $cc = $_; $capacityProfiles | Where-Object { $_.Choice -eq $cc } })
-    Write-Info "Applying Automatic capacity ladder: D8x2 -> D8x1 -> D4x2 -> D4x1 -> Consumption"
-}
-
-if ($appExists) {
     az containerapp registry set --name $ContainerAppName --resource-group $ResourceGroupName `
         --server $acrLoginServer --username $acrUser --password $acrPass --output none 2>$null
     az containerapp secret set --name $ContainerAppName --resource-group $ResourceGroupName --secrets $secrets --output none
-}
-
-$profileDeployed = $null
-$lastDeployError = ""
-foreach ($profile in $profileLadder) {
-    Write-Info "Provisioning capacity profile: $($profile.Label)"
-
-    # Dedicated profiles must be added to the environment first. The built-in
-    # 'Consumption' profile always exists in a workload-profiles environment, so it is
-    # used directly with no add step (and needs no scarce D-series capacity).
-    if ($profile.Kind -eq "Dedicated") {
-        $wpErr = az containerapp env workload-profile set --name $ContainerAppEnvName --resource-group $ResourceGroupName `
-            --workload-profile-name $profile.Name --workload-profile-type $profile.Type `
-            --min-nodes $profile.MinNodes --max-nodes $profile.MaxNodes --output none 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            $lastDeployError = "$wpErr"
-            if ($effectiveMode -eq "Manual") { Write-Warn2 "Workload profile '$($profile.Label)' could not be added (capacity/quota)." }
-            else { Write-Warn2 "Workload profile '$($profile.Label)' unavailable right now. Trying next fallback profile." }
-            continue
-        }
-    }
-
-    if (-not $appExists) {
-        $appErr = az containerapp create --name $ContainerAppName --resource-group $ResourceGroupName --environment $ContainerAppEnvName `
-            --image $fullImage --target-port 8000 --ingress $ingressMode --transport auto `
-            --registry-server $acrLoginServer --registry-username $acrUser --registry-password $acrPass `
-            --system-assigned --workload-profile-name $profile.Name `
-            --cpu $profile.Cpu --memory $profile.Memory --min-replicas 1 --max-replicas $profile.MaxReplicas `
-            --secrets $secrets --env-vars $envVars --output none 2>&1
-    } else {
-        $appErr = az containerapp update --name $ContainerAppName --resource-group $ResourceGroupName `
-            --image $fullImage --set-env-vars $envVars --workload-profile-name $profile.Name `
-            --cpu $profile.Cpu --memory $profile.Memory --min-replicas 1 --max-replicas $profile.MaxReplicas --output none 2>&1
-    }
-
-    if ($LASTEXITCODE -eq 0) {
-        $profileDeployed = $profile
-        $Cpu = $profile.Cpu
-        $Memory = $profile.Memory
-        Write-Ok "Container App deployed on capacity profile: $($profile.Label)"
-        break
-    }
-
-    $lastDeployError = "$appErr"
-    if ($effectiveMode -eq "Manual") { Write-Warn2 "Container App deployment failed on '$($profile.Label)'." }
-    else { Write-Warn2 "Container App deployment failed on '$($profile.Label)'. Trying next fallback profile." }
-}
-if (-not $profileDeployed) {
-    if ($effectiveMode -eq "Manual") {
-        Fail "Manual capacity profile '$($profileLadder[0].Label)' could not be provisioned (capacity/quota). Re-run with -CapacityMode Automatic to auto-fall back, or pick a lighter profile (e.g. -ManualProfileChoice 1 for Consumption). Last error: $lastDeployError"
-    } else {
-        Fail "Failed to create/update Container App across all fallback profiles (D8x2 -> D8x1 -> D4x2 -> D4x1 -> Consumption). This usually means the environment itself is unhealthy or the region/subnet is unavailable. Last error: $lastDeployError"
-    }
+    az containerapp update --name $ContainerAppName --resource-group $ResourceGroupName `
+        --image $fullImage --set-env-vars $envVars --output none
+    if ($LASTEXITCODE -ne 0) { Fail "Failed to update Container App." }
 }
 $fqdn = az containerapp show --name $ContainerAppName --resource-group $ResourceGroupName --query "properties.configuration.ingress.fqdn" -o tsv
 $appUrl = "https://$fqdn"
-# The app's MSAL config uses redirectUri: window.location.origin (frontend/src/auth/auth.js),
-# i.e. the ROOT app URL with NO path. The Entra SPA redirect URI must be exactly this origin
-# (NOT /login, NOT /login.html, no trailing path).
-$redirectUri = $appUrl
 Write-Ok "Container App ready: $appUrl"
 
 # ── Private DNS for the internal ingress ────────────────────────────────-
@@ -1498,10 +785,10 @@ if ($isPrivate) {
     Write-Step "Step 8c: Private Endpoints (OpenAI / SQL / Redis)"
     $aoaiId  = az cognitiveservices account show --name $OpenAIResourceName --resource-group $ResourceGroupName --query id -o tsv 2>$null
     $sqlId   = if ($DeploySql)   { az sql server show --name $SqlServerName --resource-group $ResourceGroupName --query id -o tsv 2>$null } else { "" }
-    $redisId = if ($DeployRedis) { az redisenterprise show --cluster-name $RedisName --resource-group $ResourceGroupName --query id -o tsv 2>$null } else { "" }
+    $redisId = if ($DeployRedis) { az redis show --name $RedisName --resource-group $ResourceGroupName --query id -o tsv 2>$null } else { "" }
     New-ResourcePrivateEndpoint -Name "$ContainerAppName-openai-pe" -ResourceId $aoaiId -GroupId "account" -ZoneName "privatelink.openai.azure.com"
     if ($sqlId)   { New-ResourcePrivateEndpoint -Name "$ContainerAppName-sql-pe"   -ResourceId $sqlId   -GroupId "sqlServer"  -ZoneName "privatelink.database.windows.net" }
-    if ($redisId) { New-ResourcePrivateEndpoint -Name "$ContainerAppName-redis-pe" -ResourceId $redisId -GroupId "redisEnterprise" -ZoneName "privatelink.redis.azure.net" }
+    if ($redisId) { New-ResourcePrivateEndpoint -Name "$ContainerAppName-redis-pe" -ResourceId $redisId -GroupId "redisCache" -ZoneName "privatelink.redis.cache.windows.net" }
     if ($DisablePublicNetworkAccess) {
         Write-Info "Disabling data-plane public network access (the app reaches these privately over the VNet)..."
         if ($aoaiId)  { az resource update --ids $aoaiId  --set properties.publicNetworkAccess=Disabled --output none 2>$null }
@@ -1514,38 +801,25 @@ if ($isPrivate) {
 }
 
 # ── Managed identity + RBAC ────────────────────────────────────────────────────
-Write-Step "Step 9: RBAC (Reader + Cost Management Reader + Monitoring Reader)"
+Write-Step "Step 9: RBAC (Reader + Cost Management Reader)"
 $principalId = az containerapp show --name $ContainerAppName --resource-group $ResourceGroupName --query "identity.principalId" -o tsv
 if ([string]::IsNullOrWhiteSpace($principalId)) { Fail "Could not read managed identity principalId." }
 Write-Info "Managed identity principalId: $principalId"
 
-# Wait for the managed identity's service principal to propagate in Entra ID BEFORE
-# assigning roles / Graph permissions. A freshly created MI SP can take a short time to
-# become queryable; without this, grants can fail with 'principal does not exist' even
-# when the engineer running the script IS a Global Administrator.
-Write-Info "Waiting for the managed identity to propagate in Entra ID..."
-$spReady = $false
-for ($i = 1; $i -le 18; $i++) {
-    if (az ad sp show --id $principalId --query id -o tsv 2>$null) { $spReady = $true; break }
-    Start-Sleep -Seconds 5
-}
-if ($spReady) { Write-Ok "Managed identity is resolvable in Entra ID." }
-else { Write-Warn2 "Managed identity SP not resolvable after ~90s; continuing (some grants may need a re-run)." }
-
 $permIssues = @()
 foreach ($sid in ($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
-    foreach ($role in @("Reader","Cost Management Reader","Monitoring Reader")) {
+    foreach ($role in @("Reader","Cost Management Reader")) {
         $r = az role assignment create --assignee $principalId --role $role --scope "/subscriptions/$sid" --output none 2>&1
         if ($LASTEXITCODE -eq 0 -or "$r" -match "already exists|RoleAssignmentExists") { Write-Ok "$role on /subscriptions/$sid" }
-        else { $why = (("$r" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)); Write-Warn2 "Could not assign $role on ${sid}: $why"; $permIssues += "az role assignment create --assignee $principalId --role `"$role`" --scope `"/subscriptions/$sid`"   # why: $why" }
+        else { Write-Warn2 "Could not assign $role on $sid"; $permIssues += "az role assignment create --assignee $principalId --role `"$role`" --scope `"/subscriptions/$sid`"" }
     }
 }
-# If ZureMap is configured for SP mode, grant its service principal Reader too.
-if ($deployZureMap -and $useZureMapSp) {
+# The ZureMap engine scans Azure with its OWN service principal, so grant it Reader too.
+if ($deployZureMap) {
     foreach ($sid in ($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
         $zr = az role assignment create --assignee $ZureMapClientId --role "Reader" --scope "/subscriptions/$sid" --output none 2>&1
-        if ($LASTEXITCODE -eq 0 -or "$zr" -match "already exists|RoleAssignmentExists") { Write-Ok "Architecture Map identity Reader on /subscriptions/$sid" }
-        else { $why = (("$zr" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)); Write-Warn2 "Could not grant Architecture Map identity Reader on ${sid}: $why"; $permIssues += "az role assignment create --assignee $ZureMapClientId --role `"Reader`" --scope `"/subscriptions/$sid`"   # why: $why" }
+        if ($LASTEXITCODE -eq 0 -or "$zr" -match "already exists|RoleAssignmentExists") { Write-Ok "ZureMap SP Reader on /subscriptions/$sid" }
+        else { Write-Warn2 "Could not grant ZureMap SP Reader on $sid"; $permIssues += "az role assignment create --assignee $ZureMapClientId --role `"Reader`" --scope `"/subscriptions/$sid`"" }
     }
 }
 # Tenant-wide read roles (best-effort — require elevated rights such as Owner / User
@@ -1553,22 +827,14 @@ if ($deployZureMap -and $useZureMapSp) {
 #   Reader + Cost Management Reader -> read EVERY in-tenant subscription's resources & cost
 #     in a SINGLE assignment (so the dynamic AZURE_SUBSCRIPTION_IDS=auto picker shows all
 #     subs and cost is never $0 — even subscriptions created after this deploy).
-#   Monitoring Reader -> read Azure Monitor metrics (CPU / memory / network) across all subs.
 #   Reservations Reader  -> Reserved Instance inventory & RI recommendations.
 #   Management Group Reader -> management-group hierarchy + cross-subscription enumeration.
 $tenantMgScope = "/providers/Microsoft.Management/managementGroups/$EntraTenantId"
-foreach ($role in @("Reader","Cost Management Reader","Monitoring Reader","Management Group Reader")) {
+foreach ($role in @("Reader","Cost Management Reader","Reservations Reader","Management Group Reader")) {
     $rr = az role assignment create --assignee $principalId --role $role --scope $tenantMgScope --output none 2>&1
     if ($LASTEXITCODE -eq 0 -or "$rr" -match "already exists|RoleAssignmentExists") { Write-Ok "$role on Tenant Root MG" }
-    else { $why = (("$rr" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)); Write-Warn2 "Could not assign $role at tenant root: $why"; $permIssues += "az role assignment create --assignee $principalId --role `"$role`" --scope `"$tenantMgScope`"   # why: $why" }
+    else { Write-Warn2 "Could not assign $role at tenant root (needs elevated rights)"; $permIssues += "az role assignment create --assignee $principalId --role `"$role`" --scope `"$tenantMgScope`"" }
 }
-# Reservations Reader is assignable ONLY at /providers/Microsoft.Capacity (its assignableScopes is
-# exactly ["/providers/Microsoft.Capacity"]) — NOT at a management group or root. Assigning it in the
-# loop above fails with "role doesn't exist". Assign it at the correct scope by role-definition ID.
-$resvRoleId = "582fc458-8989-419f-a480-75249bc5db7e"   # built-in "Reservations Reader"
-$rv = az role assignment create --assignee $principalId --role $resvRoleId --scope "/providers/Microsoft.Capacity" --output none 2>&1
-if ($LASTEXITCODE -eq 0 -or "$rv" -match "already exists|RoleAssignmentExists") { Write-Ok "Reservations Reader on /providers/Microsoft.Capacity" }
-else { $why = (("$rv" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)); Write-Warn2 "Could not assign Reservations Reader: $why"; $permIssues += "az role assignment create --assignee $principalId --role `"$resvRoleId`" --scope `"/providers/Microsoft.Capacity`"   # why: $why" }
 # ── Microsoft Graph application permissions on the MI ─────────────────────────-
 Write-Step "Step 10: Microsoft Graph permissions (Entra ID features)"
 $graphSpId = "00000003-0000-0000-c000-000000000000"
@@ -1586,58 +852,31 @@ if ([string]::IsNullOrWhiteSpace($graphSpObjId)) {
     Write-Warn2 "Microsoft Graph SP not found — skipping Graph perms."
 } else {
     foreach ($perm in $graphPerms) {
-        # Pass the JSON body via a temp FILE (--body "@file"). Inline `--body "{...}"` on Windows
-        # PowerShell mangles the quotes, so Graph rejects it with BadRequest "Unable to read JSON
-        # request payload" — which previously masqueraded as a permissions failure. A file body is
-        # read verbatim and works on every shell.
-        $bodyObj  = @{ principalId = $principalId; resourceId = $graphSpObjId; appRoleId = $perm.Id }
-        $bodyFile = Join-Path ([IO.Path]::GetTempPath()) ("graphperm_$($perm.Id).json")
-        ($bodyObj | ConvertTo-Json -Compress) | Out-File -Encoding ascii -FilePath $bodyFile
-        # Retry to absorb Entra eventual-consistency right after the MI is created, so a
-        # Global Admin grants all permissions in a single run.
-        $granted = $false
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
-            $res = az rest --method POST --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments" `
-                --headers "Content-Type=application/json" --body "@$bodyFile" 2>&1
-            if ($LASTEXITCODE -eq 0)            { Write-Ok "$($perm.Name) - assigned"; $granted = $true; break }
-            if ("$res" -match "already exists")  { Write-Ok "$($perm.Name) - already assigned"; $granted = $true; break }
-            if ("$res" -match "ResourceNotFound|does not exist|Request_ResourceNotFound" -and $attempt -lt 3) {
-                Start-Sleep -Seconds 10; continue
-            }
-            break
-        }
-        Remove-Item $bodyFile -ErrorAction SilentlyContinue
-        if (-not $granted) {
-            $why = (("$res" -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1))
-            Write-Warn2 "$($perm.Name) - could not grant: $why"
-            # Emit a Windows-safe helper call into the admin-grants file. The helper passes the JSON
-            # body via a temp FILE (--body "@file"); an inline single-quoted body is mangled by az.cmd
-            # on Windows -> BadRequest "Unable to read JSON request payload".
-            $permIssues += "Grant-GraphAppRole -PrincipalId '$principalId' -ResourceId '$graphSpObjId' -AppRoleId '$($perm.Id)' -Name '$($perm.Name)'"
-        }
+        $body = "{`"principalId`":`"$principalId`",`"resourceId`":`"$graphSpObjId`",`"appRoleId`":`"$($perm.Id)`"}"
+        $res = az rest --method POST --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments" `
+            --headers "Content-Type=application/json" --body $body 2>&1
+        if ($LASTEXITCODE -eq 0)                                    { Write-Ok "$($perm.Name) — assigned" }
+        elseif ("$res" -match "already exists")                    { Write-Ok "$($perm.Name) — already assigned" }
+        else { Write-Warn2 "$($perm.Name) — needs admin consent"; $permIssues += "az rest --method POST --uri https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments --headers Content-Type=application/json --body '$body'" }
     }
 }
 
 # ── Register the app URL as a SPA redirect URI on the Entra app ────────────────
 Write-Step "Step 11: Entra SPA redirect URI"
-$spaRegistered = $false
 $appObjId = az ad app show --id $EntraAppClientId --query id -o tsv 2>$null
 if ([string]::IsNullOrWhiteSpace($appObjId)) {
-    Write-Warn2 "Entra app $EntraAppClientId not found in tenant — add the SPA redirect URI '$redirectUri' manually (see the footer)."
+    Write-Warn2 "Entra app $EntraAppClientId not found in tenant — add redirect URI '$appUrl' manually (SPA platform)."
 } else {
     $existing = az ad app show --id $EntraAppClientId --query "spa.redirectUris" -o json 2>$null | ConvertFrom-Json
     $uris = @()
     if ($existing) { $uris += $existing }
-    if ($uris -notcontains $redirectUri)      { $uris += $redirectUri }
-    if ($uris -notcontains "$redirectUri/")   { $uris += "$redirectUri/" }
+    if ($uris -notcontains $appUrl)        { $uris += $appUrl }
+    if ($uris -notcontains "$appUrl/")     { $uris += "$appUrl/" }
     $spaBody = @{ spa = @{ redirectUris = $uris } } | ConvertTo-Json -Depth 5 -Compress
     az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$appObjId" `
         --headers "Content-Type=application/json" --body $spaBody 2>$null
-    if ($LASTEXITCODE -eq 0) { Write-Ok "Registered SPA redirect URI: $redirectUri"; $spaRegistered = $true }
-    else {
-        Write-Warn2 "Could not add the SPA redirect URI (needs Application Administrator / app owner) — see the footer for the exact manual step."
-        $permIssues += "Set-SpaRedirectUris -AppObjId '$appObjId' -AddUris @('$redirectUri','$redirectUri/')"
-    }
+    if ($LASTEXITCODE -eq 0) { Write-Ok "Registered SPA redirect URI: $appUrl" }
+    else { Write-Warn2 "Could not patch redirect URIs — add '$appUrl' manually (SPA platform)." }
 }
 
 # ── Summary ────────────────────────────────────────────────────────────────────
@@ -1645,8 +884,7 @@ Write-Step "Deployment complete"
 Write-Host "  App URL:        $appUrl" -ForegroundColor Green
 Write-Host "  Resource group: $ResourceGroupName ($Location)" -ForegroundColor Gray
 Write-Host "  Image:          $fullImage" -ForegroundColor Gray
-Write-Host "  SKUs:           ACR Premium | Container App ${Cpu}/${Memory} | SQL $SqlServiceObjective$(if($redisUrl){" | Managed Redis $RedisSku"}else{" | Redis: skipped"}) | OpenAI S0 (PAYG)" -ForegroundColor Gray
-if ($profileDeployed) { Write-Host "  ACA capacity:   $($profileDeployed.Label) [$effectiveMode mode]" -ForegroundColor Gray }
+Write-Host "  SKUs:           ACR Premium | Container App ${Cpu}/${Memory} | SQL $SqlServiceObjective | Redis $RedisSku $RedisVmSize | OpenAI S0 (PAYG)" -ForegroundColor Gray
 Write-Host "  OpenAI:         $OpenAIResourceName / $OpenAIDeploymentName" -ForegroundColor Gray
 if ($DeploySql)  { Write-Host "  Azure SQL:      $SqlServerName/$SqlDatabaseName (admin: $SqlAdminUser)" -ForegroundColor Gray }
 if ($redisUrl)   { Write-Host "  Redis:          $RedisName" -ForegroundColor Gray }
@@ -1662,113 +900,11 @@ if ($isPrivate) {
     Write-Host "  Networking:     PUBLIC ingress" -ForegroundColor Gray
 }
 Write-Host ""
-if ($DeploySql) {
-    # SECURITY: never print the generated SQL admin password to the console / shell history.
-    # It is stored only inside the Container App secret 'sql-conn' (the app reads it from there).
-    # If an admin ever needs SQL access, reset the password on the SQL server in the Azure portal.
-    Write-Host "  SQL admin user: $SqlAdminUser (password auto-generated and stored only in the Container App secret 'sql-conn' — not displayed. Reset it on the SQL server in the portal if direct access is ever needed)." -ForegroundColor DarkGray
-    if ($SqlServiceObjective -in @("Basic","S0","S1","S2","S3")) {
-        # POST-DEPLOY: the DB was provisioned on a lightweight DTU tier for capacity resilience.
-        # Advise the customer to scale it up to General Purpose once the app is running.
-        Write-Host ""
-        Write-Host "  POST-DEPLOY ACTION — upgrade Azure SQL from DTU '$SqlServiceObjective' to General Purpose" -ForegroundColor Yellow
-        Write-Host "    To keep this deployment resilient against regional capacity limits, the database was" -ForegroundColor DarkYellow
-        Write-Host "    provisioned on the DTU '$SqlServiceObjective' tier. Once the app is up, the customer is advised to" -ForegroundColor DarkYellow
-        Write-Host "    upgrade it to '$SqlTargetServiceObjective' (General Purpose) for production performance — no app change or redeploy needed:" -ForegroundColor DarkYellow
-        Write-Host "      az sql db update --resource-group $ResourceGroupName --server $SqlServerName --name $SqlDatabaseName --service-objective $SqlTargetServiceObjective" -ForegroundColor Cyan
-        Write-Host "    (The connection string is unchanged; the SKU upgrade is an online operation.)" -ForegroundColor DarkGray
-    }
-}
+if ($DeploySql)  { Write-Host "  SQL admin password: $SqlAdminPassword" -ForegroundColor Yellow }
 if ($permIssues.Count -gt 0) {
-    # The deployment succeeded; these specific grants need Microsoft Entra DIRECTORY ADMIN
-    # rights the deploying account did not have. Write them ALL to a single ready-to-run
-    # script so an admin can grant everything in ONE go (no scattered manual commands).
-    $grantsFile = Join-Path (Get-Location).Path "azure-infra-iq-admin-grants.ps1"
-    $hdr = @(
-        "#!/usr/bin/env pwsh",
-        "# ============================================================================",
-        "# Azure Infra IQ - post-deploy admin permission grants",
-        "# Generated $(Get-Date -Format 'yyyy-MM-dd HH:mm') for app '$ContainerAppName' (MI $principalId)",
-        "#",
-        "# The deployment SUCCEEDED. The commands below could NOT be run by the deploying",
-        "# account because they require Microsoft Entra DIRECTORY ADMIN privileges:",
-        "#   * Privileged Role Administrator or Global Administrator",
-        "#       -> grant Microsoft Graph application permissions to the app managed identity",
-        "#   * Application Administrator (or owner of the Entra app registration)",
-        "#       -> add the app SPA redirect URI",
-        "#   * User Access Administrator / Owner with elevated access at the tenant root",
-        "#       -> tenant-root role assignments (e.g. Reservations Reader)",
-        "#",
-        "# RUN ONCE as such an admin:",
-        "#   az login --tenant $EntraTenantId",
-        "#   ./azure-infra-iq-admin-grants.ps1",
-        "# ============================================================================",
-        "",
-        "`$ErrorActionPreference = 'Continue'",
-        ""
-    )
-    # Windows-safe helpers written INTO the generated script (single-quoted here-string = all
-    # literal). They pass the Graph JSON body via a temp FILE (--body "@file"), which avoids the
-    # az.cmd quote-mangling that makes an inline body fail with BadRequest "Unable to read JSON".
-    $helpers = @'
-function Grant-GraphAppRole {
-    param([string]$PrincipalId, [string]$ResourceId, [string]$AppRoleId, [string]$Name)
-    $f = New-TemporaryFile
-    (@{ principalId = $PrincipalId; resourceId = $ResourceId; appRoleId = $AppRoleId } | ConvertTo-Json -Compress) | Out-File -Encoding ascii -FilePath $f.FullName
-    $r = az rest --method POST --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$PrincipalId/appRoleAssignments" --headers "Content-Type=application/json" --body "@$($f.FullName)" 2>&1
-    Remove-Item $f.FullName -ErrorAction SilentlyContinue
-    if ($LASTEXITCODE -eq 0) { Write-Host "  $Name - granted" -ForegroundColor Green }
-    elseif ("$r" -match "already exists") { Write-Host "  $Name - already granted" -ForegroundColor Green }
-    else { Write-Host "  $Name - FAILED: $r" -ForegroundColor Red }
-}
-function Set-SpaRedirectUris {
-    param([string]$AppObjId, [string[]]$AddUris)
-    $existing = az ad app show --id $AppObjId --query "spa.redirectUris" -o json 2>$null | ConvertFrom-Json
-    $uris = @(); if ($existing) { $uris += $existing }
-    foreach ($u in $AddUris) { if ($uris -notcontains $u) { $uris += $u } }
-    $f = New-TemporaryFile
-    (@{ spa = @{ redirectUris = $uris } } | ConvertTo-Json -Depth 5 -Compress) | Out-File -Encoding ascii -FilePath $f.FullName
-    $r = az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$AppObjId" --headers "Content-Type=application/json" --body "@$($f.FullName)" 2>&1
-    Remove-Item $f.FullName -ErrorAction SilentlyContinue
-    if ($LASTEXITCODE -eq 0) { Write-Host "  SPA redirect URIs set" -ForegroundColor Green }
-    else { Write-Host "  SPA redirect URI - FAILED: $r" -ForegroundColor Red }
-}
-'@
-    try {
-        ($hdr + $helpers + "" + $permIssues) | Set-Content -Path $grantsFile -Encoding UTF8
-        $wroteFile = $true
-    } catch { $wroteFile = $false }
-    Write-Host "`n  POST-DEPLOY ADMIN ACTIONS ($($permIssues.Count)) — require a Microsoft Entra directory admin" -ForegroundColor Yellow
-    Write-Host "    Graph application permissions, the SPA redirect URI, and/or tenant-root roles could" -ForegroundColor DarkYellow
-    Write-Host "    not be granted by the deploying account (insufficient DIRECTORY privilege — not a bug)." -ForegroundColor DarkYellow
-    if ($wroteFile) {
-        Write-Host "    All of them were written to a single ready-to-run script:" -ForegroundColor DarkYellow
-        Write-Host "      $grantsFile" -ForegroundColor Cyan
-        Write-Host "    Have an admin sign in (az login --tenant $EntraTenantId) and run that file once." -ForegroundColor DarkYellow
-    } else {
-        Write-Host "    (Could not write the grants file — run these commands as a directory admin:)" -ForegroundColor DarkYellow
-        $permIssues | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkYellow }
-    }
-    Write-Host "    Until then the app deploys and runs; Entra-ID-dependent features stay limited." -ForegroundColor DarkGray
-}
-$sepLogin = "  " + ("─" * 72)
-Write-Host ""
-if ($spaRegistered) {
-    Write-Host "  LOGIN / SSO redirect URI — registered on the Entra app:" -ForegroundColor Green
-    Write-Host "    $redirectUri" -ForegroundColor Cyan
-} else {
-    Write-Host $sepLogin -ForegroundColor Yellow
-    Write-Host "  ACTION REQUIRED FOR LOGIN / SSO TO WORK" -ForegroundColor Yellow
-    Write-Host $sepLogin -ForegroundColor Yellow
-    Write-Host "  On the Microsoft Entra app registration (App ID: $EntraAppClientId):" -ForegroundColor White
-    Write-Host "    1. Authentication  ->  Add a platform  ->  Single-page application (SPA)" -ForegroundColor Gray
-    Write-Host "    2. Add Redirect URI  ->  paste EXACTLY the app ROOT URL (no path, no /login):" -ForegroundColor Gray
-    Write-Host "         $redirectUri" -ForegroundColor Cyan
-    Write-Host "    3. Save." -ForegroundColor Gray
-    Write-Host "  Sign-in / SSO will FAIL with a redirect-URI mismatch until this exact SPA URI is added." -ForegroundColor DarkYellow
-    Write-Host $sepLogin -ForegroundColor Yellow
+    Write-Host "`n  Some permissions need an admin to run (Graph perms need admin consent):" -ForegroundColor Yellow
+    $permIssues | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkYellow }
 }
 Write-Host "`n  Sign in at $appUrl with your organizational account." -ForegroundColor Cyan
-if ($deployZureMap) {
-    Write-Host "  Azure Architecture Map: built into the app - open it from the left navigation for live Azure topology diagrams." -ForegroundColor DarkGray
-}
+if ($deployZureMap) { Write-Host "  Architecture Map (ZureMap) is embedded and served at $appUrl/zuremap/ (auth-gated)." -ForegroundColor DarkGray }
+else { Write-Host "  NOTE: Architecture Map disabled (no -ZureMapClientSecret provided)." -ForegroundColor DarkGray }

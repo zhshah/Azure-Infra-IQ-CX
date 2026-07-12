@@ -5,7 +5,7 @@
  */
 import React, { useState, useEffect, useCallback } from 'react'
 import { ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from 'recharts'
-import { Wallet, RefreshCw, AlertCircle, TrendingUp } from 'lucide-react'
+import { Wallet, RefreshCw, AlertCircle, TrendingUp, Download } from 'lucide-react'
 import { finopsApi, fmtUsd } from './finopsApi'
 
 const card      = { background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }
@@ -33,15 +33,39 @@ export default function BudgetScenario() {
 
   const st = STATUS[data?.status] || STATUS.on_track
 
+  const exportXlsx = () => {
+    if (!data) return
+    finopsApi.exportGenericXlsx({
+      title: 'Budget Scenario',
+      sheets: [
+        { name: 'Summary', columns: ['Metric', 'Value'], rows: [
+          ['Monthly budget (USD)', budget], ['Growth assumption %', growth],
+          ['Spent so far MTD (USD)', data.mtd_spend_usd], ['Burn %', data.burn_pct],
+          ['Projected EOM (USD)', data.projected_eom_usd], ['Projected %', data.projected_pct],
+          ['Projected variance (USD)', data.variance_usd], ['Status', st.l],
+        ] },
+        { name: 'Burndown', columns: ['Date', 'Budget (USD)', 'Actual (USD)', 'Forecast (USD)'],
+          rows: (data.series || []).map(s => [s.date, s.budget, s.actual, s.forecast]) },
+      ],
+    }).catch(() => {})
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <div>
-        <h2 style={{ color: 'var(--c-f1f5f9)', fontSize: 20, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 9 }}>
-          <Wallet size={20} style={{ color: '#22c55e' }} /> Budget Scenario &amp; Burndown
-        </h2>
-        <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: '4px 0 0' }}>
-          Set a monthly target and see this month's burndown — actual so far vs the projected end-of-month run-rate.
-        </p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h2 style={{ color: 'var(--c-f1f5f9)', fontSize: 20, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 9 }}>
+            <Wallet size={20} style={{ color: '#22c55e' }} /> Budget Scenario &amp; Burndown
+          </h2>
+          <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: '4px 0 0' }}>
+            Set a monthly target and see this month's burndown — actual so far vs the projected end-of-month run-rate.
+          </p>
+        </div>
+        {data && (
+          <button onClick={exportXlsx} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6, padding: '7px 12px', cursor: 'pointer', color: 'var(--c-cbd5e1)', fontSize: 12 }}>
+            <Download size={13} /> Export
+          </button>
+        )}
       </div>
 
       {error && (

@@ -34,8 +34,8 @@
 #>
 
 param(
-    [string]$ContainerAppName = "azure-infra-iq",
-    [string]$ResourceGroupName = "rg-azure-infra-iq",
+    [string]$ContainerAppName = "azure-cost-optimizer",
+    [string]$ResourceGroupName = "rg-azure-cost-optimizer",
     [string]$SubscriptionId = ""
 )
 

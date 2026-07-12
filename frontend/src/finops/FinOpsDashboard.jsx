@@ -16,7 +16,17 @@ import {
   Filter, ChevronDown, X,
 } from 'lucide-react'
 import { finopsApi, fmtUsd, fmtPct, CHART_COLORS, trendBadge, getSubscriptions, getFilterOptions, TIME_RANGE_OPTIONS, DIMENSION_OPTIONS } from './finopsApi'
-import FinOpsAIPanel from './FinOpsAIPanel'
+import { useDrill } from '../drill/DrillContext'
+
+// Map a breakdown dimension + value to /cost-resources params (resource-mappable dims only).
+function _dashDrillParams(dim, value) {
+  if (!value || value === '(unassigned)') return null
+  if (dim === 'ResourceGroupName') return { resource_group: value }
+  if (dim === 'ResourceType') return { resource_type: value }
+  if (dim === 'ResourceLocation') return { region: value }
+  if (dim && dim.startsWith('TagKey:')) return { tag_key: dim.split(':')[1], tag_value: value }
+  return null
+}
 import FinOpsExportMenu from './FinOpsExportMenu'
 import { KPISkeleton } from './FinOpsSkeleton'
 import SearchableSelect from '../components/shared/SearchableSelect'
@@ -101,6 +111,7 @@ const BREAKDOWN_OPTIONS = DIMENSION_OPTIONS.filter(d =>
 )
 
 export default function FinOpsDashboard() {
+  const { openResourceDrill } = useDrill()
   // KPI data (from /summary — unfiltered snapshot)
   const [kpi,         setKpi]         = useState(null)
   // Filtered chart data (from /dashboard-data)
@@ -139,17 +150,19 @@ export default function FinOpsDashboard() {
       // forecast, one untagged count, one savings figure). Non-blocking.
       finopsApi.getMetrics().then(m => {
         if (!m) return
+        // Treat 0/null/undefined as "no data" so a throttled 0 never clobbers the KPI value.
+        const pk = (a, b) => (a !== null && a !== undefined && a !== 0) ? a : b
         setKpi(prev => ({
           ...(prev || {}),
-          total_spend_mtd:        m.spend?.mtd ?? prev?.total_spend_mtd,
-          total_spend_last_month: m.spend?.priorMonthFull ?? prev?.total_spend_last_month,
+          total_spend_mtd:        pk(m.spend?.mtd, prev?.total_spend_mtd),
+          total_spend_last_month: pk(m.spend?.priorMonthFull, prev?.total_spend_last_month),
           mom_delta_pct:          m.spend?.momDeltaPct ?? prev?.mom_delta_pct,
-          forecast_eom_usd:       m.forecast?.eom ?? prev?.forecast_eom_usd,
-          savings_identified_usd: m.savings?.monthlyRunRate ?? prev?.savings_identified_usd,
-          tagging_compliance_pct: m.resources?.tagCompliancePct ?? prev?.tagging_compliance_pct,
+          forecast_eom_usd:       pk(m.forecast?.eom, prev?.forecast_eom_usd),
+          savings_identified_usd: pk(m.savings?.monthlyRunRate, prev?.savings_identified_usd),
+          tagging_compliance_pct: pk(m.resources?.tagCompliancePct, prev?.tagging_compliance_pct),
           total_untagged:         m.resources?.untagged ?? prev?.total_untagged,
-          ri_coverage_pct:        m.reservations?.coveragePct ?? prev?.ri_coverage_pct,
-          ri_utilization_pct:     m.reservations?.utilizationPct ?? prev?.ri_utilization_pct,
+          ri_coverage_pct:        pk(m.reservations?.coveragePct, prev?.ri_coverage_pct),
+          ri_utilization_pct:     pk(m.reservations?.utilizationPct, prev?.ri_utilization_pct),
           anomaly_count:          m.anomalies?.openCount ?? prev?.anomaly_count,
         }))
       }).catch(() => {})
@@ -283,12 +296,16 @@ export default function FinOpsDashboard() {
   const momArrow = kpi.mom_delta_pct >= 0 ? '↑' : '↓'
   const dimLabel = DIMENSION_OPTIONS.find(d => d.value === breakdownDim)?.label || breakdownDim
 
-  const aiData = {
-    total_cost: totalCost, mtd_spend: kpi.total_spend_mtd, mom_delta_pct: kpi.mom_delta_pct,
-    subscriptions: kpi.subscription_count, resources: kpi.total_resource_count,
-    breakdown_dimension: dimLabel, time_range: timeRange,
-    top_breakdown: (breakdownData || []).slice(0, 8).map(b => ({ name: b.name, cost: b.cost })),
-    selected_subscription: selectedSub, selected_resource_group: selectedRG,
+  // Breakdown chart click → resources behind the segment (resource-mappable dims only).
+  const bdDrillable = ['ResourceGroupName', 'ResourceType', 'ResourceLocation'].includes(breakdownDim) || (breakdownDim || '').startsWith('TagKey:')
+  const bdDrill = async (value) => {
+    const params = _dashDrillParams(breakdownDim, value)
+    if (!params) return
+    try {
+      const res = await finopsApi.getCostResources({ ...params, limit: 300 })
+      const rows = res?.resources || []
+      openResourceDrill(`${value} (${rows.length} resource${rows.length === 1 ? '' : 's'})`, rows)
+    } catch { /* ignore */ }
   }
 
   return (
@@ -335,9 +352,6 @@ export default function FinOpsDashboard() {
           </button>
         </div>
       </div>
-
-      {/* ── AI Cost Analysis ── */}
-      <FinOpsAIPanel view="dashboard" data={aiData} />
 
       {/* ── Filter Bar ── */}
       {showFilters && (
@@ -547,8 +561,8 @@ export default function FinOpsDashboard() {
                 <XAxis type="number" tick={{ fill: '#475569', fontSize: 9 }} tickFormatter={v => '$' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v.toFixed(0))} />
                 <YAxis type="category" dataKey="name" tick={{ fill: '#94a3b8', fontSize: 9 }} width={100} />
                 <Tooltip contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }} formatter={v => [fmtUsd(v, 2), 'Cost']} />
-                <Bar dataKey="cost" radius={[0, 4, 4, 0]} maxBarSize={22}>
-                  {breakdownData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                <Bar dataKey="cost" radius={[0, 4, 4, 0]} maxBarSize={22} onClick={bdDrillable ? (d) => d && bdDrill(d.name ?? d.payload?.name) : undefined} cursor={bdDrillable ? 'pointer' : undefined}>
+                  {breakdownData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} cursor={bdDrillable ? 'pointer' : undefined} />)}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
@@ -586,8 +600,10 @@ export default function FinOpsDashboard() {
                       PieLabel({ cx, cy, midAngle, innerRadius, outerRadius, pct: percent * 100 })
                     }
                     labelLine={false}
+                    onClick={bdDrillable ? (d) => d && bdDrill(d.name ?? d.payload?.name) : undefined}
+                    style={bdDrillable ? { cursor: 'pointer' } : undefined}
                   >
-                    {breakdownData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                    {breakdownData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} cursor={bdDrillable ? 'pointer' : undefined} />)}
                   </Pie>
                   <Tooltip contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }} formatter={v => fmtUsd(v, 2)} />
                 </PieChart>

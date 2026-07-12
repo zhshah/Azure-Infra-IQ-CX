@@ -9,7 +9,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import {
   ComposedChart, Area, Line, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts'
-import { Activity, AlertTriangle, RefreshCw, AlertCircle, Sparkles, TrendingUp, TrendingDown } from 'lucide-react'
+import { Activity, AlertTriangle, RefreshCw, AlertCircle, Sparkles, TrendingUp, TrendingDown, Download } from 'lucide-react'
 import { finopsApi, fmtUsd } from './finopsApi'
 
 const card      = { background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }
@@ -42,6 +42,19 @@ export default function AnomalyIntelligence() {
     anomaly: p.is_anomaly ? p.cost : null,
   }))
 
+  const exportXlsx = () => {
+    if (!anomalies.length && !series.length) return
+    finopsApi.exportGenericXlsx({
+      title: 'Cost Anomalies',
+      sheets: [
+        { name: 'Anomalies', columns: ['Date', 'Severity', 'Cost (USD)', 'Expected (USD)', 'Deviation %'],
+          rows: anomalies.map(a => [a.date, a.severity, a.cost, a.expected, a.deviation_pct]) },
+        { name: 'Daily series', columns: ['Date', 'Cost (USD)', 'Expected (USD)', 'Anomaly'],
+          rows: series.map(p => [p.date, p.cost, p.expected, p.is_anomaly ? 'yes' : '']) },
+      ],
+    }).catch(() => {})
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
@@ -63,6 +76,11 @@ export default function AnomalyIntelligence() {
               }}>{o.l}</button>
             ))}
           </div>
+          {(anomalies.length > 0 || series.length > 0) && (
+            <button onClick={exportXlsx} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6, padding: '7px 12px', cursor: 'pointer', color: 'var(--c-cbd5e1)', fontSize: 12 }}>
+              <Download size={13} /> Export
+            </button>
+          )}
           <button onClick={() => load(sensitivity)} disabled={loading} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6, padding: '7px 12px', cursor: 'pointer', color: 'var(--c-cbd5e1)', fontSize: 12 }}>
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Refresh
           </button>

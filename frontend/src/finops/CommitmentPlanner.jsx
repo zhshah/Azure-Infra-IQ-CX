@@ -5,7 +5,7 @@
  */
 import React, { useState, useEffect, useCallback } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from 'recharts'
-import { PiggyBank, RefreshCw, AlertCircle, TrendingDown, Percent } from 'lucide-react'
+import { PiggyBank, RefreshCw, AlertCircle, TrendingDown, Percent, Download } from 'lucide-react'
 import { finopsApi, fmtUsd } from './finopsApi'
 
 const card      = { background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }
@@ -34,15 +34,40 @@ export default function CommitmentPlanner() {
   const sel = data?.selected || {}
   const curve = data?.savings_curve || []
 
+  const exportXlsx = () => {
+    if (!data) return
+    finopsApi.exportGenericXlsx({
+      title: 'Commitment Planner',
+      sheets: [
+        { name: 'Scenario', columns: ['Metric', 'Value'], rows: [
+          ['Term', term], ['Payment', payment], ['Coverage target %', coverage],
+          ['Eligible on-demand (USD/mo)', data.eligible_monthly_spend_usd],
+          ['Est. monthly savings (USD)', sel.monthly_savings_usd],
+          ['Discount %', sel.discount_pct],
+          ['Committed run-rate (USD/mo)', sel.committed_monthly_usd],
+        ] },
+        { name: 'Savings curve', columns: ['Coverage %', 'Monthly savings (USD)'],
+          rows: curve.map(c => [c.coverage_pct ?? c.coverage, c.monthly_savings_usd ?? c.savings]) },
+      ],
+    }).catch(() => {})
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <div>
-        <h2 style={{ color: 'var(--c-f1f5f9)', fontSize: 20, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 9 }}>
-          <PiggyBank size={20} style={{ color: '#06b6d4' }} /> Commitment Planner
-        </h2>
-        <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: '4px 0 0' }}>
-          Model reservation / savings-plan coverage over your real eligible on-demand spend and see the savings.
-        </p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h2 style={{ color: 'var(--c-f1f5f9)', fontSize: 20, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 9 }}>
+            <PiggyBank size={20} style={{ color: '#06b6d4' }} /> Commitment Planner
+          </h2>
+          <p style={{ color: 'var(--c-64748b)', fontSize: 12, margin: '4px 0 0' }}>
+            Model reservation / savings-plan coverage over your real eligible on-demand spend and see the savings.
+          </p>
+        </div>
+        {data && (
+          <button onClick={exportXlsx} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6, padding: '7px 12px', cursor: 'pointer', color: 'var(--c-cbd5e1)', fontSize: 12 }}>
+            <Download size={13} /> Export
+          </button>
+        )}
       </div>
 
       {error && (

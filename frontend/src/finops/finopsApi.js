@@ -119,9 +119,10 @@ export const finopsApi = {
   getAdvisorCost: (signal)     => request('/advisor-cost', {}, signal),
   getResourceOptimization: (signal) => request('/resource-optimization', {}, signal),
   costExplorer:  (query, signal)  => request('/cost-explorer', { method: 'POST', body: JSON.stringify(query) }, signal),
-  getAllocation:  (dim, tr, dateFrom, dateTo, signal) => {
+  getAllocation:  (dim, tr, dateFrom, dateTo, subscriptionId, signal) => {
     let url = `/allocation?dimension=${encodeURIComponent(dim)}&time_range=${tr}`
     if (tr === 'custom' && dateFrom) url += `&date_from=${dateFrom}&date_to=${dateTo || dateFrom}`
+    if (subscriptionId) url += `&subscription_id=${encodeURIComponent(subscriptionId)}`
     return request(url, {}, signal)
   },
   getChargeback: (tr, dateFrom, dateTo, signal) => {
@@ -314,12 +315,42 @@ export const finopsApi = {
   },
   /** Cross-domain Cost Lens — spend tied to resiliency / security / governance signals. */
   getCostLens: (lens = 'resiliency', signal) => request(`/cost-lens?lens=${encodeURIComponent(lens)}`, {}, signal),
-  /** Reservation / Savings-Plan what-if simulator. */
   simulateCommitment: (model, signal) =>
     request('/commitments/simulate', { method: 'POST', body: JSON.stringify(model || {}) }, signal),
   /** Budget burndown / scenario for the current month (user-set target + growth). */
   budgetScenario: (model, signal) =>
     request('/budget-scenario', { method: 'POST', body: JSON.stringify(model || {}) }, signal),
+  /** Warehouse-backed Analyze (Azure Cost Management parity) — scope + custom period +
+   *  group-by + accumulated/daily + actual/amortized, served from Azure SQL (no throttling). */
+  analyze: (model, signal) =>
+    request('/analyze', { method: 'POST', body: JSON.stringify(model || {}) }, signal),
+  getAnalyzeMeta: (signal) => request('/analyze/meta', {}, signal),
+  getCostInsights: (signal) => request('/cost-insights', {}, signal),
+  /** Existing Azure Cost Management alerts (portal "Cost alerts") across in-scope subs. */
+  getAzureCostAlerts: (signal) => request('/azure-cost-alerts', {}, signal),
+  /** Generate a consultant-grade FinOps report (report_type ∈ executive | optimization |
+   *  allocation | commitments | budgets | anomalies). Every figure is grounded in Azure
+   *  Cost Management; the AI writes only the narrative. */
+  generateExecReport: (body, signal) =>
+    request('/exec-report/generate', { method: 'POST', body: JSON.stringify(body || {}) }, signal),
+  /** Download a generated FinOps report as a branded multi-sheet Excel workbook. */
+  exportExecReportXlsx: async (report, signal) => {
+    const res = await fetch(BASE + '/exec-report/export.xlsx', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ report }), signal,
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText)
+      throw new Error(`Excel export failed (${res.status}): ${text}`)
+    }
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url
+    const cd = res.headers.get('content-disposition') || ''
+    a.download = cd.match(/filename="?([^"]+)"?/)?.[1] || `finops-report-${new Date().toISOString().slice(0, 10)}.xlsx`
+    document.body.appendChild(a); a.click()
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove() }, 1000)
+  },
 }
 
 export const TIME_RANGE_OPTIONS = [

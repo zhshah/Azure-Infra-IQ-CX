@@ -162,6 +162,10 @@ export default function RecommendationStudio() {
     finally { setLoading(false) }
   }, [model])
 
+  // Auto-generate once on first open so the panel is never empty (uses the saved
+  // model / defaults). The user can then refine scope & goals and regenerate.
+  useEffect(() => { generate(false) /* eslint-disable-next-line */ }, [])
+
   // ── Mutators ──
   const setScope = (patch) => setModel(m => ({ ...m, scope: { ...m.scope, ...patch } }))
   const toggleGoal = (id) => setModel(m => ({ ...m, goals: m.goals.includes(id) ? m.goals.filter(g => g !== id) : [...m.goals, id] }))

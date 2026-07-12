@@ -19,6 +19,7 @@ import { OverviewSkeleton } from './FinOpsSkeleton'
 import FinOpsAIPanel from './FinOpsAIPanel'
 import FinOpsExportMenu from './FinOpsExportMenu'
 import SearchableSelect from '../components/shared/SearchableSelect'
+import { useDrill } from '../drill/DrillContext'
 
 /* ── helpers ── */
 const fmtDate = d => (d ? d.slice(5) : '')   // "MM-DD" from "YYYY-MM-DD"
@@ -72,6 +73,7 @@ function ImpactBadge({ impact }) {
 
 /* ═══════════════════════════════════════════════════════════════ */
 export default function FinOpsOverview() {
+  const { openResourceDetail } = useDrill()
   const [kpi,          setKpi]          = useState(null)
   const [metrics,      setMetrics]      = useState(null)   // Metrics Service — single source of truth
   const [forecast,     setForecast]     = useState(null)
@@ -95,6 +97,7 @@ export default function FinOpsOverview() {
   const [scopeTime,    setScopeTime]    = useState('last_30d')
   const [scoped,       setScoped]       = useState(null)
   const [scopeLoading, setScopeLoading] = useState(false)
+  const [insights,     setInsights]     = useState(null)
   const [subOpts,      setSubOpts]      = useState([])
   const [rgOpts,       setRgOpts]       = useState([])
 
@@ -125,6 +128,7 @@ export default function FinOpsOverview() {
       finopsApi.getSavings().then(sv => setSavings(sv)).catch(() => {})
       finopsApi.getCommitments().then(cm => setCommitments(cm)).catch(() => {})
       finopsApi.getBudgetAlerts().then(al => setAlerts(al)).catch(() => {})
+      finopsApi.getCostInsights().then(setInsights).catch(() => {})
     } catch (e) { setError(e.message); setLoading(false) }
   }, [])
 
@@ -274,19 +278,40 @@ export default function FinOpsOverview() {
   // ── Metrics Service = single source of truth for the 6 headline cards. Falls
   //    back to the legacy summary (kpi) until /api/metrics/summary lands. ──
   const M = metrics || {}
-  const cardMtdSpend    = M.spend?.mtd            ?? kpi?.total_spend_mtd
-  const cardForecastEom = M.forecast?.eom         ?? kpi?.forecast_eom_usd
-  const cardBudgetUtil  = M.budgets?.utilizationPct ?? kpi?.budget_utilization_pct
+  // Prefer the metrics value, but treat 0/null/undefined as "no data" and fall back
+  // to the KPI. This prevents a stale/throttled 0 from blanking a card.
+  const pick = (...vals) => { for (const v of vals) { if (v !== null && v !== undefined && v !== 0) return v } return vals[vals.length - 1] }
+  const cardMtdSpend    = pick(M.spend?.mtd,            kpi?.total_spend_mtd)
+  const cardForecastEom = pick(M.forecast?.eom,         kpi?.forecast_eom_usd)
+  const cardBudgetUtil  = pick(M.budgets?.utilizationPct, kpi?.budget_utilization_pct)
   const cardBudgetBreaching = M.budgets?.breaching?.length ?? kpi?.budgets_exceeded ?? 0
   const cardBudgetCount = M.budgets?.count ?? null
-  const cardSavingsMonthly = M.savings?.monthlyRunRate ?? kpi?.savings_identified_usd
+  const cardSavingsMonthly = pick(M.savings?.monthlyRunRate, kpi?.savings_identified_usd)
   const cardSavingsAnnual  = M.savings?.identifiedAnnualizedPotential ?? null
-  const cardRiCoverage  = M.reservations?.coveragePct ?? kpi?.ri_coverage_pct
-  const cardRiUtil      = M.reservations?.utilizationPct ?? kpi?.ri_utilization_pct
-  const cardTagPct      = M.resources?.tagCompliancePct ?? kpi?.tagging_compliance_pct
+  const cardRiCoverage  = pick(M.reservations?.coveragePct, kpi?.ri_coverage_pct)
+  const cardRiUtil      = pick(M.reservations?.utilizationPct, kpi?.ri_utilization_pct)
+  const cardTagPct      = pick(M.resources?.tagCompliancePct, kpi?.tagging_compliance_pct)
   const cardUntagged    = M.resources?.untagged ?? kpi?.total_untagged ?? 0
   const hasReservations = M.reservations ? (M.reservations.count > 0 || cardRiCoverage > 0) : kpi?.has_reservations
   const hasBudgets      = M.budgets ? (M.budgets.count > 0) : kpi?.has_budgets
+
+  // ── Grounded enrichment from Cost Insights (estate stats, top services, risk) ──
+  const insSummary = insights?.summary || {}
+  const insOpts = insSummary.options || {}
+  const estateStats = insights ? {
+    subscriptions: (insOpts.subscriptions || []).length,
+    regions: (insOpts.regions || []).length,
+    resourceGroups: (insOpts.resource_groups || []).length,
+    services: (insOpts.services || []).length,
+    resources: insSummary.total_resources || 0,
+  } : null
+  const costAtRisk = insSummary.cost_at_risk || null
+  const topServices = (() => {
+    const m = {}
+    for (const r of (insights?.rows || [])) m[r.service] = (m[r.service] || 0) + (r.cost_current || 0)
+    return Object.entries(m).map(([name, cost]) => ({ name, cost })).sort((a, b) => b.cost - a.cost).filter(x => x.cost > 0).slice(0, 6)
+  })()
+  const topServicesMax = topServices[0]?.cost || 1
 
   // Compact data fingerprint for the AI panel + a structured report for PDF export.
   const aiData = {
@@ -410,13 +435,13 @@ export default function FinOpsOverview() {
       )}
 
       {/* ══ AI COST ANALYSIS ══ */}
-      <FinOpsAIPanel view="overview" data={aiData} />
+      <FinOpsAIPanel view="overview" data={aiData} filters={{ subscription_id: scopeSub || null, resource_group: scopeRG || null }} />
 
       {/* ══ SECTION 1: KPI CARDS ══ */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: 12 }}>
-        <KPICard label="MTD Spend" icon={DollarSign} color="#3b82f6"
+        <KPICard label="Spend (30d run-rate)" icon={DollarSign} color="#3b82f6"
           value={fmtUsd(cardMtdSpend)}
-          sub={<span style={{ color: 'var(--c-64748b)' }}>{`Month-to-date · day ${new Date().getDate()} of ${new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()}`}</span>}
+          sub={<span style={{ color: 'var(--c-64748b)' }}>Last 30 days · warehouse actuals</span>}
         />
         <KPICard label="EOM Forecast" icon={TrendingUp} color="#8b5cf6"
           value={fmtUsd(cardForecastEom)}
@@ -449,6 +474,70 @@ export default function FinOpsOverview() {
           accent={(cardTagPct ?? 100) < 60 ? '#854d0e' : undefined}
         />
       </div>
+
+      {/* ══ SECTION 1b: ESTATE AT A GLANCE ══ */}
+      {estateStats && (
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
+          <SectionHeader title="Estate at a Glance" sub="Scope of the analysed estate" />
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
+            {[
+              { label: 'Subscriptions', value: estateStats.subscriptions },
+              { label: 'Regions', value: estateStats.regions },
+              { label: 'Resource groups', value: estateStats.resourceGroups },
+              { label: 'Azure services', value: estateStats.services },
+              { label: 'Resources', value: estateStats.resources },
+            ].map((s, i) => (
+              <div key={i} style={{ flex: 1, minWidth: 120, background: 'var(--c-0f172a)', borderRadius: 8, padding: '10px 14px' }}>
+                <div style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase' }}>{s.label}</div>
+                <div style={{ color: 'var(--c-f1f5f9)', fontSize: 22, fontWeight: 700 }}>{s.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ══ SECTION 1c: TOP SERVICES + COST AT RISK ══ */}
+      {(topServices.length > 0 || costAtRisk) && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          {topServices.length > 0 && (
+            <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
+              <SectionHeader title="Top Services by Spend" sub="Where the money goes (last 30 days)" />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+                {topServices.map((s, i) => (
+                  <div key={i}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                      <span style={{ color: 'var(--c-cbd5e1)' }}>{s.name}</span>
+                      <span style={{ color: 'var(--c-f1f5f9)', fontWeight: 600 }}>{fmtUsd(s.cost)}</span>
+                    </div>
+                    <div style={{ height: 6, background: 'var(--c-0f172a)', borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${Math.max(3, s.cost / topServicesMax * 100)}%`, background: CHART_COLORS[i % CHART_COLORS.length], borderRadius: 3 }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {costAtRisk && (
+            <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
+              <SectionHeader title="Cost at Risk" sub="Spend on resources with a posture gap" />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+                {[
+                  { label: 'Unprotected (no backup)', value: costAtRisk.unprotected_usd, color: '#ef4444' },
+                  { label: 'Not zone-redundant', value: costAtRisk.non_zone_redundant_usd, color: '#f59e0b' },
+                  { label: 'Untagged (unallocated)', value: costAtRisk.untagged_usd, color: '#a855f7' },
+                  { label: 'Idle / orphaned', value: costAtRisk.idle_orphaned_usd, color: '#64748b' },
+                ].map((r, i) => (
+                  <div key={i} style={{ background: 'var(--c-0f172a)', borderLeft: `3px solid ${r.color}`, borderRadius: 8, padding: '10px 12px' }}>
+                    <div style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase' }}>{r.label}</div>
+                    <div style={{ color: r.color, fontSize: 18, fontWeight: 700 }}>{fmtUsd(r.value)}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--c-475569)', marginTop: 8 }}>Open <b style={{ color: 'var(--c-94a3b8)' }}>Cost Insights</b> to drill into the resources behind each.</div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ══ SECTION 2: SPEND TREND + FORECAST ══ */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16 }}>
@@ -610,7 +699,9 @@ export default function FinOpsOverview() {
               </thead>
               <tbody>
                 {advisorItems.slice(0, 8).map((item, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid var(--c-0f172a)' }}>
+                  <tr key={i} onClick={() => item.resource_id && openResourceDetail(item)}
+                    title={item.resource_id ? 'View resource details' : undefined}
+                    style={{ borderBottom: '1px solid var(--c-0f172a)', cursor: item.resource_id ? 'pointer' : 'default' }}>
                     <td style={{ padding: '6px 8px', color: 'var(--c-e2e8f0)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                       title={item.resource_name}>{item.resource_name}</td>
                     <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{(item.resource_type || '').split('/').pop()}</td>
@@ -637,7 +728,9 @@ export default function FinOpsOverview() {
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
             {topSavings.map((op, i) => (
-              <div key={i} style={{ background: 'var(--c-0f172a)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div key={i} onClick={() => op.resource_id && openResourceDetail(op)}
+                title={op.resource_id ? 'View resource details' : undefined}
+                style={{ background: 'var(--c-0f172a)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6, cursor: op.resource_id ? 'pointer' : 'default' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <span style={{ color: 'var(--c-e2e8f0)', fontSize: 11, fontWeight: 600, flex: 1, paddingRight: 8 }}>{op.resource_name || op.title || '—'}</span>
                   <span style={{ color: 'var(--c-4ade80)', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtUsd(op.savings_usd ?? op.monthly_savings ?? 0)}/mo</span>

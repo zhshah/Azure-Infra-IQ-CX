@@ -559,16 +559,18 @@ export default function CostStudio() {
       // the Overview cards (one forecast, one untagged count, one savings figure).
       finopsApi.getMetrics().then(m => {
         if (!m) return
+        // Treat 0/null/undefined as "no data" so a throttled 0 never clobbers the KPI value.
+        const pk = (a, b) => (a !== null && a !== undefined && a !== 0) ? a : b
         setSummary(prev => ({
           ...(prev || {}),
-          total_spend_mtd:        m.spend?.mtd ?? prev?.total_spend_mtd,
-          total_spend_last_month: m.spend?.priorMonthFull ?? prev?.total_spend_last_month,
+          total_spend_mtd:        pk(m.spend?.mtd, prev?.total_spend_mtd),
+          total_spend_last_month: pk(m.spend?.priorMonthFull, prev?.total_spend_last_month),
           mom_delta_pct:          m.spend?.momDeltaPct ?? prev?.mom_delta_pct,
-          forecast_eom_usd:       m.forecast?.eom ?? prev?.forecast_eom_usd,
-          savings_identified_usd: m.savings?.monthlyRunRate ?? prev?.savings_identified_usd,
-          tagging_compliance_pct: m.resources?.tagCompliancePct ?? prev?.tagging_compliance_pct,
+          forecast_eom_usd:       pk(m.forecast?.eom, prev?.forecast_eom_usd),
+          savings_identified_usd: pk(m.savings?.monthlyRunRate, prev?.savings_identified_usd),
+          tagging_compliance_pct: pk(m.resources?.tagCompliancePct, prev?.tagging_compliance_pct),
           total_untagged:         m.resources?.untagged ?? prev?.total_untagged,
-          ri_coverage_pct:        m.reservations?.coveragePct ?? prev?.ri_coverage_pct,
+          ri_coverage_pct:        pk(m.reservations?.coveragePct, prev?.ri_coverage_pct),
           anomaly_count:          m.anomalies?.openCount ?? prev?.anomaly_count,
           budgets_exceeded:       m.budgets?.breaching?.length ?? prev?.budgets_exceeded,
         }))

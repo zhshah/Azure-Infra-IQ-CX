@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import calendar
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("finops.metrics")
@@ -110,12 +110,10 @@ def get_metrics_summary(
 
     today = datetime.now(tz=timezone.utc).date()
 
-    # ── Core KPI (spend / budgets / reservations / tagging / anomalies) ─────────
-    try:
-        kpi = get_finops_kpi(subscription_ids)
-    except Exception as e:
-        logger.warning("metrics: get_finops_kpi failed: %s", e)
-        kpi = None
+    # Spend/trend/anomalies are sourced from the dashboard cache below (throttle-immune);
+    # reservations & budgets come from their own services. We deliberately do NOT call the
+    # live get_finops_kpi here — it 429-stalls on rate-limited tenants and would blank the UI.
+    kpi = None
 
     dash = load_latest_dashboard() or {}
     resources = dash.get("resources", []) or []
@@ -123,14 +121,68 @@ def get_metrics_summary(
     # ── Resources / tagging (single definition) ─────────────────────────────────
     resource_counts = _resource_tag_counts(resources)
 
-    # ── Spend ────────────────────────────────────────────────────────────────────
-    spend_mtd = round(float(getattr(kpi, "total_spend_mtd", 0.0) or 0.0), 2)
-    prior_full = round(float(getattr(kpi, "total_spend_last_month", 0.0) or 0.0), 2)
-    # prior_month_to_date == comparable window used inside get_finops_kpi for MoM.
+    # ── Spend — CACHE-FIRST (throttle-immune). The live get_finops_kpi 429-returns
+    #    $0 on rate-limited tenants, which must NEVER zero out the real cached spend. ─
+    dk = dash.get("kpi") or {}
+    def _dkf(*keys) -> float:
+        for k in keys:
+            v = dk.get(k)
+            if v is not None:
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    pass
+        return 0.0
+    cache_mtd = _dkf("total_cost_current_month", "total_spend_mtd")
+    cache_prev = _dkf("total_cost_previous_month", "total_spend_last_month")
+    live_mtd = round(float(getattr(kpi, "total_spend_mtd", 0.0) or 0.0), 2)
+    live_prev = round(float(getattr(kpi, "total_spend_last_month", 0.0) or 0.0), 2)
+    # Prefer whichever source actually has data (cache is primary; live is a fallback).
+    spend_mtd = round(cache_mtd if cache_mtd > 0 else live_mtd, 2)
+    prior_full = round(cache_prev if cache_prev > 0 else live_prev, 2)
+
+    # ── AUTHORITATIVE OVERRIDE (warehouse) — the single source of truth ──────────
+    # Per-resource / cached KPI spend is undercounted on 429-throttled tenants, and
+    # the warehouse's CURRENT month is incomplete early in the month (+ ETL lag), so
+    # month-to-date is unreliable. The LAST 30 DAYS is fully populated and matches the
+    # Analyze tab's default window → use it as the authoritative monthly run-rate so
+    # every surface (Overview, Cost Insights, Analyze) reconciles. Falls back to cache.
+    run_rate_30d = 0.0
+    try:
+        from services import cost_analytics_service as _ca
+        run_rate_30d = _ca.estate_total(period="last_30d", subscription_ids=subscription_ids) or 0.0
+        wh_prev = _ca.estate_total(period="last_month", subscription_ids=subscription_ids) or 0.0
+        if run_rate_30d > 0:
+            spend_mtd = round(run_rate_30d, 2)
+        if wh_prev and wh_prev > 0:
+            prior_full = round(wh_prev, 2)
+    except Exception:
+        pass
+
     prior_mtd = prior_full
+    mom_delta_usd = round(spend_mtd - prior_full, 2)
+    mom_delta_pct = round((mom_delta_usd / prior_full * 100.0), 1) if prior_full > 0 else 0.0
+
+    # Trend cache-first too (live arrays can be empty under throttling).
+    trend_dates = list(getattr(kpi, "cost_trend_dates", []) or []) if kpi else []
+    trend_values = list(getattr(kpi, "cost_trend_30d", []) or []) if kpi else []
+    if not any(float(v or 0) for v in trend_values):
+        pm = [float(x or 0) for x in (dash.get("total_daily_pm") or [])]
+        cm = [float(x or 0) for x in (dash.get("total_daily_cm") or [])]
+        combined = pm + cm
+        if combined:
+            trend_values = [round(v, 2) for v in combined[-30:]]
+            n = len(trend_values)
+            trend_dates = [str(today - timedelta(days=n - 1 - i)) for i in range(n)]
 
     # ── Forecast (ONE model) ──────────────────────────────────────────────────────
-    forecast = _linear_mtd_forecast(spend_mtd, today)
+    # When the warehouse run-rate is available, the rolling 30-day total IS the monthly
+    # run-rate (robust; avoids the noisy early-month linear-MTD overshoot). Else linear.
+    if run_rate_30d and run_rate_30d > 0:
+        forecast = {"eom": round(run_rate_30d, 2), "model": "rolling-30d-run-rate",
+                    "low": round(run_rate_30d * 0.95, 2), "high": round(run_rate_30d * 1.05, 2)}
+    else:
+        forecast = _linear_mtd_forecast(spend_mtd, today)
 
     # ── Reservations / commitments ─────────────────────────────────────────────────
     reservations = {
@@ -207,7 +259,7 @@ def get_metrics_summary(
     }
 
     # ── Anomalies ──────────────────────────────────────────────────────────────────
-    anomalies = {"openCount": int(getattr(kpi, "anomaly_count", 0) or 0)}
+    anomalies = {"openCount": len(dash.get("cost_anomalies", []) or [])}
 
     # ── Freshness / units ───────────────────────────────────────────────────────────
     data_through = dash.get("last_refreshed") or (
@@ -221,8 +273,8 @@ def get_metrics_summary(
             "mtd": spend_mtd,
             "priorMonthFull": prior_full,
             "priorMonthToDate": prior_mtd,
-            "momDeltaUsd": round(float(getattr(kpi, "mom_delta_usd", 0.0) or 0.0), 2) if kpi else 0.0,
-            "momDeltaPct": round(float(getattr(kpi, "mom_delta_pct", 0.0) or 0.0), 1) if kpi else 0.0,
+            "momDeltaUsd": mom_delta_usd,
+            "momDeltaPct": mom_delta_pct,
         },
         "forecast": forecast,
         "resources": resource_counts,
@@ -231,8 +283,8 @@ def get_metrics_summary(
         "savings": savings,
         "anomalies": anomalies,
         "trend": {
-            "dates": list(getattr(kpi, "cost_trend_dates", []) or []) if kpi else [],
-            "values": list(getattr(kpi, "cost_trend_30d", []) or []) if kpi else [],
+            "dates": trend_dates,
+            "values": trend_values,
         },
         "generatedAt": datetime.now(tz=timezone.utc).isoformat(),
     }

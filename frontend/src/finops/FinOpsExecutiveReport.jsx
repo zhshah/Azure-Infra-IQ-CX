@@ -1,173 +1,157 @@
 /**
- * FinOpsExecutiveReport — assembles a CFO-ready FinOps report from live data and
- * exports it as a branded PDF (client, react-pdf, lazy) or Excel (server report/xlsx).
+ * FinOpsExecutiveReport — the FinOps report studio.
  *
- * Pulls KPIs + 30-day trend + cost-by-subscription (summary), biggest movers
- * (compare), top workloads (dependency roll-up) and Advisor cost recommendations,
- * shows a preview, and can enrich the narrative with AI before exporting.
+ * Pick a report type (Executive Cost Summary, Optimization & Savings, Allocation /
+ * Showback, Commitment Coverage, Budget & Forecast, Anomaly), generate a consultant-
+ * grade report whose EVERY figure is sourced from Azure Cost Management (the warehouse)
+ * with an AI-written narrative, preview it, then export a branded PDF (client, react-pdf,
+ * lazy) or a multi-sheet Excel workbook (server).
  */
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
 import {
-  FileText, FileSpreadsheet, Sparkles, RefreshCw, AlertCircle, DollarSign,
-  TrendingUp, PiggyBank, Tag, Network, GitCompareArrows, Loader,
+  FileText, FileSpreadsheet, Sparkles, AlertCircle, Loader, DollarSign, PiggyBank,
+  PieChart, ShieldCheck, Wallet, Activity, CheckCircle2, TrendingUp,
 } from 'lucide-react'
-import { finopsApi, getFilterOptions, fmtUsd, fmtPct } from './finopsApi'
-import { C } from './finopsTheme'
-import { rechartsTooltipProps } from './finopsTheme'
+import { finopsApi, fmtUsd } from './finopsApi'
+import { C, rechartsTooltipProps } from './finopsTheme'
 
-function Kpi({ label, value, sub, Icon, color = C.accent }) {
+const REPORT_TYPES = [
+  { key: 'executive',    label: 'Executive Cost Summary', Icon: DollarSign, color: '#3b82f6',
+    desc: 'Estate + per-subscription spend, trend, forecast, movers, savings & cost-at-risk. Board-ready for CEO / CIO / CFO.' },
+  { key: 'optimization', label: 'Cost Optimization & Savings', Icon: PiggyBank, color: '#22c55e',
+    desc: 'Waste, idle & orphaned spend, rightsizing, reservations and modernization — prioritised savings with $ impact.' },
+  { key: 'allocation',   label: 'Allocation, Showback & Chargeback', Icon: PieChart, color: '#a855f7',
+    desc: 'Where spend lands by subscription, resource group & tag — and what is unallocated (untagged).' },
+  { key: 'commitments',  label: 'Commitment & Reservation Coverage', Icon: ShieldCheck, color: '#06b6d4',
+    desc: 'Reserved Instance & Savings Plan coverage, utilisation and purchase headroom.' },
+  { key: 'budgets',      label: 'Budget & Forecast', Icon: Wallet, color: '#f59e0b',
+    desc: 'Budget performance, burn rate and forward spend projection.' },
+  { key: 'anomalies',    label: 'Anomaly & Cost-Spike', Icon: Activity, color: '#ef4444',
+    desc: 'Detected cost spikes, their drivers and the affected spend.' },
+]
+
+function Kpi({ label, value, sub }) {
   return (
-    <div style={{ flex: 1, minWidth: 170, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: '14px 16px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ color: C.muted, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.4px' }}>{label}</span>
-        {Icon && <Icon size={15} style={{ color }} />}
-      </div>
-      <div style={{ color: C.text, fontSize: 21, fontWeight: 700, marginTop: 4 }}>{value}</div>
+    <div style={{ flex: 1, minWidth: 150, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: '13px 15px' }}>
+      <div style={{ color: C.muted, fontSize: 10.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.4px' }}>{label}</div>
+      <div style={{ color: C.text, fontSize: 20, fontWeight: 700, marginTop: 3 }}>{value}</div>
       {sub != null && <div style={{ color: C.muted, fontSize: 11, marginTop: 2 }}>{sub}</div>}
     </div>
   )
 }
 
 export default function FinOpsExecutiveReport() {
-  const [customer, setCustomer]   = useState('')
-  const [loading, setLoading]     = useState(true)
-  const [error, setError]         = useState(null)
-  const [summary, setSummary]     = useState(null)
-  const [movers, setMovers]       = useState([])
-  const [workloads, setWorkloads] = useState([])
-  const [recs, setRecs]           = useState([])
-  const [aiNarrative, setAiNarrative] = useState('')
-  const [aiBusy, setAiBusy]       = useState(false)
-  const [pdfBusy, setPdfBusy]     = useState(false)
-  const [xlsBusy, setXlsBusy]     = useState(false)
+  const [reportType, setReportType] = useState('executive')
+  const [customer, setCustomer] = useState('')
+  const [useAi, setUseAi] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+  const [report, setReport] = useState(null)
+  const [pdfBusy, setPdfBusy] = useState(false)
+  const [xlsBusy, setXlsBusy] = useState(false)
   const [exportErr, setExportErr] = useState(null)
 
-  const load = useCallback(async () => {
-    setLoading(true); setError(null)
+  const generate = useCallback(async () => {
+    setBusy(true); setError(null); setExportErr(null)
     try {
-      const [sum, cmp, wl, adv] = await Promise.all([
-        finopsApi.getSummary().catch(() => null),
-        finopsApi.getCompare('ResourceGroupName').catch(() => ({ rows: [] })),
-        finopsApi.getWorkloads('dependency').catch(() => ({ workloads: [] })),
-        finopsApi.getAdvisorCost().catch(() => ({ items: [] })),
-      ])
-      setSummary(sum)
-      setMovers((cmp?.rows || []).slice(0, 15))
-      setWorkloads((wl?.workloads || []).slice(0, 15))
-      setRecs((adv?.items || []).slice(0, 20))
-    } catch (e) { setError(e.message) }
-    finally { setLoading(false) }
-  }, [])
-
-  useEffect(() => { load() }, [load])
-
-  const trend = useMemo(() => {
-    const costs = summary?.cost_trend_30d || []
-    const dates = summary?.cost_trend_dates || []
-    return costs.map((c, i) => ({ date: dates[i] || String(i + 1), cost: c }))
-  }, [summary])
-
-  const bySubscription = useMemo(() =>
-    (summary?.by_subscription || []).map(s => ({ name: s.name || s.id || 'Subscription', cost: s.cost || 0 })),
-  [summary])
-
-  const assembleReport = useCallback(() => ({
-    customer: customer || 'Azure Cost Management',
-    generatedAt: new Date().toLocaleString(),
-    kpis: {
-      totalMtd:       summary?.total_spend_mtd || 0,
-      forecastEom:    summary?.forecast_eom_usd || 0,
-      momDeltaPct:    summary?.mom_delta_pct,
-      savings:        summary?.savings_identified_usd || 0,
-      tagCompliance:  summary?.tagging_compliance_pct || 0,
-      subCount:       summary?.subscription_count || 0,
-      resourceCount:  summary?.total_resource_count || 0,
-      anomalyCount:   summary?.anomaly_count || 0,
-    },
-    trend,
-    bySubscription,
-    topMovers:  movers.map(m => ({ value: m.value, current: m.current, prior: m.prior, delta: m.delta_usd })),
-    workloads:  workloads.map(w => ({ name: w.name, cost: w.cost, resourceCount: w.resource_count })),
-    savings:    recs.map(x => ({ title: `${x.recommendation}${x.resource_name ? ` (${x.resource_name})` : ''}`, monthly: x.potential_savings_monthly })),
-    recommendations: recs.map(x => ({ recommendation: x.recommendation, resource: x.resource_name, savings: x.potential_savings_monthly })),
-    aiNarrative,
-  }), [customer, summary, trend, bySubscription, movers, workloads, recs, aiNarrative])
-
-  const genAi = useCallback(async () => {
-    setAiBusy(true); setExportErr(null)
-    try {
-      const payload = {
-        total_spend_mtd: summary?.total_spend_mtd, forecast_eom_usd: summary?.forecast_eom_usd,
-        mom_delta_pct: summary?.mom_delta_pct, savings_identified_usd: summary?.savings_identified_usd,
-        tagging_compliance_pct: summary?.tagging_compliance_pct, anomaly_count: summary?.anomaly_count,
-        by_subscription: bySubscription.slice(0, 8), top_movers: movers.slice(0, 8),
-        top_workloads: workloads.slice(0, 8).map(w => ({ name: w.name, cost: w.cost })),
-      }
-      const res = await finopsApi.aiInsights('executive-report', payload, null, false, undefined,
-        'Write a concise CFO-ready executive summary of this Azure cloud spend: current run-rate, month-over-month trend, biggest cost drivers, savings opportunities, and 2-3 prioritized recommendations.')
-      const txt = res?.summary || res?.analysis || res?.insights || res?.narrative || (typeof res === 'string' ? res : '')
-      setAiNarrative(txt || 'AI narrative unavailable.')
-    } catch (e) { setExportErr('AI narrative failed: ' + e.message) }
-    finally { setAiBusy(false) }
-  }, [summary, bySubscription, movers, workloads])
+      const rep = await finopsApi.generateExecReport({
+        report_type: reportType, customer: customer.trim(), use_ai: useAi,
+      })
+      setReport(rep)
+    } catch (e) {
+      setError(e.message || 'Report generation failed')
+    } finally { setBusy(false) }
+  }, [reportType, customer, useAi])
 
   const genPdf = useCallback(async () => {
+    if (!report) return
     setPdfBusy(true); setExportErr(null)
     try {
-      const mod = await import('../utils/finopsExecutiveReport')
-      await mod.generateFinOpsExecutivePDF(assembleReport())
+      const mod = await import('../utils/finopsExecReportPro')
+      await mod.generateFinOpsReportPDF(report)
     } catch (e) { setExportErr('PDF export failed: ' + e.message) }
     finally { setPdfBusy(false) }
-  }, [assembleReport])
+  }, [report])
 
   const genXls = useCallback(async () => {
+    if (!report) return
     setXlsBusy(true); setExportErr(null)
-    try { await finopsApi.downloadReport() }
+    try { await finopsApi.exportExecReportXlsx(report) }
     catch (e) { setExportErr('Excel export failed: ' + e.message) }
     finally { setXlsBusy(false) }
-  }, [])
+  }, [report])
 
-  const k = summary || {}
-  const btn = (onClick, busy, Icon, label, primary) => (
-    <button onClick={onClick} disabled={busy || loading} style={{
+  const trend = useMemo(() => (report?.spend_overview?.trend || []).map(p => ({ date: p.date, cost: p.cost })), [report])
+  const es = report?.executive_summary || {}
+  const meta = REPORT_TYPES.find(t => t.key === reportType) || REPORT_TYPES[0]
+  // Only surface the generated report while the picker is still on the type it was generated
+  // for. Selecting a different type hides the stale preview and flips the button to "Generate".
+  const showReport = !!report && report.report_type === reportType
+
+  const btn = (onClick, b, Icon, label, primary) => (
+    <button onClick={onClick} disabled={b || busy} style={{
       display: 'flex', alignItems: 'center', gap: 7,
       background: primary ? C.accent : C.surface, border: `1px solid ${primary ? C.accent : C.border}`,
-      borderRadius: 7, padding: '9px 16px', cursor: busy || loading ? 'wait' : 'pointer',
+      borderRadius: 7, padding: '9px 16px', cursor: b || busy ? 'wait' : 'pointer',
       color: primary ? '#fff' : C.text, fontSize: 13, fontWeight: 600,
     }}>
-      {busy ? <Loader size={14} className="animate-spin" /> : <Icon size={14} />} {label}
+      {b ? <Loader size={14} className="animate-spin" /> : <Icon size={14} />} {label}
     </button>
   )
 
+  const sectionCounts = report ? [
+    { label: 'Subscriptions', n: (report.subscriptions || []).length },
+    { label: 'Services analysed', n: (report.spend_overview?.by_service || []).length },
+    { label: 'Recommendations', n: (report.recommendations || []).length },
+    { label: 'Key findings', n: (es.key_findings || []).length },
+  ] : []
+
   return (
     <div style={{ padding: 24, maxWidth: 1300, margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
-        <div>
-          <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.text, fontSize: 22, fontWeight: 700, margin: 0 }}>
-            <FileText size={22} style={{ color: C.accent }} /> Executive Report
-          </h1>
-          <p style={{ color: C.muted, fontSize: 13, margin: '6px 0 0' }}>
-            A CFO-ready summary of cloud spend, trends, savings &amp; workloads — export to PDF or Excel.
-          </p>
-        </div>
-        <button onClick={load} disabled={loading} style={{
-          display: 'flex', alignItems: 'center', gap: 6, background: C.surface, border: `1px solid ${C.border}`,
-          borderRadius: 6, padding: '6px 12px', cursor: loading ? 'wait' : 'pointer', color: C.textDim, fontSize: 12, fontWeight: 600,
-        }}>
-          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Refresh
-        </button>
+      <div style={{ marginBottom: 16 }}>
+        <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.text, fontSize: 22, fontWeight: 700, margin: 0 }}>
+          <FileText size={22} style={{ color: C.accent }} /> FinOps Report Studio
+        </h1>
+        <p style={{ color: C.muted, fontSize: 13, margin: '6px 0 0' }}>
+          Consultant-grade, board-ready reports. Every figure comes directly from Azure Cost Management — nothing is estimated.
+          Export a branded PDF or multi-sheet Excel.
+        </p>
       </div>
 
-      {/* Customer + actions */}
+      {/* Report type picker */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, marginBottom: 16 }}>
+        {REPORT_TYPES.map(t => {
+          const active = reportType === t.key
+          return (
+            <button key={t.key} onClick={() => setReportType(t.key)} style={{
+              textAlign: 'left', background: active ? 'rgba(59,130,246,0.10)' : C.surface,
+              border: `1.5px solid ${active ? t.color : C.border}`, borderRadius: 12, padding: 14, cursor: 'pointer',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
+                <t.Icon size={18} style={{ color: t.color }} />
+                <span style={{ color: C.text, fontSize: 14, fontWeight: 700 }}>{t.label}</span>
+                {active && <CheckCircle2 size={15} style={{ color: t.color, marginLeft: 'auto' }} />}
+              </div>
+              <div style={{ color: C.muted, fontSize: 11.5, lineHeight: 1.45 }}>{t.desc}</div>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Controls */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
         <input value={customer} onChange={e => setCustomer(e.target.value)} placeholder="Customer / organization name (optional)"
-          style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: '9px 14px', color: C.text, fontSize: 13, minWidth: 300 }} />
-        {btn(genAi, aiBusy, Sparkles, aiNarrative ? 'Regenerate AI summary' : 'Add AI summary')}
-        {btn(genPdf, pdfBusy, FileText, 'Export PDF', true)}
-        {btn(genXls, xlsBusy, FileSpreadsheet, 'Export Excel')}
+          style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: '9px 14px', color: C.text, fontSize: 13, minWidth: 280 }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: C.textDim, fontSize: 13, cursor: 'pointer' }}>
+          <input type="checkbox" checked={useAi} onChange={e => setUseAi(e.target.checked)} />
+          <Sparkles size={14} style={{ color: C.purple }} /> AI narrative
+        </label>
+        {btn(generate, busy, busy ? Loader : FileText, busy ? 'Generating…' : (showReport ? 'Regenerate' : 'Generate report'), true)}
+        {showReport && btn(genPdf, pdfBusy, FileText, 'Export PDF')}
+        {showReport && btn(genXls, xlsBusy, FileSpreadsheet, 'Export Excel')}
       </div>
 
       {error && (
@@ -181,28 +165,45 @@ export default function FinOpsExecutiveReport() {
         </div>
       )}
 
-      {loading ? (
+      {busy && !showReport && (
         <div style={{ padding: 60, textAlign: 'center', color: C.muted }}>
-          <RefreshCw size={24} className="animate-spin" style={{ margin: '0 auto 10px' }} /> Assembling report…
+          <Loader size={26} className="animate-spin" style={{ margin: '0 auto 12px', color: C.accent }} />
+          <div style={{ fontSize: 14, color: C.textDim }}>Building your {meta.label} from live Cost Management data…</div>
+          {useAi && <div style={{ fontSize: 12, marginTop: 4 }}>The AI narrative can take up to a minute — every number is grounded, so it takes its time.</div>}
         </div>
-      ) : (
+      )}
+
+      {showReport && (
         <>
-          {/* KPI preview */}
+          {/* Headline */}
+          {es.headline && (
+            <div style={{ background: 'rgba(59,130,246,0.08)', border: `1px solid ${C.border}`, borderLeft: `3px solid ${meta.color}`, borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
+              <div style={{ color: C.text, fontSize: 15, fontWeight: 700, lineHeight: 1.45 }}>{es.headline}</div>
+            </div>
+          )}
+
+          {/* KPI strip */}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-            <Kpi label="Spend MTD" value={fmtUsd(k.total_spend_mtd)} Icon={DollarSign} sub={`${k.subscription_count || 0} subs · ${k.total_resource_count || 0} resources`} />
-            <Kpi label="Forecast EOM" value={fmtUsd(k.forecast_eom_usd)} Icon={TrendingUp} color={C.orange} sub={k.mom_delta_pct != null ? `${fmtPct(k.mom_delta_pct)} MoM` : ''} />
-            <Kpi label="Savings identified" value={fmtUsd(k.savings_identified_usd)} Icon={PiggyBank} color={C.green} sub="per month" />
-            <Kpi label="Tagging compliance" value={`${Number(k.tagging_compliance_pct || 0).toFixed(0)}%`} Icon={Tag} color={C.purple} sub={k.anomaly_count ? `${k.anomaly_count} anomalies` : ''} />
+            {(report.kpis || []).map((k, i) => (<Kpi key={i} label={k.label} value={k.value} sub={k.sub} />))}
           </div>
 
-          {/* Trend preview */}
-          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
-            <div style={{ color: C.textDim, fontSize: 13, fontWeight: 600, marginBottom: 8 }}>30-day spend trend</div>
-            {trend.length >= 2 ? (
+          {report.grounding?.coverage_pct != null && report.grounding.coverage_pct < 80 && (
+            <div style={{ color: C.muted, fontSize: 11, marginBottom: 16, lineHeight: 1.5 }}>
+              Cost-at-risk &amp; savings figures use per-resource attribution, currently covering ~{report.grounding.coverage_pct}% of the
+              authoritative estate total — treat them as a lower bound. Spend, subscription and service-family totals are 100% complete.
+            </div>
+          )}
+
+          {/* Trend */}
+          {trend.length >= 2 && (
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: C.textDim, fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+                <TrendingUp size={14} style={{ color: C.accent }} /> Spend trend
+              </div>
               <ResponsiveContainer width="100%" height={180}>
                 <AreaChart data={trend}>
                   <defs>
-                    <linearGradient id="finexecg" x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient id="finreppro" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.35} />
                       <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
                     </linearGradient>
@@ -211,43 +212,46 @@ export default function FinOpsExecutiveReport() {
                   <XAxis dataKey="date" tick={{ fill: '#475569', fontSize: 9 }} tickFormatter={d => String(d).slice(5)} minTickGap={24} />
                   <YAxis tick={{ fill: '#475569', fontSize: 9 }} tickFormatter={v => '$' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v)} />
                   <Tooltip {...rechartsTooltipProps()} formatter={v => fmtUsd(v, 2)} />
-                  <Area type="monotone" dataKey="cost" stroke="#3b82f6" fill="url(#finexecg)" strokeWidth={1.6} dot={false} />
+                  <Area type="monotone" dataKey="cost" stroke="#3b82f6" fill="url(#finreppro)" strokeWidth={1.6} dot={false} />
                 </AreaChart>
               </ResponsiveContainer>
-            ) : <div style={{ color: C.muted, fontSize: 12, padding: 20, textAlign: 'center' }}>Trend data unavailable — run a full dashboard scan to populate it.</div>}
-          </div>
-
-          {/* AI narrative preview */}
-          {aiNarrative && (
-            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: C.purple, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
-                <Sparkles size={15} /> AI executive summary
-              </div>
-              <div style={{ color: C.textDim, fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{aiNarrative}</div>
             </div>
           )}
 
-          {/* Section preview: what the report will contain */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
-            {[
-              { Icon: GitCompareArrows, label: 'Biggest cost movers', count: movers.length, color: C.orange },
-              { Icon: Network, label: 'Top workloads', count: workloads.length, color: C.accent },
-              { Icon: PiggyBank, label: 'Advisor recommendations', count: recs.length, color: C.green },
-              { Icon: DollarSign, label: 'Cost by subscription', count: bySubscription.length, color: C.purple },
-            ].map((s, i) => (
-              <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
-                <s.Icon size={20} style={{ color: s.color }} />
-                <div>
-                  <div style={{ color: C.text, fontSize: 18, fontWeight: 700 }}>{s.count}</div>
-                  <div style={{ color: C.muted, fontSize: 12 }}>{s.label}</div>
-                </div>
+          {/* AI narrative */}
+          {es.narrative && (
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: C.purple, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+                <Sparkles size={15} /> Executive narrative
+              </div>
+              <div style={{ color: C.textDim, fontSize: 13, lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>{es.narrative}</div>
+            </div>
+          )}
+
+          {/* Key findings */}
+          {(es.key_findings || []).length > 0 && (
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
+              <div style={{ color: C.textDim, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Key findings</div>
+              <ul style={{ margin: 0, paddingLeft: 18, color: C.textDim, fontSize: 13, lineHeight: 1.7 }}>
+                {es.key_findings.map((f, i) => <li key={i}>{f}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {/* Section counts */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 12 }}>
+            {sectionCounts.map((sc, i) => (
+              <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 }}>
+                <div style={{ color: C.text, fontSize: 20, fontWeight: 700 }}>{sc.n}</div>
+                <div style={{ color: C.muted, fontSize: 12 }}>{sc.label}</div>
               </div>
             ))}
           </div>
 
-          <p style={{ color: C.muted, fontSize: 11, marginTop: 16 }}>
-            The PDF is generated in your browser (branded, multi-section). Excel uses the server FinOps report.
-            All figures are live from Azure Cost Management + the resource inventory.
+          <p style={{ color: C.muted, fontSize: 11 }}>
+            The PDF renders in your browser (branded, multi-section, per-subscription). Excel is a multi-sheet workbook.
+            {report.grounding?.data_source ? ` Source: ${report.grounding.data_source}.` : ''}
+            {report.model ? ` Narrative model: ${report.model}.` : ''}
           </p>
         </>
       )}

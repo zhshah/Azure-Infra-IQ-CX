@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1
+# ==============================================================================
+# Azure Infra IQ — demo runtime image (Container Apps), 100% parity with the
+# LOCAL app (`uvicorn main:app` serving the built SPA + Icons). This is the same
+# backend code + the same React build the local server runs — no ZureMap engine
+# (the local dev server does not run ZureMap either), so it avoids the private
+# ghcr.io/natechsa/zuremap base and reproduces exactly what runs locally.
+#
+#   - FastAPI backend (API)      -> /srv/app             (uvicorn :8000, public)
+#   - Built React SPA            -> /srv/frontend/dist    (served by backend)
+#   - Azure service icon library -> /srv/Icons            (served by backend)
+#   - ODBC Driver 18             -> pyodbc / Azure SQL
+#
+# main.py resolves the SPA at parent.parent/"frontend"/"dist" and icons at
+# parent.parent/"Icons" — so backend lives at /srv/app and SPA/icons at /srv/*.
+#
+# Build context = repository root:  az acr build --file Dockerfile.demo .
+# ==============================================================================
+
+# ---- Stage 1: build the React SPA (same source the local build uses) ---------
+FROM node:20-bookworm-slim AS web
+WORKDIR /web
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# ---- Stage 2: Python backend runtime + ODBC + SPA + icons --------------------
+FROM python:3.11-slim
+
+# ODBC Driver 18 for SQL Server (pyodbc / Azure SQL).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl gnupg ca-certificates apt-transport-https unixodbc-dev \
+    && curl -sSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
+    && curl -sSL https://packages.microsoft.com/config/debian/12/prod.list -o /etc/apt/sources.list.d/mssql-release.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python deps.
+COPY backend/requirements.txt /srv/app/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r /srv/app/requirements.txt
+
+# Backend at /srv/app; SPA + icons one level up (/srv) to match main.py's paths.
+COPY backend/ /srv/app/
+COPY --from=web /web/dist /srv/frontend/dist
+COPY Icons /srv/Icons
+
+WORKDIR /srv/app
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
