@@ -536,3 +536,135 @@ Licensed under the **MIT License** — see [LICENSE](LICENSE).
 **Azure Infra IQ** — Know your estate. Cut waste. Prove resilience.
 
 </div>
+
+---
+
+## App Service Deployment
+
+Azure Infra IQ can also be deployed to **Azure App Service** (P3v3) instead of Container Apps — ideal for customers who prefer PaaS without container orchestration overhead, or when a region does not offer Azure Container Apps with private networking (e.g. Qatar Central).
+
+> **Script**: `Scripts/deploy-appservice-sidra-qatarcentral.ps1` (Qatar Central / Sidra variant)  
+> **Generic variant**: `Scripts/deploy-appservice.ps1`
+
+Before running, set execution policy for the session:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+---
+
+### App Service — Option 1: Public, new OpenAI in same region as App Service
+
+Simplest path. Works wherever both App Service and Azure OpenAI are offered in the same region (`westeurope`, `swedencentral`, `eastus`, etc.). The script creates the OpenAI resource in `$Location`.
+
+```powershell
+.\deploy-appservice.ps1 `
+    -ResourceGroupName  "rg-azure-infra-iq" `
+    -Location           "westeurope" `
+    -WebAppName         "app-infraiq-agent" `
+    -AppServicePlanName "asp-infraiq-agent" `
+    -EntraAppClientId   "<your-entra-app-client-id>" `
+    -EntraTenantId      "<your-tenant-id>" `
+    -SubscriptionId     "<your-subscription-id>" `
+    -OpenAIMode         "New"
+```
+
+The script attempts the newest available GPT model (GPT-5.5 → 5.4 → 5.2 → 4.1 → 4o → 4o-mini) at up to 80K TPM GlobalStandard and falls back gracefully.
+
+---
+
+### App Service — Option 2: Public, new OpenAI in a different region
+
+Use this when the App Service region does not offer Azure OpenAI (e.g. Qatar Central). The App Service is deployed locally; OpenAI is created in a capable region such as Sweden Central.
+
+```powershell
+.\deploy-appservice-sidra-qatarcentral.ps1 `
+    -ResourceGroupName  "rg-azure-infra-iq" `
+    -Location           "qatarcentral" `
+    -WebAppName         "app-infraiq-agent" `
+    -AppServicePlanName "asp-infraiq-agent" `
+    -EntraAppClientId   "<your-entra-app-client-id>" `
+    -EntraTenantId      "<your-tenant-id>" `
+    -SubscriptionId     "<your-subscription-id>" `
+    -OpenAIMode         "New" `
+    -OpenAILocation     "swedencentral"
+```
+
+`-OpenAILocation` accepts any OpenAI-capable region: `swedencentral`, `westeurope`, `northeurope`, `eastus`, `eastus2`, `francecentral`, `uksouth`, `switzerlandnorth`. Defaults to `swedencentral` when omitted for Qatar Central deployments.
+
+---
+
+### App Service — Option 3: Private enterprise, new OpenAI in a different region
+
+Full zero-trust private deployment. App Service has no public inbound endpoint (behind a Private Endpoint). Outbound traffic to OpenAI flows through VNet integration.
+
+**Two dedicated subnets required in your VNet:**
+
+| Subnet | Delegation | Minimum size | Purpose |
+|--------|-----------|-------------|---------|
+| `PrivateEndpointSubnetName` | None | /27 | Inbound Private Endpoint for App Service + OpenAI PE |
+| `AppServiceIntegrationSubnetName` | `Microsoft.Web/serverFarms` | /26 recommended | App Service outbound VNet integration |
+
+The script adds the `Microsoft.Web/serverFarms` delegation automatically if missing and you confirm.
+
+```powershell
+.\deploy-appservice-sidra-qatarcentral.ps1 `
+    -ResourceGroupName  "rg-azure-infra-iq" `
+    -Location           "qatarcentral" `
+    -WebAppName         "app-infraiq-agent" `
+    -AppServicePlanName "asp-infraiq-agent" `
+    -EntraAppClientId   "<your-entra-app-client-id>" `
+    -EntraTenantId      "<your-tenant-id>" `
+    -SubscriptionId     "<your-subscription-id>" `
+    `
+    -OpenAIMode         "New" `
+    -OpenAILocation     "swedencentral" `
+    `
+    -DeploymentMode                  "Private" `
+    -VNetName                        "<vnet-name>" `
+    -VNetResourceGroupName           "<vnet-rg>" `
+    -PrivateEndpointSubnetName       "<pe-subnet>" `
+    -AppServiceIntegrationSubnetName "<integration-subnet>" `
+    -PrivateDnsZoneSubscriptionId    "<hub-subscription-id>" `
+    -PrivateDnsZoneResourceGroupName "rg-private-dns-zones"
+```
+
+When `-PrivateDnsZoneSubscriptionId` and `-PrivateDnsZoneResourceGroupName` are supplied the script reuses existing Private DNS Zones in that hub RG (enterprise hub/spoke pattern) and only creates missing zones. If both are omitted the script prompts interactively.
+
+---
+
+### App Service — Option 4: Private enterprise, existing PTU / Provisioned OpenAI
+
+Use this when the customer already has a Provisioned Throughput (PTU) or dedicated Azure OpenAI deployment in another subscription or region. The script skips all OpenAI creation steps and wires the App Service directly to the existing resource.
+
+```powershell
+.\deploy-appservice-sidra-qatarcentral.ps1 `
+    -ResourceGroupName  "rg-finops-prod-01" `
+    -Location           "qatarcentral" `
+    -WebAppName         "app-sidra-infraiq" `
+    -AppServicePlanName "asp-sidra-infraiq" `
+    -EntraAppClientId   "<app-client-id>" `
+    -EntraTenantId      "<tenant-id>" `
+    -SubscriptionId     "<subscription-id>" `
+    `
+    -OpenAIMode           "Existing" `
+    -OpenAIResourceName   "<existing-openai-resource-name>" `
+    -OpenAIResourceGroup  "<existing-openai-rg>" `
+    -OpenAIDeploymentName "sidra-prd-gpt-5-4-ptu" `
+    `
+    -DeploymentMode                  "Private" `
+    -VNetName                        "<vnet-name>" `
+    -VNetResourceGroupName           "<vnet-rg>" `
+    -PrivateEndpointSubnetName       "<pe-subnet>" `
+    -AppServiceIntegrationSubnetName "<integration-subnet>" `
+    -PrivateDnsZoneSubscriptionId    "<hub-subscription-id>" `
+    -PrivateDnsZoneResourceGroupName "rg-private-dns-zones"
+```
+
+**`Existing` mode behaviour:**
+- No new OpenAI account or model deployment is created
+- `-OpenAILocation` is not required and is never prompted
+- Endpoint and key are resolved automatically from `-OpenAIResourceName` + `-OpenAIResourceGroup`; supply `-OpenAIEndpoint` + `-OpenAIKey` directly to bypass control-plane lookups (useful when the deploying identity cannot read the OpenAI resource)
+- `Cognitive Services OpenAI User` RBAC is assigned to the App Service Managed Identity on the existing resource
+
