@@ -555,7 +555,7 @@ Licensed under the **MIT License** — see [LICENSE](LICENSE).
 
 Azure Infra IQ can also be deployed to **Azure App Service** (P3v3) instead of Container Apps — ideal for customers who prefer PaaS without container orchestration overhead, or when a region does not offer Azure Container Apps with private networking (e.g. Qatar Central).
 
-> **Script**: `Scripts/deploy-appservice-sidra-qatarcentral.ps1` (Qatar Central / Sidra variant)  
+> **Script**: `Scripts/deploy-appservice-healthsector-qatarcentral.ps1` (Qatar Central / Health Sector variant)  
 > **Generic variant**: `Scripts/deploy-appservice.ps1`
 
 Before running, set execution policy for the session:
@@ -591,7 +591,7 @@ The script attempts the newest available GPT model (GPT-5.5 → 5.4 → 5.2 → 
 Use this when the App Service region does not offer Azure OpenAI (e.g. Qatar Central). The App Service is deployed locally; OpenAI is created in a capable region such as Sweden Central.
 
 ```powershell
-.\deploy-appservice-sidra-qatarcentral.ps1 `
+.\deploy-appservice-healthsector-qatarcentral.ps1 `
     -ResourceGroupName  "rg-azure-infra-iq" `
     -Location           "qatarcentral" `
     -WebAppName         "app-infraiq-agent" `
@@ -621,7 +621,7 @@ Full zero-trust private deployment. App Service has no public inbound endpoint (
 The script adds the `Microsoft.Web/serverFarms` delegation automatically if missing and you confirm.
 
 ```powershell
-.\deploy-appservice-sidra-qatarcentral.ps1 `
+.\deploy-appservice-healthsector-qatarcentral.ps1 `
     -ResourceGroupName  "rg-azure-infra-iq" `
     -Location           "qatarcentral" `
     -WebAppName         "app-infraiq-agent" `
@@ -651,11 +651,11 @@ When `-PrivateDnsZoneSubscriptionId` and `-PrivateDnsZoneResourceGroupName` are 
 Use this when the customer already has a Provisioned Throughput (PTU) or dedicated Azure OpenAI deployment in another subscription or region. The script skips all OpenAI creation steps and wires the App Service directly to the existing resource.
 
 ```powershell
-.\deploy-appservice-sidra-qatarcentral.ps1 `
+.\deploy-appservice-healthsector-qatarcentral.ps1 `
     -ResourceGroupName  "rg-finops-prod-01" `
     -Location           "qatarcentral" `
-    -WebAppName         "app-sidra-infraiq" `
-    -AppServicePlanName "asp-sidra-infraiq" `
+    -WebAppName         "app-healthsector-infraiq" `
+    -AppServicePlanName "asp-healthsector-infraiq" `
     -EntraAppClientId   "<app-client-id>" `
     -EntraTenantId      "<tenant-id>" `
     -SubscriptionId     "<subscription-id>" `
