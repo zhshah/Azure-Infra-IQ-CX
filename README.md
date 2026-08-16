@@ -909,3 +909,11 @@ Issues and PRs are welcome. Please open an issue before starting significant wor
 ## License
 
 MIT
+
+---
+
+## Solution Accelerator Developed by
+
+**Zahir Hussain Shah**  
+Senior Solution Engineer - Cloud & AI - Infra  
+Microsoft Qatar
