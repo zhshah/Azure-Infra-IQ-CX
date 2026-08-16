@@ -45,12 +45,14 @@ Each command should print a version number. If any of them says "not recognised"
 Open Command Prompt and run:
 
 ```bat
-git clone https://github.com/zhshah/Az-Infra-Management-AI-Accelerator.git
-cd Az-Infra-Management-AI-Accelerator
+git clone -b FinOps-16-Aug https://github.com/zhshah/Azure-Infra-IQ-CX.git
+cd Azure-Infra-IQ-CX
 install.bat
 ```
 
 `install.bat` sets everything up automatically. It creates a Python environment, installs all packages, and builds the frontend. This takes 2-3 minutes and only needs to be run once.
+
+> **Note:** `-b FinOps-16-Aug` checks out the current release branch. If you omit it you will get the default branch, which does not include the latest FinOps modules.
 
 ---
 
@@ -198,7 +200,7 @@ Python 3.13 or 3.14 is installed and has no pre-built packages for some dependen
 
 For production deployments the repo ships a PowerShell script that provisions all required Azure resources — App Service Plan, Web App, Azure SQL, Azure OpenAI, RBAC, and optional private networking — in a single automated run.
 
-> **Script**: `Scripts/deploy-appservice-sidra-qatarcentral.ps1` (Qatar Central variant)  
+> **Script**: `Scripts/deploy-appservice-healthsector-qatarcentral.ps1` (Qatar Central variant)  
 > **Generic variant**: `Scripts/deploy-appservice.ps1`
 
 Before running, set execution policy for the session:
@@ -233,7 +235,7 @@ Simplest path. OpenAI is created in the same region as the App Service. Works wh
 Use this when your App Service region does not offer Azure OpenAI (e.g. Qatar Central). The App Service is deployed locally while OpenAI is created in a capable region such as Sweden Central. Cross-region access is via the public endpoint by default.
 
 ```powershell
-.\deploy-appservice-sidra-qatarcentral.ps1 `
+.\deploy-appservice-healthsector-qatarcentral.ps1 `
     -ResourceGroupName  "rg-azure-infra-iq" `
     -Location           "qatarcentral" `
     -WebAppName         "app-infraiq-agent" `
@@ -258,7 +260,7 @@ Two dedicated subnets are required in your VNet:
 - **Integration subnet** — App Service regional VNet integration outbound (delegated to `Microsoft.Web/serverFarms`; script adds delegation automatically)
 
 ```powershell
-.\deploy-appservice-sidra-qatarcentral.ps1 `
+.\deploy-appservice-healthsector-qatarcentral.ps1 `
     -ResourceGroupName  "rg-azure-infra-iq" `
     -Location           "qatarcentral" `
     -WebAppName         "app-infraiq-agent" `
@@ -285,14 +287,14 @@ When `-PrivateDnsZoneSubscriptionId` and `-PrivateDnsZoneResourceGroupName` are 
 
 ### Option 4 — Private enterprise deployment, existing PTU / Provisioned OpenAI
 
-Use this when the customer already has a Provisioned Throughput (PTU) or dedicated Azure OpenAI deployment in another subscription or region (e.g. Sidra Medicine's `sidra-prd-gpt-5-4-ptu` in Sweden Central). The script skips all OpenAI creation steps and wires the App Service directly to the existing resource.
+Use this when you already have a Provisioned Throughput (PTU) or dedicated Azure OpenAI deployment in another subscription or region. The script skips all OpenAI creation steps and wires the App Service directly to the existing resource.
 
 ```powershell
-.\deploy-appservice-sidra-qatarcentral.ps1 `
+.\deploy-appservice-healthsector-qatarcentral.ps1 `
     -ResourceGroupName  "rg-finops-prod-01" `
     -Location           "qatarcentral" `
-    -WebAppName         "app-sidra-infraiq" `
-    -AppServicePlanName "asp-sidra-infraiq" `
+    -WebAppName         "app-infraiq-agent" `
+    -AppServicePlanName "asp-infraiq-agent" `
     -EntraAppClientId   "<app-client-id>" `
     -EntraTenantId      "<tenant-id>" `
     -SubscriptionId     "<subscription-id>" `
@@ -300,7 +302,7 @@ Use this when the customer already has a Provisioned Throughput (PTU) or dedicat
     -OpenAIMode           "Existing" `
     -OpenAIResourceName   "<existing-openai-resource-name>" `
     -OpenAIResourceGroup  "<existing-openai-rg>" `
-    -OpenAIDeploymentName "sidra-prd-gpt-5-4-ptu" `
+    -OpenAIDeploymentName "<existing-ptu-deployment-name>" `
     `
     -DeploymentMode                  "Private" `
     -VNetName                        "<vnet-name>" `

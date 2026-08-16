@@ -1,0 +1,38 @@
+#!/bin/bash
+# App Service (Linux, code) startup for Azure Cost Optimizer.
+# Installs the ODBC driver (for Azure SQL via pyodbc), ensures the Python venv,
+# then launches the FastAPI backend — which also serves the built React SPA
+# (frontend/dist) and the Azure service icons (/icons).
+
+WWWROOT=/home/site/wwwroot
+
+# ── ODBC Driver 18 for SQL Server (needed by pyodbc when DATABASE_PROVIDER=azuresql) ──
+# Best-effort install; requires outbound access to packages.microsoft.com. In a
+# fully air-gapped (no-egress) private deployment this can fail — the app then
+# degrades gracefully (the pyodbc import is guarded). For air-gapped Azure SQL,
+# prefer the Container Apps deployment (driver baked into the image) or set the
+# app setting DATABASE_PROVIDER=sqlite.
+if [ ! -d /opt/microsoft/msodbcsql18 ]; then
+    echo "Installing ODBC Driver 18 for SQL Server..."
+    DEB_VER=$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID:-12}")
+    curl -sSL https://packages.microsoft.com/keys/microsoft.asc -o /etc/apt/trusted.gpg.d/microsoft.asc 2>/dev/null || true
+    curl -sSL "https://packages.microsoft.com/config/debian/${DEB_VER}/prod.list" -o /etc/apt/sources.list.d/mssql-release.list 2>/dev/null || true
+    apt-get update -y 2>/dev/null || true
+    ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev 2>/dev/null \
+        || echo "WARN: msodbcsql18 install failed (offline?) — Azure SQL via pyodbc may be unavailable."
+fi
+
+# ── Python venv + dependencies (persisted under /home across restarts) ──
+if [ ! -d "$WWWROOT/antenv" ]; then
+    echo "First start: creating venv and installing packages..."
+    python -m venv "$WWWROOT/antenv"
+    "$WWWROOT/antenv/bin/pip" install --upgrade pip -q
+    "$WWWROOT/antenv/bin/pip" install -r "$WWWROOT/requirements.txt" -q
+    echo "Package installation complete."
+fi
+
+source "$WWWROOT/antenv/bin/activate"
+
+cd "$WWWROOT/backend"
+echo "Starting uvicorn from: $(pwd)"
+exec python -m uvicorn main:app --host 0.0.0.0 --port 8000
