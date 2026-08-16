@@ -247,6 +247,88 @@ def backfill_analyze_dimensions(days: int = ANALYZE_DIMENSION_DAYS,
             "subscriptions": len(subscription_ids or []), "days": days}
 
 
+# ── ETL step: management-group cost rollup ────────────────────────────────────
+
+def _collect_mgmt_group_costs(today: date, run_id: str,
+                              subscription_ids: Optional[List[str]] = None) -> int:
+    """Aggregate this month's subscription cost up the management-group tree.
+
+    Walks the hierarchy in ONE recursive call ($expand=children&$recurse=true),
+    mirroring the scope-selector walker, so each node carries its true depth and
+    every descendant subscription."""
+    from services import finops_dashboard_service as _dash
+    from services.azure_auth import get_credential
+    import json as _json
+    import urllib.request as _rq
+
+    billing_month = today.strftime("%Y-%m")
+    month_start = str(today.replace(day=1))
+
+    sub_costs: Dict[str, float] = {}
+    try:
+        with _conn() as con:
+            for row in con.execute(
+                    "SELECT subscription_id, SUM(cost_usd) FROM finops_daily_subscription_costs "
+                    "WHERE snapshot_date >= ? GROUP BY subscription_id", (month_start,)).fetchall():
+                sub_costs[row[0]] = float(row[1] or 0)
+    except Exception as e:
+        logger.warning("MG rollup: subscription cost read failed: %s", e)
+        return 0
+    if not sub_costs:
+        logger.info("MG rollup: no subscription cost rows for %s yet — skipping", billing_month)
+        return 0
+
+    groups: List[Dict[str, Any]] = []
+    try:
+        token = get_credential().get_token("https://management.azure.com/.default").token
+
+        def _get(path: str) -> Dict[str, Any]:
+            req = _rq.Request("https://management.azure.com" + path,
+                              headers={"Authorization": f"Bearer {token}"})
+            with _rq.urlopen(req, timeout=30) as r:
+                return _json.loads(r.read().decode())
+
+        listing = _get("/providers/Microsoft.Management/managementGroups?api-version=2020-05-01")
+        vals = listing.get("value") or []
+        if not vals:
+            return 0
+        root_id = vals[0]["name"]
+        tree = _get(f"/providers/Microsoft.Management/managementGroups/{root_id}"
+                    "?api-version=2020-05-01&$expand=children&$recurse=true")
+
+        def walk(node: Dict[str, Any], depth: int, parent_id: str) -> set:
+            props = node.get("properties") or node
+            entry = {
+                "id": node.get("name"),
+                "name": props.get("displayName") or node.get("name"),
+                "parent_id": parent_id,
+                "level": depth,
+                "subscription_ids": [],
+            }
+            groups.append(entry)
+            descendant: set = set()
+            for ch in (props.get("children") or []):
+                ctype = (ch.get("type") or "").lower()
+                if "subscription" in ctype:
+                    sid = ch.get("name")
+                    if sid:
+                        descendant.add(sid)
+                elif "managementgroup" in ctype:
+                    descendant |= walk(ch, depth + 1, entry["id"])
+            entry["subscription_ids"] = sorted(descendant)
+            return descendant
+
+        walk(tree, 0, "")
+    except Exception as e:
+        logger.warning("MG rollup: hierarchy fetch failed (needs Management Group Reader): %s", e)
+        return 0
+
+    nodes = _dash.build_mgmt_group_rollup(groups, sub_costs)
+    written = _dash.store_mgmt_group_costs(nodes, billing_month, run_id)
+    logger.info("MG rollup: %d management groups persisted for %s", written, billing_month)
+    return written
+
+
 # ── Main ETL orchestrator ──────────────────────────────────────────────────────
 
 def run_full_etl(
@@ -327,6 +409,16 @@ def run_full_etl(
                 except Exception as _de:
                     logger.warning("ETL: dimension costs for %s failed: %s", sub_id[:8], _de)
 
+                # f) Meter-grain costs + usage quantity (storage tier, egress,
+                #    inter-region, $/GB ingested — none of which the service grain can answer)
+                try:
+                    from services import finops_meter_service as _meter
+                    m_days = _meter.METER_HISTORY_DAYS_INITIAL if initial else _meter.METER_HISTORY_DAYS
+                    n = _meter.collect_meter_costs(sub_id, today, run_id, days=m_days)
+                    counters["meter_costs"] = counters.get("meter_costs", 0) + n
+                except Exception as _me:
+                    logger.warning("ETL: meter costs for %s failed: %s", sub_id[:8], _me)
+
                 # Brief pause between subscriptions to be a good API citizen
                 time.sleep(2)
 
@@ -339,8 +431,43 @@ def run_full_etl(
         counters["anomalies"] = n
         logger.info("ETL: %d anomalies detected", n)
 
+        # g) Measure realized savings for implemented recommendations, and roll
+        #    management-group cost up the hierarchy.
+        try:
+            from services import finops_savings_service as _sav
+            res = _sav.measure_realized_savings(run_id)
+            counters["realized_measured"] = res.get("measured", 0)
+        except Exception as _se:
+            logger.warning("ETL: realized savings measurement failed: %s", _se)
+
+        # h) Turn stored warehouse facts (stopped-but-billing VMs, costed orphans)
+        #    into recommendations. The scan/AI path only surfaces a handful, so
+        #    without this the optimizer under-reports reclaimable spend by an
+        #    order of magnitude. Idempotent: resources that already carry a
+        #    recommendation are skipped, so nothing is double counted.
+        try:
+            from services import finops_savings_service as _sav2
+            gen = _sav2.generate_warehouse_recommendations()
+            counters["recommendations_generated"] = gen.get("generated", 0)
+            logger.info("ETL: %d warehouse recommendations generated (%s USD/mo)",
+                        gen.get("generated", 0), gen.get("monthly_usd", 0))
+        except Exception as _ge:
+            logger.warning("ETL: warehouse recommendation generation failed: %s", _ge)
+
+        try:
+            _collect_mgmt_group_costs(today, run_id, subscription_ids)
+        except Exception as _mge:
+            logger.warning("ETL: management group rollup failed: %s", _mge)
+
         # f) Purge old data beyond retention window
         _purge_old_data(today)
+        try:
+            from services import finops_meter_service as _meter
+            _meter.purge_old(today)
+            from services import finops_dashboard_service as _dash
+            _dash.purge_old()
+        except Exception as _pe:
+            logger.warning("ETL: extended purge failed: %s", _pe)
 
         _finish_etl_run(run_id, counters)
         logger.info("ETL run %s completed: %s", run_id, counters)
@@ -428,12 +555,27 @@ def _upsert_resource_cost_batch(batch: List[tuple]) -> int:
 
     try:
         with _conn() as con:
-            for row_params in batch:
-                con.execute(sql, row_params)
+            cur = con.cursor()
+            try:
+                cur.fast_executemany = True   # pyodbc only; one round-trip per batch
+            except AttributeError:
+                pass
+            cur.executemany(sql, batch)
         return len(batch)
     except Exception as e:
-        logger.error("ETL: resource cost batch upsert failed: %s", e)
-        return 0
+        logger.warning("ETL: resource cost batch upsert failed (%s) — retrying row by row", e)
+        written = 0
+        try:
+            with _conn() as con:
+                for row_params in batch:
+                    try:
+                        con.execute(sql, row_params)
+                        written += 1
+                    except Exception:
+                        pass
+        except Exception as inner:
+            logger.error("ETL: resource cost row-by-row fallback failed: %s", inner)
+        return written
 
 
 # ── ETL step: daily subscription rollup ──────────────────────────────────────
@@ -1236,11 +1378,12 @@ def _extract_date(row: dict, col_map: Dict[str, str]) -> Optional[str]:
     val = row.get(date_key)
     if val is None:
         return None
-    s = str(val)
-    # Azure returns dates as "2026-06-04T00:00:00" or "2026-06-04" or integer 20260604
-    if len(s) >= 8 and s[:4].isdigit():
-        return s[:10]
-    return None
+    # Azure returns "2026-06-04T00:00:00", "2026-06-04" or the integer 20260604.
+    # Always store the dashed ISO form: SQL Server's default collation ignores the
+    # hyphen when comparing, so a mixed format silently "works" there but breaks
+    # range queries on SQLite.
+    sd = _norm_date(val)
+    return sd or None
 
 
 def _parse_resource_name(resource_id: str) -> str:

@@ -142,8 +142,8 @@ function SpendTrend({ d }) {
 }
 
 function ForecastBand({ f }) {
-  const history = (f?.history || []).map(p => ({ date: p.date, actual: p.cost }))
-  const forecast = (f?.forecast || []).map(p => ({ date: p.date, forecast: p.cost }))
+  const history = (f?.history || []).map(p => ({ date: p.date, actual: p.cost_usd ?? p.cost }))
+  const forecast = (f?.forecast || []).map(p => ({ date: p.date, forecast: p.cost_usd ?? p.cost }))
   const data = [...history, ...forecast]
   if (!data.length) return <Empty msg="No forecast data" />
   return (
@@ -200,7 +200,7 @@ function HeatmapCal({ dates, values }) {
 
 function BreakdownBars({ items, title, height = 220 }) {
   const data = (items || []).slice(0, 10).map((x, i) => ({
-    name: (x.name || x.key || '—').toString().slice(0, 22),
+    name: (x.label || x.name || x.key || '—').toString().slice(0, 22),
     cost: x.cost ?? x.value ?? 0,
     fill: PALETTE[i % PALETTE.length],
   }))
@@ -222,7 +222,7 @@ function BreakdownBars({ items, title, height = 220 }) {
 
 function DonutBreakdown({ items }) {
   const data = (items || []).slice(0, 6).map((x, i) => ({
-    name: (x.name || '—').toString().slice(0, 28),
+    name: (x.label || x.name || '(unnamed)').toString().slice(0, 28),
     value: x.cost ?? x.value ?? 0,
     fill: PALETTE[i % PALETTE.length],
   }))
@@ -230,20 +230,24 @@ function DonutBreakdown({ items }) {
   const total = data.reduce((s, d) => s + d.value, 0) || 1
   return (
     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flex: 1 }}>
-      <ResponsiveContainer width="55%" height={180}>
+      <ResponsiveContainer width="45%" height={180}>
         <PieChart>
-          <Pie data={data} dataKey="value" innerRadius={40} outerRadius={70} paddingAngle={2}>
+          <Pie data={data} dataKey="value" nameKey="name" innerRadius={40} outerRadius={70} paddingAngle={2}>
             {data.map((d, i) => <Cell key={i} fill={d.fill} />)}
           </Pie>
           <Tooltip content={<TinyTooltip />} />
         </PieChart>
       </ResponsiveContainer>
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <div style={{ color: 'var(--c-64748b)', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+          Total {fmtUsd(total)}
+        </div>
         {data.map((d, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
             <span style={{ width: 8, height: 8, background: d.fill, borderRadius: 2, flexShrink: 0 }} />
-            <span style={{ color: 'var(--c-cbd5e1)', flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.name}</span>
-            <span style={{ color: 'var(--c-94a3b8)' }}>{fmtPct((d.value / total) * 100)}</span>
+            <span style={{ color: 'var(--c-cbd5e1)', flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={d.name}>{d.name}</span>
+            <span style={{ color: 'var(--c-e2e8f0)', fontWeight: 600 }}>{fmtUsd(d.value)}</span>
+            <span style={{ color: 'var(--c-64748b)', width: 42, textAlign: 'right' }}>{fmtPct((d.value / total) * 100)}</span>
           </div>
         ))}
       </div>
@@ -253,7 +257,7 @@ function DonutBreakdown({ items }) {
 
 function RGTreemap({ items }) {
   const data = (items || []).slice(0, 20).map((x, i) => ({
-    name: (x.name || '—').toString(),
+    name: (x.label || x.name || '—').toString(),
     size: x.cost ?? x.value ?? 0,
     fill: PALETTE[i % PALETTE.length],
   })).filter(x => x.size > 0)
@@ -284,38 +288,42 @@ function TreemapCell(props) {
 
 function MoMMovers({ s }) {
   const curr = s?.total_spend_mtd ?? 0
-  const prev = s?.total_spend_last_month ?? 0
-  const delta = curr - prev
-  const pct = prev > 0 ? ((curr - prev) / prev) * 100 : 0
+  const prevFull = s?.total_spend_last_month ?? 0
+  // Compare MTD against the same elapsed days of last month; measuring a part-month
+  // against a full month always shows a phantom drop.
+  const prevBasis = s?.prior_month_to_date ?? prevFull
+  const delta = curr - prevBasis
+  const pct = prevBasis > 0 ? (delta / prevBasis) * 100 : 0
   const forecast = s?.forecast_eom_usd ?? 0
-  const projDelta = forecast - prev
-  const projPct = prev > 0 ? ((forecast - prev) / prev) * 100 : 0
+  const projDelta = forecast - prevFull
+  const projPct = prevFull > 0 ? ((forecast - prevFull) / prevFull) * 100 : 0
+  const scale = Math.max(prevFull, curr, forecast) || 1
   const rows = [
-    { label: 'Last month total',   value: prev,     color: 'var(--c-475569)', width: 100 },
-    { label: 'This month MTD',     value: curr,     color: '#3b82f6',         width: prev > 0 ? Math.min(100, (curr / prev) * 100) : 100 },
-    { label: 'Projected EOM',      value: forecast, color: '#8b5cf6',         width: prev > 0 ? Math.min(100, (forecast / prev) * 100) : 100 },
+    { label: 'Last month (full)',  value: prevFull, color: 'var(--c-475569)', width: (prevFull / scale) * 100 },
+    { label: 'This month to date', value: curr,     color: '#3b82f6',         width: (curr / scale) * 100 },
+    { label: 'Projected EOM',      value: forecast, color: '#8b5cf6',         width: (forecast / scale) * 100 },
   ]
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ color: 'var(--c-64748b)', fontSize: 11 }}>MTD vs last month</div>
+      <div style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Month to date vs last month</div>
       {rows.map((r, i) => (
         <div key={i}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--c-94a3b8)', marginBottom: 3 }}>
             <span>{r.label}</span><span style={{ color: r.color, fontWeight: 600 }}>{fmtUsd(r.value)}</span>
           </div>
           <div style={{ height: 8, background: 'var(--c-0f172a)', borderRadius: 4, overflow: 'hidden' }}>
-            <div style={{ width: `${r.width}%`, height: '100%', background: r.color, opacity: 0.7 }} />
+            <div style={{ width: `${Math.max(0, Math.min(100, r.width))}%`, height: '100%', background: r.color, opacity: 0.7 }} />
           </div>
         </div>
       ))}
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginTop: 4 }}>
-        <span style={{ color: 'var(--c-94a3b8)' }}>Actual change:</span>
+        <span style={{ color: 'var(--c-94a3b8)' }}>vs same point last month:</span>
         <span style={{ color: delta >= 0 ? '#ef4444' : '#22c55e', fontWeight: 700 }}>
           {delta >= 0 ? '+' : ''}{fmtUsd(delta)} ({fmtPct(pct)})
         </span>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-        <span style={{ color: 'var(--c-94a3b8)' }}>Projected change:</span>
+        <span style={{ color: 'var(--c-94a3b8)' }}>Projected vs last month:</span>
         <span style={{ color: projDelta >= 0 ? '#ef4444' : '#22c55e', fontWeight: 700 }}>
           {projDelta >= 0 ? '+' : ''}{fmtUsd(projDelta)} ({fmtPct(projPct)})
         </span>
@@ -433,7 +441,7 @@ function SavingsList({ items }) {
             <div style={{ color: 'var(--c-64748b)', fontSize: 10 }}>{o.category || o.type || o.action || ''}</div>
           </div>
           <div style={{ color: '#22c55e', fontWeight: 700, fontSize: 12, flexShrink: 0, marginLeft: 8 }}>
-            {fmtUsd(o.savings_usd ?? o.monthly_savings ?? o.estimated_monthly_savings ?? 0)}/mo
+            {fmtUsd(o.potential_savings_usd ?? o.savings_usd ?? o.monthly_savings ?? o.estimated_monthly_savings ?? 0)}/mo
           </div>
         </div>
       ))}
@@ -565,6 +573,8 @@ export default function CostStudio() {
           ...(prev || {}),
           total_spend_mtd:        pk(m.spend?.mtd, prev?.total_spend_mtd),
           total_spend_last_month: pk(m.spend?.priorMonthFull, prev?.total_spend_last_month),
+          prior_month_to_date:    pk(m.spend?.priorMonthToDate, prev?.prior_month_to_date),
+          rolling_30d_usd:        pk(m.spend?.rolling30d, prev?.rolling_30d_usd),
           mom_delta_pct:          m.spend?.momDeltaPct ?? prev?.mom_delta_pct,
           forecast_eom_usd:       pk(m.forecast?.eom, prev?.forecast_eom_usd),
           savings_identified_usd: pk(m.savings?.monthlyRunRate, prev?.savings_identified_usd),

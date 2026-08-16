@@ -471,6 +471,28 @@ def _cost_series_empty(*series) -> bool:
     return True
 
 
+def _vm_memory_pct(r: dict, metrics) -> Optional[float]:
+    """Memory utilisation %.
+
+    Azure VMs do not emit a memory-percent metric. They do emit
+    'Available Memory Bytes' (host-level, no guest agent), which becomes a
+    percentage once combined with the SKU's total RAM. Non-VM types keep the
+    existing normalised memory signal."""
+    if not metrics:
+        return None
+    rtype = str(r.get("type", "") or "").lower()
+    if rtype.startswith("microsoft.compute/virtualmachine"):
+        try:
+            from services.resource_service import memory_used_pct
+            pct = memory_used_pct(r.get("sku"),
+                                  (metrics.raw_absolute or {}).get("Available Memory Bytes"))
+            if pct is not None:
+                return pct
+        except Exception:
+            pass
+    return round(metrics.memory, 2) if metrics.memory is not None else None
+
+
 # ── Resources-first inventory paint ────────────────────────────────────────────
 def _resources_first_payload(resources: List[Dict], sub_ids: List[str],
                              sub_names: Dict[str, str]) -> DashboardData:
@@ -1360,7 +1382,7 @@ async def _build_dashboard(
             "cost_delta_is_mtd": delta_is_mtd,
             "cost_delta_pct": round(cost_delta_pct, 2),
             "avg_cpu_pct":    round(metrics.cpu,    2) if metrics and metrics.cpu    is not None else None,
-            "avg_memory_pct": round(metrics.memory, 2) if metrics and metrics.memory is not None else None,
+            "avg_memory_pct": _vm_memory_pct(r, metrics),
             "avg_disk_pct":   round(metrics.disk,   2) if metrics and metrics.disk   is not None else None,
             "avg_network_pct":round(metrics.network,2) if metrics and metrics.network is not None else None,
             "primary_utilization_pct": round(util_pct, 2) if util_pct is not None else None,
@@ -1415,6 +1437,13 @@ async def _build_dashboard(
             "app_state":            r.get("app_state"),
             "storage_last_access_tracking": storage_signal.last_access_tracking_enabled if storage_signal else False,
             "storage_has_lifecycle_policy":  storage_signal.has_lifecycle_policy          if storage_signal else False,
+            # Raw used capacity (bytes -> GB) so storage growth is a measured trend.
+            "storage_capacity_gb": round(
+                (metrics.raw_absolute.get("UsedCapacity")
+                 or metrics.raw_absolute.get("BlobCapacity")
+                 or metrics.raw_absolute.get("StorageUsed")
+                 or 0) / (1024 ** 3), 3
+            ) if metrics else 0.0,
             # AI1–AI7: Cognitive Services / OpenAI token + billing signals
             # AI Foundry uses InputTokens/OutputTokens/TotalTokens/ModelRequests;
             # classic Azure OpenAI uses ProcessedPromptTokens/ProcessedCompletionTokens/TotalCalls.
@@ -2316,6 +2345,14 @@ async def stream_dashboard(
                         cache_svc.set_json("dash:latest", _dash_json, ttl_seconds=24 * 3600)
                 except Exception as _pe:
                     logger.warning("Could not persist dashboard snapshot: %s", _pe)
+                # Daily utilisation + storage-capacity snapshot so the management
+                # dashboard can trend cost-vs-utilisation and GB growth over time.
+                try:
+                    from services import finops_dashboard_service as _fdash
+                    _fdash.snapshot_utilization(data.resources)
+                    _fdash.snapshot_storage_capacity(data.resources)
+                except Exception as _use:
+                    logger.warning("Could not snapshot utilisation/capacity: %s", _use)
                 # Post-scan warm-up (B+D): populate the per-category AI insight cards
                 # and pre-warm FinOps warehouse + utilisation metrics in the background.
                 # Best-effort, single-flight, respects the 12h AI cache — never blocks
@@ -2905,14 +2942,18 @@ async def _finops_cache_warmup() -> None:
             subs_sorted = sorted(dash_for_warmup.subscriptions or [], key=lambda s: -(s.cost_current or 0))
             by_sub = [{"id": s.subscription_id, "name": s.subscription_name or (s.subscription_id[:8] + "…"), "cost": round(s.cost_current or 0.0, 2)} for s in subs_sorted[:5]]
             extras = _derive_finops_kpi_extras(dash_for_warmup)
+            _sp = _authoritative_spend(k)
+            _tag_now = _tag_compliance_now(dash_for_warmup)
+            if _sp["mtd"] > 0 and today_w.day > 0:
+                eom_fc = _sp["mtd"] / today_w.day * 30
             from models.schemas import FinOpsKPI as _FinOpsKPI
             summary = _FinOpsKPI(
-                total_spend_mtd=round(k.total_cost_current_month, 2),
-                total_spend_last_month=round(k.total_cost_previous_month, 2),
-                mom_delta_usd=round(k.mom_cost_delta, 2),
-                mom_delta_pct=round(k.mom_cost_delta_pct, 1),
+                total_spend_mtd=_sp["mtd"],
+                total_spend_last_month=_sp["last_month"],
+                mom_delta_usd=_sp["delta"],
+                mom_delta_pct=_sp["pct"],
                 forecast_eom_usd=round(eom_fc, 2),
-                savings_identified_usd=round(getattr(dash_for_warmup, "total_potential_savings", None) or k.total_potential_savings, 2),
+                savings_identified_usd=_identified_savings(dash_for_warmup, k),
                 budget_utilization_pct=extras["budget_utilization_pct"],
                 budgets_exceeded=extras["budgets_exceeded"],
                 budgets_at_risk=extras["budgets_at_risk"],
@@ -2920,8 +2961,8 @@ async def _finops_cache_warmup() -> None:
                 ri_utilization_pct=extras["ri_utilization_pct"],
                 has_reservations=extras["has_reservations"],
                 has_budgets=extras["has_budgets"],
-                tagging_compliance_pct=round(getattr(dash_for_warmup, "tag_compliance_pct", None) or 0.0, 1),
-                total_untagged=int(getattr(dash_for_warmup, "total_untagged", 0) or 0),
+                tagging_compliance_pct=_tag_now[0],
+                total_untagged=_tag_now[1],
                 tag_required_keys=list(REQUIRED_TAGS),
                 subscription_count=k.subscription_count,
                 total_resource_count=len(dash_for_warmup.resources or []),
@@ -3079,19 +3120,27 @@ async def _background_refresh_loop() -> None:
             # fall back to the manual setup wizard. skip_metrics=True also defers the
             # heavy cost-trend queries, so the periodic refresh stays cheap.
             data = await _build_dashboard(True, None, resource_group_filter=None, skip_metrics=True)
-            # Persist result in the unfiltered cache slot
-            cache_key = "data:*"
-            now_ts = datetime.now(tz=timezone.utc).timestamp()
-            _cache[cache_key] = data
-            _cache[f"{cache_key}:ts"] = now_ts
-            _cache["data"] = data
-            _cache["cached_at"] = now_ts
-            # Persist to SQLite so the next restart loads fresh data
-            try:
-                persistence_svc.save_dashboard(json.loads(data.model_dump_json()))
-            except Exception as _pe:
-                logger.warning("Auto-refresh: could not persist dashboard: %s", _pe)
-            logger.info("Auto-refresh: scan complete")
+            # A transient 0-resource read (expired token, throttling, RBAC blip) must
+            # never overwrite a good snapshot — that blanks every dashboard until the
+            # next successful scan. The other persist sites already guard this.
+            if not data.resources:
+                logger.warning("Auto-refresh: scan returned 0 resources — keeping the "
+                               "previous snapshot and cache instead of overwriting them")
+            else:
+                cache_key = "data:*"
+                now_ts = datetime.now(tz=timezone.utc).timestamp()
+                _cache[cache_key] = data
+                _cache[f"{cache_key}:ts"] = now_ts
+                _cache["data"] = data
+                _cache["cached_at"] = now_ts
+                try:
+                    _dash_json = json.loads(data.model_dump_json())
+                    persistence_svc.save_dashboard(_dash_json)
+                    if cache_svc.is_enabled():
+                        cache_svc.set_json("dash:latest", _dash_json, ttl_seconds=24 * 3600)
+                except Exception as _pe:
+                    logger.warning("Auto-refresh: could not persist dashboard: %s", _pe)
+                logger.info("Auto-refresh: scan complete (%d resources)", len(data.resources))
         except Exception as exc:
             logger.error("Auto-refresh scan failed: %s", exc)
         finally:
@@ -3535,6 +3584,77 @@ _RI_ELIGIBLE_TYPES = {
 }
 
 
+def _identified_savings(dash, k) -> float:
+    """Identified monthly savings, preferring the persisted recommendation ledger.
+
+    The scan's own estimate is built on per-resource costs that are frequently $0, so
+    it reported $11.78 against a ledger holding $249.29. The ledger is the same set the
+    Savings tab shows, so both views agree."""
+    val = round(float(getattr(dash, "total_potential_savings", None)
+                      or getattr(k, "total_potential_savings", 0) or 0), 2)
+    try:
+        from services import finops_savings_service as _fs
+        ledger = float(_fs.get_savings_rollup().get("identified_monthly_usd", 0) or 0)
+        if ledger > val:
+            val = round(ledger, 2)
+    except Exception as exc:
+        logger.debug("ledger savings unavailable: %s", exc)
+    return val
+
+
+def _tag_compliance_now(dash) -> tuple:
+    """(compliance_pct, untagged_count) recomputed from the resources themselves.
+
+    The stored aggregate is written during the inventory-first pass, before tags are
+    hydrated, so a snapshot can claim 0% / everything-untagged while its own resources
+    clearly carry tags. Recompute unless the resources genuinely have none."""
+    stored_pct = round(float(getattr(dash, "tag_compliance_pct", 0) or 0), 1)
+    stored_untagged = int(getattr(dash, "total_untagged", 0) or 0)
+    try:
+        resources = getattr(dash, "resources", None) or []
+        if not resources:
+            return stored_pct, stored_untagged
+        tagged = 0
+        for r in resources:
+            tags = getattr(r, "tags", None) or getattr(r, "custom_tags", None) or {}
+            if tags:
+                tagged += 1
+        if tagged == 0:
+            return stored_pct, stored_untagged
+        total = len(resources)
+        return round(tagged / total * 100, 1), total - tagged
+    except Exception as exc:
+        logger.debug("tag compliance recompute failed: %s", exc)
+    return stored_pct, stored_untagged
+
+
+def _authoritative_spend(k) -> dict:
+    """Headline spend, preferring the subscription-level warehouse over the scan.
+
+    The scan totals per-resource cost, which Cost Management throttles — it reported
+    $24.57 for a month that actually cost $690.03. Subscription-scope totals are a
+    single complete query, so they win whenever the scan is materially lower."""
+    mtd = round(float(getattr(k, "total_cost_current_month", 0) or 0), 2)
+    last = round(float(getattr(k, "total_cost_previous_month", 0) or 0), 2)
+    source = "scan"
+    try:
+        from services import finops_dashboard_service as _fdc
+        wh = _fdc.get_authoritative_spend()
+        wh_mtd, wh_last = wh.get("mtd_usd", 0.0), wh.get("last_month_usd", 0.0)
+        # Whenever the warehouse holds data it wins outright — the same rule the
+        # metrics service applies. An earlier "only if 20% larger" guard let the two
+        # paths disagree ($751 on one card, $783 on another) for the same month.
+        if wh_mtd > 0:
+            mtd, source = wh_mtd, "warehouse_subscription_costs"
+        if wh_last > 0:
+            last = wh_last
+    except Exception as exc:
+        logger.debug("authoritative spend unavailable: %s", exc)
+    delta = round(mtd - last, 2)
+    pct = round(delta / last * 100, 1) if last > 0 else 0.0
+    return {"mtd": mtd, "last_month": last, "delta": delta, "pct": pct, "source": source}
+
+
 def _derive_finops_kpi_extras(dash: "DashboardData") -> dict:
     """Complete the FinOps summary fast-path: compute RI coverage/utilization and
     budget utilization (which the cache-based fast path otherwise leaves at 0) plus
@@ -3657,13 +3777,17 @@ async def finops_summary():
             for s in subs_sorted[:5]
         ]
         extras = _derive_finops_kpi_extras(dash)
+        _sp = _authoritative_spend(k)
+        _tag_now = _tag_compliance_now(dash)
+        if _sp["mtd"] > 0 and days_elapsed > 0:
+            eom_forecast = _sp["mtd"] / days_elapsed * days_in_month
         return FinOpsKPI(
-            total_spend_mtd=round(k.total_cost_current_month, 2),
-            total_spend_last_month=round(k.total_cost_previous_month, 2),
-            mom_delta_usd=round(k.mom_cost_delta, 2),
-            mom_delta_pct=round(k.mom_cost_delta_pct, 1),
+            total_spend_mtd=_sp["mtd"],
+            total_spend_last_month=_sp["last_month"],
+            mom_delta_usd=_sp["delta"],
+            mom_delta_pct=_sp["pct"],
             forecast_eom_usd=round(eom_forecast, 2),
-            savings_identified_usd=round(savings, 2),
+            savings_identified_usd=_identified_savings(dash, k),
             budget_utilization_pct=extras["budget_utilization_pct"],
             budgets_exceeded=extras["budgets_exceeded"],
             budgets_at_risk=extras["budgets_at_risk"],
@@ -3671,8 +3795,8 @@ async def finops_summary():
             ri_utilization_pct=extras["ri_utilization_pct"],
             has_reservations=extras["has_reservations"],
             has_budgets=extras["has_budgets"],
-            tagging_compliance_pct=round(tag_compliance or 0.0, 1),
-            total_untagged=int(getattr(dash, "total_untagged", 0) or 0),
+            tagging_compliance_pct=_tag_now[0],
+            total_untagged=_tag_now[1],
             tag_required_keys=list(REQUIRED_TAGS),
             subscription_count=k.subscription_count,
             total_resource_count=len(resources),
@@ -3767,13 +3891,35 @@ async def finops_dashboard_data(
                 return None
             gl = (group_by or "").lower()
             if "subscription" in gl:
-                rows = [(r.get("subscription_id", ""), r.get("cost", 0)) for r in d.get("by_subscription", [])]
-            else:
+                # Cost Management groups by subscription GUID; the chart legend must
+                # show the display name or it reads as an unlabelled slice.
+                names = _resolve_all_subscription_names()
+                rows = [(names.get(r.get("subscription_id", ""), "") or r.get("subscription_id", ""),
+                         r.get("cost", 0)) for r in d.get("by_subscription", [])]
+            elif "service" in gl or "meter" in gl:
                 rows = [(r.get("service_family", ""), r.get("cost", 0)) for r in d.get("by_service", [])]
+            elif "environment" in gl:
+                rows = [(r.get("environment", ""), r.get("cost", 0)) for r in d.get("by_environment", [])]
+            else:
+                # The warehouse dashboard has no RG/location grain, but the dimension
+                # table does. Serving by_service here labelled service families as
+                # resource groups — wrong data under a correct-looking heading.
+                _dim = ("resource_group" if "resourcegroup" in gl.replace("_", "")
+                        else "location" if ("location" in gl or "region" in gl)
+                        else "meter_category" if "meter" in gl
+                        else "")
+                if not _dim:
+                    return None
+                from services import finops_dashboard_service as _fdc
+                items = _fdc.get_dimension_breakdown(_dim, days=days, subscription_ids=subs)
+                if not items:
+                    return None
+                rows = [(i["label"], i["cost"]) for i in items]
             if not rows:
                 return None
             total = sum(c for _, c in rows) or 1.0
-            breakdown = [{"label": (n or "(unassigned)"), "cost": round(c, 2), "pct": round(c / total * 100, 1)}
+            breakdown = [{"label": (n or "(unassigned)"), "name": (n or "(unassigned)"),
+                          "cost": round(c, 2), "pct": round(c / total * 100, 1)}
                          for n, c in sorted(rows, key=lambda x: -x[1])[:10]]
             trend = d.get("daily_trend", []) or []
             return {
@@ -3839,7 +3985,8 @@ async def finops_dashboard_data(
     # Build chart-ready data
     breakdown_items = []
     if breakdown_result and breakdown_result.top_contributors:
-        breakdown_items = breakdown_result.top_contributors[:10]
+        breakdown_items = [dict(c) if isinstance(c, dict) else c
+                           for c in breakdown_result.top_contributors[:10]]
     elif breakdown_result and breakdown_result.data_points:
         for dp in breakdown_result.data_points:
             if dp.label:
@@ -3848,6 +3995,19 @@ async def finops_dashboard_data(
         for item in breakdown_items:
             item["pct"] = round(item["cost"] / total * 100, 1)
         breakdown_items = sorted(breakdown_items, key=lambda x: -x["cost"])[:10]
+
+    # A subscription GUID is not a legend label — resolve it, and always expose
+    # both `label` and `name` so every chart reader finds a caption.
+    if "subscription" in (group_by or "").lower():
+        _names = _resolve_all_subscription_names()
+        for item in breakdown_items:
+            if isinstance(item, dict):
+                raw = str(item.get("label") or item.get("name") or "")
+                item["label"] = _names.get(raw, "") or raw or "(unassigned)"
+    for item in breakdown_items:
+        if isinstance(item, dict):
+            item.setdefault("name", item.get("label", ""))
+            item.setdefault("label", item.get("name", ""))
 
     trend_points = []
     if trend_result and trend_result.data_points:
@@ -4305,13 +4465,15 @@ def _dashboard_allocation(dimension: str) -> Optional[FinOpsAllocationReport]:
     )
 
 
-def _analyze_allocation(dimension: str, subscription_id: Optional[str] = None) -> Optional[FinOpsAllocationReport]:
-    """Subscription-scoped allocation via the warehouse Analyze query (context-aware).
+def _analyze_allocation(dimension: str, subscription_id: Optional[str] = None,
+                        time_range: str = "last_30d") -> Optional[FinOpsAllocationReport]:
+    """Allocation via the warehouse Analyze query (dimension- and range-accurate).
     Maps the allocation dimension to an Analyze group-by; returns None for dimensions
     the warehouse can't scope (e.g. tag keys), so the caller falls back."""
     try:
         from models.schemas import FinOpsAllocationItem
         from services import cost_analytics_service as _ca
+        from services.finops_data_service import resolve_time_range as _rtr
         dmap = {
             "subscriptionid": "subscription", "resourcegroupname": "resource_group",
             "servicename": "service_name", "servicefamily": "service_family",
@@ -4320,8 +4482,10 @@ def _analyze_allocation(dimension: str, subscription_id: Optional[str] = None) -
         gb = dmap.get((dimension or "").lower())
         if not gb:
             return None
+        d_from, d_to = _rtr(time_range or "last_30d")
         subs = [subscription_id] if subscription_id else None
-        r = _ca.analyze(group_by=gb, period="last_30d", subscription_ids=subs, top=50)
+        r = _ca.analyze(group_by=gb, date_from=str(d_from), date_to=str(d_to),
+                        subscription_ids=subs, top=50)
         total = r.get("period_total_usd") or r.get("total_cost") or 0.0
         items = [
             FinOpsAllocationItem(
@@ -4335,7 +4499,8 @@ def _analyze_allocation(dimension: str, subscription_id: Optional[str] = None) -
             return None
         return FinOpsAllocationReport(
             dimension=dimension, dimension_label=gb.replace("_", " ").title(), items=items,
-            total_usd=round(total, 2), period_label="Last 30 days (warehouse)",
+            total_usd=round(total, 2), period_label=f"{d_from} → {d_to} (warehouse)",
+            date_from=str(d_from), date_to=str(d_to),
             data_source="finops_warehouse",
         )
     except Exception as exc:
@@ -4343,15 +4508,30 @@ def _analyze_allocation(dimension: str, subscription_id: Optional[str] = None) -
         return None
 
 
-def _warehouse_allocation(dimension: str) -> Optional[FinOpsAllocationReport]:
+def _range_days(time_range: str) -> int:
+    """Number of days covered by a FinOps time_range preset (for warehouse windows)."""
+    try:
+        from services.finops_data_service import resolve_time_range as _rtr
+        d_from, d_to = _rtr(time_range or "last_30d")
+        return max(1, (d_to - d_from).days + 1)
+    except Exception:
+        return 30
+
+
+def _warehouse_allocation(dimension: str, time_range: str = "last_30d") -> Optional[FinOpsAllocationReport]:
     """Build a cost-allocation report from the warehouse (Azure SQL) so the tab
-    loads instantly from stored data when live Cost Management is slow/throttled."""
+    loads instantly from stored data when live Cost Management is slow/throttled.
+
+    Only serves dimensions the warehouse rollup actually stores; returns None for
+    anything else so the caller falls through to Analyze / dashboard cache / live
+    instead of silently answering with the wrong dimension."""
     try:
         from models.schemas import FinOpsAllocationItem
         from services import finops_warehouse_service as _wh
         if not _wh.has_warehouse_data():
             return None
-        dash = _wh.get_warehouse_dashboard(days=30)
+        days = _range_days(time_range)
+        dash = _wh.get_warehouse_dashboard(days=days)
         if not isinstance(dash, dict) or dash.get("error"):
             return None
         dl = dimension.lower()
@@ -4361,9 +4541,11 @@ def _warehouse_allocation(dimension: str) -> Optional[FinOpsAllocationReport]:
         elif "environment" in dl:
             rows = [(r.get("environment", "untagged"), r.get("cost", 0)) for r in dash.get("by_environment", [])]
             label = "Environment"
-        else:
+        elif "servicefamily" in dl or dl == "service_family":
             rows = [(r.get("service_family", ""), r.get("cost", 0)) for r in dash.get("by_service", [])]
             label = "Service Family"
+        else:
+            return None
         total = sum(c for _, c in rows) or 1.0
         items = [
             FinOpsAllocationItem(dimension_value=(n or "(unassigned)"), cost_usd=round(c, 2), cost_pct=round(c / total * 100, 1))
@@ -4372,11 +4554,63 @@ def _warehouse_allocation(dimension: str) -> Optional[FinOpsAllocationReport]:
         return FinOpsAllocationReport(
             dimension=dimension, dimension_label=label, items=items,
             total_usd=round(sum(c for _, c in rows), 2),
-            period_label="Last 30 days (warehouse)", data_source="finops_warehouse",
+            period_label=f"Last {days} days (warehouse)", data_source="finops_warehouse",
         )
     except Exception as exc:
         logger.warning("warehouse allocation fallback failed: %s", exc)
         return None
+
+
+def _resource_tag_stats() -> Dict[str, Any]:
+    """Per-tag-key resource coverage from the scan cache.
+
+    The warehouse only knows cost per tag value, not how many resources carry a
+    tag, so the tag panel previously reported zero resources. The scan cache has
+    the real tags per resource, which is what "% resources properly tagged" means.
+    Returns {total_resources, keys: {key: {covered, values:set}}, casing: {lower: display}}."""
+    from collections import defaultdict as _dd
+    dash = _cache.get("data:*") or _cache.get("data")
+    resources = list(getattr(dash, "resources", None) or []) if dash else []
+    if not resources:
+        try:
+            snap = persistence_svc.load_latest_dashboard() or {}
+            resources = snap.get("resources") or []
+        except Exception:
+            resources = []
+    covered: Dict[str, int] = _dd(int)
+    values: Dict[str, set] = _dd(set)
+    casing: Dict[str, str] = {}
+    cost_by_key: Dict[str, float] = _dd(float)
+    untagged_cost = 0.0
+    untagged_count = 0
+    for r in resources:
+        tags = (getattr(r, "tags", None) if not isinstance(r, dict) else r.get("tags")) or {}
+        cost = float((getattr(r, "cost_current_month", 0) if not isinstance(r, dict)
+                      else r.get("cost_current_month", 0)) or 0)
+        if not isinstance(tags, dict) or not tags:
+            untagged_cost += cost
+            untagged_count += 1
+            continue
+        real = {k: v for k, v in tags.items() if str(v or "").strip()}
+        if not real:
+            untagged_cost += cost
+            untagged_count += 1
+            continue
+        for k, v in real.items():
+            lk = str(k).lower()
+            casing.setdefault(lk, str(k))
+            covered[lk] += 1
+            values[lk].add(str(v))
+            cost_by_key[lk] += cost
+    return {
+        "total_resources": len(resources),
+        "covered": dict(covered),
+        "values": {k: v for k, v in values.items()},
+        "casing": casing,
+        "cost_by_key": dict(cost_by_key),
+        "untagged_cost_usd": round(untagged_cost, 2),
+        "untagged_resource_count": untagged_count,
+    }
 
 
 def _warehouse_tag_analytics(required_tags: Optional[List[str]] = None) -> Optional[FinOpsTagAnalyticsResult]:
@@ -4391,12 +4625,16 @@ def _warehouse_tag_analytics(required_tags: Optional[List[str]] = None) -> Optio
             return None
         req = required_tags or DEFAULT_REQUIRED_TAGS
         dash = _wh.get_warehouse_dashboard(days=30)
+        rstats = _resource_tag_stats()
+        total_res = rstats["total_resources"]
         stats: List[FinOpsTagKeyStats] = []
         worst_coverage = 100.0
         any_data = False
         for tag_key in req:
+            lk = str(tag_key).lower()
             rows = _wh.get_tag_breakdown(tag_key, months=1) or []
-            if rows:
+            covered = rstats["covered"].get(lk, 0)
+            if rows or covered:
                 any_data = True
             tagged = sum(r.get("cost", 0) for r in rows if (r.get("tag_value") or "untagged").lower() != "untagged")
             untag = sum(r.get("cost", 0) for r in rows if (r.get("tag_value") or "untagged").lower() == "untagged")
@@ -4407,29 +4645,36 @@ def _warehouse_tag_analytics(required_tags: Optional[List[str]] = None) -> Optio
                  for r in rows if (r.get("tag_value") or "untagged").lower() != "untagged"],
                 key=lambda x: -x["cost_usd"],
             )[:5]
-            cov = round(tagged / (tag_total or 1) * 100, 1) if tag_total else 0.0
-            if tag_total:
-                worst_coverage = min(worst_coverage, cov)
+            # Resource coverage is the real "% resources properly tagged"; fall back
+            # to the cost-weighted share only when the scan cache is unavailable.
+            if total_res:
+                cov = round(covered / total_res * 100, 1)
+            else:
+                cov = round(tagged / (tag_total or 1) * 100, 1) if tag_total else 0.0
+            worst_coverage = min(worst_coverage, cov)
             stats.append(FinOpsTagKeyStats(
-                tag_key=tag_key, covered_resources=0, total_resources=0,
-                coverage_pct=cov, total_cost_usd=round(tagged, 2),
-                distinct_values=len(top), top_values=top, is_required=True,
+                tag_key=rstats["casing"].get(lk, tag_key),
+                covered_resources=covered, total_resources=total_res,
+                coverage_pct=cov,
+                total_cost_usd=round(tagged or rstats["cost_by_key"].get(lk, 0.0), 2),
+                distinct_values=len(rstats["values"].get(lk, set())) or len(top),
+                top_values=top, is_required=True,
             ))
         if not any_data:
             return None
-        untagged_cost = 0.0
-        if isinstance(dash, dict):
+        untagged_cost = rstats["untagged_cost_usd"]
+        if not untagged_cost and isinstance(dash, dict):
             for r in dash.get("by_environment", []):
                 if (r.get("environment") or "").lower() in ("untagged", "", "unassigned", "none", "(unassigned)"):
                     untagged_cost += r.get("cost", 0)
         return FinOpsTagAnalyticsResult(
             tag_keys=stats,
             untagged_cost_usd=round(untagged_cost, 2),
-            untagged_resource_count=0,
+            untagged_resource_count=rstats["untagged_resource_count"],
             compliance_score_pct=round(worst_coverage if any_data else 0.0, 1),
             required_tags=req,
             generated_at=datetime.now(timezone.utc).isoformat(),
-            data_source="finops_warehouse",
+            data_source="finops_warehouse+scan",
         )
     except Exception as exc:
         logger.warning("warehouse tag analytics fallback failed: %s", exc)
@@ -4563,13 +4808,14 @@ async def finops_allocation(
     """
     _require_finops()
     loop = asyncio.get_event_loop()
-    # 0. Subscription-scoped: use the sub-aware warehouse Analyze query.
-    if subscription_id:
-        scoped = await loop.run_in_executor(_pool, lambda: _analyze_allocation(dimension, subscription_id))
-        if scoped is not None and scoped.items:
-            return _apply_sub_names(scoped, dimension)
-    # 1. Warehouse-first: instant paint from stored data (sub-second).
-    wh = await loop.run_in_executor(_pool, lambda: _warehouse_allocation(dimension))
+    # 1. Analyze warehouse first — dimension- and time-range-accurate (and sub-scoped
+    #    when a subscription is selected).
+    scoped = await loop.run_in_executor(
+        _pool, lambda: _analyze_allocation(dimension, subscription_id, time_range))
+    if scoped is not None and scoped.items:
+        return _apply_sub_names(scoped, dimension)
+    # 2. Coarse warehouse rollup — only serves subscription / environment / service family.
+    wh = await loop.run_in_executor(_pool, lambda: _warehouse_allocation(dimension, time_range))
     if wh is not None and wh.items:
         return _apply_sub_names(wh, dimension)
     # 2. Dashboard resource cache — instant, real per-resource cost, throttle-immune.
@@ -4710,24 +4956,65 @@ async def finops_savings():
 
 # ── Tag Analytics ──────────────────────────────────────────────────────────────
 
+@app.get("/api/finops/tag-keys", tags=["FinOps"])
+async def finops_tag_keys():
+    """Every tag key discovered in the estate, with resource coverage and cost.
+
+    Lets the user pick which tags define compliance instead of being limited to a
+    hard-coded required set."""
+    _require_finops()
+    loop = asyncio.get_event_loop()
+
+    def _build():
+        from services.tag_analytics_service import DEFAULT_REQUIRED_TAGS
+        rs = _resource_tag_stats()
+        total = rs["total_resources"]
+        keys = []
+        for lk, covered in sorted(rs["covered"].items(), key=lambda x: -x[1]):
+            keys.append({
+                "tag_key": rs["casing"].get(lk, lk),
+                "covered_resources": covered,
+                "total_resources": total,
+                "coverage_pct": round(covered / total * 100, 1) if total else 0.0,
+                "distinct_values": len(rs["values"].get(lk, set())),
+                "cost_usd": round(rs["cost_by_key"].get(lk, 0.0), 2),
+                "is_default_required": lk in [t.lower() for t in DEFAULT_REQUIRED_TAGS],
+            })
+        return {
+            "available": bool(keys),
+            "total_resources": total,
+            "untagged_resource_count": rs["untagged_resource_count"],
+            "untagged_cost_usd": rs["untagged_cost_usd"],
+            "default_required_tags": DEFAULT_REQUIRED_TAGS,
+            "tag_keys": keys,
+        }
+
+    return await loop.run_in_executor(_pool, _build)
+
+
 @app.get("/api/finops/tag-analytics", response_model=FinOpsTagAnalyticsResult, tags=["FinOps"])
-async def finops_tag_analytics(time_range: str = "mtd"):
+async def finops_tag_analytics(time_range: str = "mtd", required_tags: Optional[str] = None):
     """
     Tag coverage and cost per tag value.  Serves instantly from the warehouse
     (stored database data) so the tab paints immediately and never hangs; only
     falls back to a bounded live query (Cost Management + Resource Graph) when
     the warehouse has no tag data.
+
+    `required_tags` is an optional comma-separated list so the caller chooses the
+    compliance set (defaults to the configured required tags).
     """
     _require_finops()
     loop = asyncio.get_event_loop()
+    req = [t.strip() for t in (required_tags or "").split(",") if t.strip()] or None
     # 1. Warehouse-first: instant paint from stored data.
-    wh = await loop.run_in_executor(_pool, _warehouse_tag_analytics)
+    wh = await loop.run_in_executor(_pool, lambda: _warehouse_tag_analytics(req))
     if wh is not None and wh.tag_keys:
         return wh
     # 2. No warehouse tag data → bounded live query, else 503.
     try:
         return await asyncio.wait_for(
-            loop.run_in_executor(_pool, lambda: tag_analytics_svc.get_tag_analytics(time_range=time_range)),
+            loop.run_in_executor(_pool, lambda: tag_analytics_svc.get_tag_analytics(
+                time_range=time_range, required_tags=req)),
             timeout=12,
         )
     except Exception as exc:
@@ -5880,6 +6167,17 @@ async def finops_resource_optimization():
                 "total_oversized_savings": 0.0}
     sub_name_map = {s.subscription_id: s.subscription_name or s.subscription_id
                     for s in (dash.subscriptions or [])}
+    # The scan's per-resource cost is frequently 0 (per-resource attribution is
+    # throttled), which silently emptied this panel because every candidate failed
+    # the `mc >= 5` test. Cost Management's stored per-resource grain is the truth.
+    wh_cost: Dict[str, float] = {}
+    idle_map: Dict[str, Dict[str, Any]] = {}
+    try:
+        from services import finops_dashboard_service as _fdc
+        wh_cost = _fdc._warehouse_resource_costs()
+        idle_map = _fdc.get_idle_resource_map()
+    except Exception as exc:
+        logger.warning("resource-optimization: warehouse lookup failed: %s", exc)
     oversized, underutilized = [], []
     for r in (dash.resources or []):
         sub_name = sub_name_map.get(r.subscription_id or "", (r.subscription_id or "")[:8])
@@ -5887,6 +6185,8 @@ async def finops_resource_optimization():
         # under Cost Management throttling), so fall back to the last FULL month so
         # optimization/savings reflect real spend instead of collapsing to $0.
         mc = r.cost_current_month if (r.cost_current_month or 0) > 0 else (getattr(r, "cost_previous_month", 0) or 0)
+        if (mc or 0) <= 0:
+            mc = wh_cost.get(str(r.resource_id or "").lower(), 0.0)
         base = {
             "resource_id":        r.resource_id,
             "resource_name":      r.resource_name,
@@ -5895,6 +6195,7 @@ async def finops_resource_optimization():
             "subscription_name":  sub_name,
             "cost_current_month": round(mc, 2),
             "location":           getattr(r, "location", ""),
+            "power_state":        getattr(r, "power_state", "") or "",
         }
         if r.rightsize_sku and mc > 0:
             oversized.append({
@@ -5907,16 +6208,33 @@ async def finops_resource_optimization():
                 "avg_memory_pct": r.avg_memory_pct,
                 "score":          r.final_score,
             })
-        elif (r.final_score is not None and r.final_score < 25
-              and mc >= 5 and not r.rightsize_sku):
+        elif (mc >= 5 and not r.rightsize_sku
+              and ((r.final_score is not None and r.final_score < 25)
+                   or str(r.resource_id or "").lower() in idle_map)):
+            idle = idle_map.get(str(r.resource_id or "").lower(), {})
+            power = base["power_state"] or idle.get("power_state", "")
+            days_idle = r.days_since_active or idle.get("days_idle") or 0
+            util_pct = getattr(r, "primary_utilization_pct", None)
+            if power in ("deallocated", "stopped"):
+                reco = (f"Powered off for {days_idle}d but still billing for retained disks "
+                        f"and IPs — delete or snapshot-and-remove them")
+            elif days_idle >= 30:
+                reco = f"No activity for {days_idle}d — confirm it is still needed, then decommission"
+            elif util_pct is not None and util_pct < 5:
+                reco = (f"Running at {util_pct:.2f}% utilisation — downsize the tier or "
+                        f"consolidate this workload")
+            else:
+                reco = r.recommendation or "Review for rightsizing or decommission"
             underutilized.append({
                 **base,
-                "utilization_score": round(r.final_score, 1),
-                "avg_cpu_pct":    r.avg_cpu_pct,
+                "power_state":       power,
+                "utilization_score": round(r.final_score, 1) if r.final_score is not None else None,
+                "avg_cpu_pct":    r.avg_cpu_pct if power not in ("deallocated", "stopped") else None,
                 "avg_memory_pct": r.avg_memory_pct,
                 "score_label":    r.score_label.value if r.score_label else "Unknown",
-                "days_since_active": r.days_since_active,
-                "recommendation": r.recommendation or "Review for rightsizing or decommission",
+                "days_since_active": days_idle,
+                "utilization_pct": round(util_pct, 2) if util_pct is not None else None,
+                "recommendation": reco,
             })
     oversized.sort(key=lambda x: -x["monthly_savings"])
     underutilized.sort(key=lambda x: -x["cost_current_month"])
@@ -6473,6 +6791,227 @@ async def finops_exec_report_export_xlsx(body: FinOpsReportExportBody):
         ws.cell(row=row, column=5, value=rec.get("effort", "")); row += 1
     widths(ws, {"A": 12, "B": 40, "C": 60, "D": 20, "E": 12})
 
+    # 6+ — Management review sheets (only for the management report categories)
+    def _table(sheet, title, columns, rows, colwidths, start=3):
+        sheet["A1"] = title; sheet["A1"].font = TITLE
+        hdr(sheet, columns, start)
+        r0 = start + 1
+        for rw in rows:
+            for ci, val in enumerate(rw, start=1):
+                c = sheet.cell(row=r0, column=ci, value=val)
+                if isinstance(val, (int, float)) and columns[ci - 1].lower().startswith(("cost", "spend", "savings", "direct", "rollup", "idle", "baseline")):
+                    c.number_format = CUR
+            r0 += 1
+        widths(sheet, colwidths)
+        return r0
+
+    cat = rep.get("service_categories") or {}
+    if cat.get("available"):
+        _table(wb.create_sheet("Service Categories"), "Spend by Service Category",
+               ["Category", "Cost (USD)", "Share %"],
+               [[c.get("category"), c.get("cost_usd"), f"{c.get('cost_pct')}%"] for c in (cat.get("categories") or [])],
+               {"A": 30, "B": 18, "C": 12})
+
+    vm = rep.get("compute") or {}
+    if vm.get("available"):
+        wsv = wb.create_sheet("VM Cost & Utilization")
+        wsv["A1"] = "Virtual Machines — Cost & Utilization"; wsv["A1"].font = TITLE
+        r2 = 3
+        for k, v in [("Total VM spend", vm.get("total_vm_cost_usd")), ("VM count", vm.get("vm_count")),
+                     ("Running", vm.get("running_count")), ("Stopped", vm.get("stopped_count")),
+                     ("Idle VM cost", vm.get("idle_cost_usd")), ("Avg CPU %", vm.get("avg_cpu_pct")),
+                     ("Avg Memory %", vm.get("avg_memory_pct")),
+                     ("Memory coverage %", vm.get("memory_coverage_pct")),
+                     ("% Underutilised", vm.get("underutilized_pct")),
+                     ("Underutilised cost", vm.get("underutilized_cost_usd"))]:
+            wsv.cell(row=r2, column=1, value=k).font = BOLD
+            c2 = wsv.cell(row=r2, column=2, value=v)
+            if k in ("Total VM spend", "Idle VM cost", "Underutilised cost"):
+                c2.number_format = CUR
+            r2 += 1
+        r2 += 1
+        hdr(wsv, ["VM", "Size", "State", "Resource group", "Cost (USD)", "CPU %", "Memory %", "Environment"], r2)
+        r2 += 1
+        for v in (vm.get("vms") or []):
+            wsv.cell(row=r2, column=1, value=v.get("resource_name"))
+            wsv.cell(row=r2, column=2, value=v.get("sku"))
+            wsv.cell(row=r2, column=3, value=v.get("power_state"))
+            wsv.cell(row=r2, column=4, value=v.get("resource_group"))
+            wsv.cell(row=r2, column=5, value=v.get("cost_month_usd")).number_format = CUR
+            wsv.cell(row=r2, column=6, value=v.get("avg_cpu_pct"))
+            wsv.cell(row=r2, column=7, value=v.get("avg_memory_pct"))
+            wsv.cell(row=r2, column=8, value=v.get("environment")); r2 += 1
+        widths(wsv, {"A": 34, "B": 22, "C": 14, "D": 26, "E": 16, "F": 10, "G": 11, "H": 18})
+
+    sto = rep.get("storage") or {}
+    if sto.get("available"):
+        wss = wb.create_sheet("Storage")
+        wss["A1"] = "Storage Cost & Growth"; wss["A1"].font = TITLE
+        r2 = 3; r2 = section(wss, "Cost by access tier", r2)
+        hdr(wss, ["Tier", "Cost (USD)", "Share %", "Quantity"], r2); r2 += 1
+        for t in (sto.get("tiers") or []):
+            wss.cell(row=r2, column=1, value=t.get("tier"))
+            wss.cell(row=r2, column=2, value=t.get("cost_usd")).number_format = CUR
+            wss.cell(row=r2, column=3, value=f"{t.get('cost_pct', 0)}%")
+            wss.cell(row=r2, column=4, value=t.get("quantity")); r2 += 1
+        r2 += 1; r2 = section(wss, "Capacity growth", r2)
+        for k, v in [("Current capacity (GB)", sto.get("current_gb")),
+                     ("Growth (GB/month)", sto.get("growth_gb_per_month")),
+                     ("Growth %", sto.get("growth_pct"))]:
+            wss.cell(row=r2, column=1, value=k).font = BOLD
+            wss.cell(row=r2, column=2, value=v); r2 += 1
+        orph = sto.get("orphans") or {}
+        if orph.get("available"):
+            r2 += 1; r2 = section(wss, "Orphaned disks & snapshots", r2)
+            hdr(wss, ["Resource", "Type", "Resource group", "Cost (USD)"], r2); r2 += 1
+            for o in (orph.get("items") or []):
+                wss.cell(row=r2, column=1, value=o.get("name"))
+                wss.cell(row=r2, column=2, value=o.get("type"))
+                wss.cell(row=r2, column=3, value=o.get("resource_group"))
+                wss.cell(row=r2, column=4, value=o.get("cost")).number_format = CUR; r2 += 1
+        widths(wss, {"A": 40, "B": 30, "C": 26, "D": 16})
+
+    net = rep.get("network") or {}
+    if net.get("available"):
+        wsn = wb.create_sheet("Network & Egress")
+        wsn["A1"] = "Network & Data Egress Cost"; wsn["A1"].font = TITLE
+        r2 = 3
+        for k, v in [("Total network spend", net.get("total_usd")), ("Data egress cost", net.get("egress_usd")),
+                     ("Data egress (GB)", net.get("egress_gb")), ("Inter-region cost", net.get("inter_region_usd")),
+                     ("Inter-region (GB)", net.get("inter_region_gb")),
+                     ("Other network", net.get("other_network_usd"))]:
+            wsn.cell(row=r2, column=1, value=k).font = BOLD
+            c2 = wsn.cell(row=r2, column=2, value=v)
+            if "GB" not in k:
+                c2.number_format = CUR
+            r2 += 1
+        r2 += 1; r2 = section(wsn, "Top meters", r2)
+        hdr(wsn, ["Meter", "Classification", "Quantity (GB)", "Cost (USD)"], r2); r2 += 1
+        for t in (net.get("top_meters") or []):
+            wsn.cell(row=r2, column=1, value=t.get("meter_name"))
+            wsn.cell(row=r2, column=2, value=t.get("classification"))
+            wsn.cell(row=r2, column=3, value=t.get("quantity_gb"))
+            wsn.cell(row=r2, column=4, value=t.get("cost_usd")).number_format = CUR; r2 += 1
+        widths(wsn, {"A": 46, "B": 24, "C": 16, "D": 16})
+
+    secm = rep.get("security_monitoring") or {}
+    if secm.get("available"):
+        wsx = wb.create_sheet("Security & Monitoring")
+        wsx["A1"] = "Security & Monitoring Cost"; wsx["A1"].font = TITLE
+        r2 = 3
+        for k, v in [("Total security spend", secm.get("total_security_usd")),
+                     ("Ingestion cost", secm.get("ingestion_cost_usd")),
+                     ("GB ingested", secm.get("ingested_gb")),
+                     ("Cost per GB", secm.get("cost_per_gb_usd")),
+                     ("Retention cost", secm.get("retention_cost_usd"))]:
+            wsx.cell(row=r2, column=1, value=k).font = BOLD
+            c2 = wsx.cell(row=r2, column=2, value=v)
+            if k != "GB ingested":
+                c2.number_format = CUR
+            r2 += 1
+        r2 += 1
+        hdr(wsx, ["Service", "Meter category", "Cost (USD)", "Share %"], r2); r2 += 1
+        for s in (secm.get("by_service") or []):
+            wsx.cell(row=r2, column=1, value=s.get("service"))
+            wsx.cell(row=r2, column=2, value=s.get("meter_category"))
+            wsx.cell(row=r2, column=3, value=s.get("cost_usd")).number_format = CUR
+            wsx.cell(row=r2, column=4, value=f"{s.get('cost_pct', 0)}%"); r2 += 1
+        widths(wsx, {"A": 34, "B": 28, "C": 16, "D": 12})
+
+    envs = rep.get("environments") or {}
+    rgs = rep.get("resource_groups") or {}
+    if envs.get("available") or rgs.get("available"):
+        wse = wb.create_sheet("Environments & RGs")
+        wse["A1"] = "Environment & Resource Group Cost"; wse["A1"].font = TITLE
+        r2 = 3
+        if envs.get("available"):
+            r2 = section(wse, "Production vs Non-Production", r2)
+            hdr(wse, ["Environment", "Cost (USD)", "Share %", "Resources"], r2); r2 += 1
+            for e in (envs.get("environments") or []):
+                wse.cell(row=r2, column=1, value=e.get("environment"))
+                wse.cell(row=r2, column=2, value=e.get("cost_usd")).number_format = CUR
+                wse.cell(row=r2, column=3, value=f"{e.get('cost_pct', 0)}%")
+                wse.cell(row=r2, column=4, value=e.get("resource_count")); r2 += 1
+            r2 += 1
+        if rgs.get("available"):
+            r2 = section(wse, "Resource groups", r2)
+            hdr(wse, ["Resource group", "Environment", "Resources", "Cost (USD)", "Cost / resource", "Idle cost"], r2); r2 += 1
+            for g in (rgs.get("resource_groups") or []):
+                wse.cell(row=r2, column=1, value=g.get("resource_group"))
+                wse.cell(row=r2, column=2, value=g.get("environment"))
+                wse.cell(row=r2, column=3, value=g.get("resource_count"))
+                wse.cell(row=r2, column=4, value=g.get("cost_usd")).number_format = CUR
+                wse.cell(row=r2, column=5, value=g.get("cost_per_resource_usd")).number_format = CUR
+                wse.cell(row=r2, column=6, value=g.get("idle_cost_usd")).number_format = CUR; r2 += 1
+        widths(wse, {"A": 34, "B": 20, "C": 12, "D": 16, "E": 16, "F": 16})
+
+    mgs = rep.get("management_groups") or {}
+    gov = rep.get("governance") or {}
+    if mgs.get("available") or gov.get("available"):
+        wsg = wb.create_sheet("Mgmt Groups & Governance")
+        wsg["A1"] = "Management Groups & Subscription Governance"; wsg["A1"].font = TITLE
+        r2 = 3
+        if mgs.get("available"):
+            r2 = section(wsg, "Cost by management group", r2)
+            hdr(wsg, ["Management group", "Subscriptions", "Direct cost", "Rollup cost", "Share %"], r2); r2 += 1
+            for m2 in (mgs.get("management_groups") or []):
+                wsg.cell(row=r2, column=1, value=m2.get("mg_name"))
+                wsg.cell(row=r2, column=2, value=m2.get("subscription_count"))
+                wsg.cell(row=r2, column=3, value=m2.get("direct_cost_usd")).number_format = CUR
+                wsg.cell(row=r2, column=4, value=m2.get("rollup_cost_usd")).number_format = CUR
+                wsg.cell(row=r2, column=5, value=f"{m2.get('cost_pct', 0)}%"); r2 += 1
+            r2 += 1
+        if gov.get("available"):
+            for label, key in [("Unassigned to a management group", "unassigned"),
+                               ("Zero-spend subscriptions", "zero_spend"),
+                               ("Disabled but still billing", "disabled_with_cost")]:
+                r2 = section(wsg, label, r2)
+                hdr(wsg, ["Subscription", "Subscription ID", "State", "Cost (USD)"], r2); r2 += 1
+                for s in (gov.get(key) or []):
+                    wsg.cell(row=r2, column=1, value=s.get("name"))
+                    wsg.cell(row=r2, column=2, value=s.get("subscription_id"))
+                    wsg.cell(row=r2, column=3, value=s.get("state"))
+                    wsg.cell(row=r2, column=4, value=s.get("cost_usd")).number_format = CUR; r2 += 1
+                r2 += 1
+        widths(wsg, {"A": 36, "B": 40, "C": 16, "D": 18, "E": 12})
+
+    roi = rep.get("savings_roi") or {}
+    if roi.get("available"):
+        wsr = wb.create_sheet("Savings & ROI")
+        wsr["A1"] = "Savings Realization & ROI"; wsr["A1"].font = TITLE
+        r2 = 3
+        for k, v in [("Identified (monthly)", roi.get("identified_monthly_usd")),
+                     ("Identified (annualised)", roi.get("identified_annualized_usd")),
+                     ("Potential — open", roi.get("potential_monthly_usd")),
+                     ("Accepted", roi.get("accepted_monthly_usd")),
+                     ("Realized (monthly)", roi.get("realized_monthly_usd")),
+                     ("Realized (annualised)", roi.get("realized_annualized_usd")),
+                     ("Implementation cost", roi.get("implementation_cost_usd")),
+                     ("Capture rate %", roi.get("capture_rate_pct")),
+                     ("ROI %", roi.get("roi_pct") if roi.get("roi_available") else "Not measured")]:
+            wsr.cell(row=r2, column=1, value=k).font = BOLD
+            c2 = wsr.cell(row=r2, column=2, value=v)
+            if isinstance(v, (int, float)) and "%" not in k:
+                c2.number_format = CUR
+            r2 += 1
+        months = roi.get("ledger_months") or []
+        if months:
+            r2 += 1; r2 = section(wsr, "Realization by month", r2)
+            hdr(wsr, ["Billing month", "Expected (USD)", "Realized (USD)"], r2); r2 += 1
+            for m3 in months:
+                wsr.cell(row=r2, column=1, value=m3.get("billing_month"))
+                wsr.cell(row=r2, column=2, value=m3.get("expected_usd")).number_format = CUR
+                wsr.cell(row=r2, column=3, value=m3.get("realized_usd")).number_format = CUR; r2 += 1
+        cats = roi.get("by_category") or []
+        if cats:
+            r2 += 1; r2 = section(wsr, "By category", r2)
+            hdr(wsr, ["Category", "Count", "Monthly savings (USD)"], r2); r2 += 1
+            for c3 in cats:
+                wsr.cell(row=r2, column=1, value=c3.get("category"))
+                wsr.cell(row=r2, column=2, value=c3.get("count"))
+                wsr.cell(row=r2, column=3, value=c3.get("monthly_savings_usd")).number_format = CUR; r2 += 1
+        widths(wsr, {"A": 30, "B": 20, "C": 22})
+
     try:
         _style_export_workbook(wb, max_fill_col=20)
     except Exception:
@@ -6966,6 +7505,377 @@ async def cost_snapshot_status():
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# MANAGEMENT COST & USAGE DASHBOARD
+# Executive-facing sections: service categories, VM cost vs utilisation, storage
+# tier & growth, network egress, PaaS by environment, security & monitoring
+# spend, management-group rollup, subscription governance and realized savings.
+# All read from the FinOps warehouse — no live Cost Management call at view time.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _mgmt_subs(subscription_id: Optional[str]) -> Optional[List[str]]:
+    return [subscription_id] if subscription_id else None
+
+
+@app.get("/api/finops/mgmt/service-categories", tags=["FinOps Management"])
+async def mgmt_service_categories(days: int = 30, subscription_id: Optional[str] = None):
+    """% spend by service category (VMs, SQL/Cosmos, Storage, Firewall/LB, Log Analytics/Sentinel…)."""
+    from services import finops_dashboard_service as _fd
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _pool, lambda: _fd.get_service_category_costs(days, _mgmt_subs(subscription_id)))
+
+
+@app.get("/api/finops/mgmt/vm-utilization", tags=["FinOps Management"])
+async def mgmt_vm_utilization(subscription_id: Optional[str] = None):
+    """Total VM spend, running vs stopped, idle cost, avg CPU/memory, % underutilised
+    and the VM → size → cost → utilisation table."""
+    from services import finops_dashboard_service as _fd
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _pool, lambda: _fd.get_vm_cost_utilization(_mgmt_subs(subscription_id)))
+
+
+@app.get("/api/finops/mgmt/storage", tags=["FinOps Management"])
+async def mgmt_storage(days: int = 30, growth_days: int = 60,
+                       subscription_id: Optional[str] = None):
+    """Storage cost by access tier (Hot/Cool/Cold/Archive) plus GB/month growth."""
+    from services import finops_dashboard_service as _fd
+    from services import finops_meter_service as _fm
+    loop = asyncio.get_event_loop()
+    subs = _mgmt_subs(subscription_id)
+    tiers = await loop.run_in_executor(_pool, lambda: _fm.get_storage_tier_costs(days, subs))
+    growth = await loop.run_in_executor(_pool, lambda: _fd.get_storage_growth(growth_days, subs))
+    orphans = {"disks_usd": 0.0, "snapshots_usd": 0.0, "items": []}
+    try:
+        dash = _cache.get("data:*") or _cache.get("data")
+        for r in (getattr(dash, "resources", None) or []):
+            rt = (r.resource_type or "").lower()
+            if not getattr(r, "is_orphan", False) and "snapshots" not in rt:
+                continue
+            cost = float(getattr(r, "cost_current_month", 0) or 0)
+            if "snapshots" in rt:
+                orphans["snapshots_usd"] += cost
+            elif "disks" in rt:
+                orphans["disks_usd"] += cost
+            else:
+                continue
+            orphans["items"].append({
+                "resource_name": r.resource_name, "resource_type": rt,
+                "resource_group": r.resource_group, "cost_usd": round(cost, 2),
+                "reason": getattr(r, "orphan_reason", "") or "",
+            })
+        orphans["disks_usd"] = round(orphans["disks_usd"], 2)
+        orphans["snapshots_usd"] = round(orphans["snapshots_usd"], 2)
+        orphans["items"].sort(key=lambda x: -x["cost_usd"])
+        orphans["items"] = orphans["items"][:50]
+        orphans["total_usd"] = round(orphans["disks_usd"] + orphans["snapshots_usd"], 2)
+    except Exception as exc:
+        logger.warning("orphan storage rollup failed: %s", exc)
+    return {"tiers": tiers, "growth": growth, "orphans": orphans}
+
+
+@app.get("/api/finops/mgmt/network", tags=["FinOps Management"])
+async def mgmt_network(days: int = 30, subscription_id: Optional[str] = None):
+    """Network spend split into data egress, inter-region transfer and other,
+    plus the top network resources by cost."""
+    from services import finops_meter_service as _fm
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        _pool, lambda: _fm.get_network_costs(days, _mgmt_subs(subscription_id)))
+    top_resources: List[Dict[str, Any]] = []
+    try:
+        dash = _cache.get("data:*") or _cache.get("data")
+        net_hints = ("virtualnetworkgateways", "azurefirewalls", "loadbalancers",
+                     "applicationgateways", "virtualnetworks", "expressroutecircuits",
+                     "publicipaddresses", "natgateways", "frontdoors")
+        for r in (getattr(dash, "resources", None) or []):
+            rt = (r.resource_type or "").lower()
+            if any(h in rt for h in net_hints):
+                top_resources.append({
+                    "resource_name": r.resource_name, "resource_type": rt,
+                    "resource_group": r.resource_group,
+                    "location": getattr(r, "location", ""),
+                    "cost_usd": round(float(getattr(r, "cost_current_month", 0) or 0), 2),
+                })
+        top_resources.sort(key=lambda x: -x["cost_usd"])
+        top_resources = top_resources[:20]
+    except Exception as exc:
+        logger.warning("network top-resource rollup failed: %s", exc)
+    result["top_resources"] = top_resources
+    return result
+
+
+@app.get("/api/finops/mgmt/monitoring", tags=["FinOps Management"])
+async def mgmt_monitoring(days: int = 30, subscription_id: Optional[str] = None):
+    """Security spend and Log Analytics / Sentinel ingestion cost, GB and $/GB."""
+    from services import finops_meter_service as _fm
+    loop = asyncio.get_event_loop()
+    subs = _mgmt_subs(subscription_id)
+    security = await loop.run_in_executor(_pool, lambda: _fm.get_security_costs(days, subs))
+    ingestion = await loop.run_in_executor(_pool, lambda: _fm.get_ingestion_costs(days, subs))
+    return {"security": security, "ingestion": ingestion}
+
+
+@app.get("/api/finops/mgmt/environments", tags=["FinOps Management"])
+async def mgmt_environments(subscription_id: Optional[str] = None):
+    """Production vs Non-Production cost, normalised from tags and RG naming."""
+    from services import finops_dashboard_service as _fd
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _pool, lambda: _fd.get_environment_costs(_mgmt_subs(subscription_id)))
+
+
+@app.get("/api/finops/mgmt/resource-groups", tags=["FinOps Management"])
+async def mgmt_resource_groups(limit: int = 25, subscription_id: Optional[str] = None):
+    """Per-RG cost, resource count, cost-per-resource density and environment."""
+    from services import finops_dashboard_service as _fd
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _pool, lambda: _fd.get_resource_group_economics(_mgmt_subs(subscription_id), limit))
+
+
+@app.get("/api/finops/mgmt/management-groups", tags=["FinOps Management"])
+async def mgmt_management_groups(billing_month: Optional[str] = None):
+    """Management-group cost rollup including descendant subscriptions."""
+    from services import finops_dashboard_service as _fd
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, lambda: _fd.get_mgmt_group_costs(billing_month))
+
+
+@app.get("/api/finops/mgmt/subscription-governance", tags=["FinOps Management"])
+async def mgmt_subscription_governance():
+    """Subscriptions needing attention: unassigned to any management group,
+    zero-spend, or disabled but still billing."""
+    from services import finops_dashboard_service as _fd
+
+    # MG hierarchy — each node already carries its descendant subscription ids.
+    # NOTE: list_management_groups() intentionally OMITS the tenant root (the scope
+    # selector represents it as "All subscriptions"). Governance must not treat that
+    # omission as "no management group", so the root's own children are read too.
+    assigned: List[str] = []
+    placement: Dict[str, str] = {}
+    hierarchy_known = False
+    try:
+        mg_payload = await list_management_groups()
+        hierarchy_known = bool(mg_payload.get("available"))
+        for node in (mg_payload.get("management_groups") or []):
+            nm = node.get("name") or node.get("id") or ""
+            for sid in (node.get("subscription_ids") or []):
+                assigned.append(sid)
+                # Deepest (most specific) MG wins — nodes arrive parent-first.
+                placement[sid] = nm
+    except Exception as exc:
+        logger.warning("governance: MG hierarchy unavailable: %s", exc)
+
+    loop = asyncio.get_event_loop()
+
+    def _build():
+        sub_costs: Dict[str, float] = {}
+        try:
+            from services import finops_warehouse_service as _wh
+            wd = _wh.get_warehouse_dashboard(days=30)
+            for row in (wd.get("by_subscription") or []):
+                sub_costs[row.get("subscription_id", "")] = float(row.get("cost", 0) or 0)
+        except Exception:
+            pass
+        subs: List[Dict[str, Any]] = []
+        try:
+            dash = _cache.get("data:*") or _cache.get("data")
+            for s in (getattr(dash, "subscriptions", None) or []):
+                sid = getattr(s, "subscription_id", "") or getattr(s, "id", "")
+                if not sid:
+                    continue
+                subs.append({"subscription_id": sid,
+                             "subscription_name": getattr(s, "subscription_name", "") or sid,
+                             "state": getattr(s, "state", "") or "Enabled"})
+                sub_costs.setdefault(sid, float(getattr(s, "cost_current", 0) or 0))
+        except Exception:
+            pass
+        if not subs:
+            # No scan in memory yet — fall back to the persisted snapshot so the
+            # panel still names subscriptions instead of rendering nothing.
+            try:
+                snap = persistence_svc.load_latest_dashboard() or {}
+                for s in (snap.get("subscriptions") or []):
+                    sid = s.get("subscription_id") or ""
+                    if not sid:
+                        continue
+                    subs.append({"subscription_id": sid,
+                                 "subscription_name": s.get("subscription_name") or sid,
+                                 "state": s.get("state") or "Enabled"})
+                    sub_costs.setdefault(sid, float(s.get("cost_current", 0) or 0))
+            except Exception:
+                pass
+        result = _fd.find_orphan_subscriptions(subs, assigned, sub_costs,
+                                               hierarchy_known=hierarchy_known,
+                                               mg_placement=placement)
+        result["mg_hierarchy_available"] = hierarchy_known
+        return result
+
+    return await loop.run_in_executor(_pool, _build)
+
+
+@app.get("/api/finops/mgmt/savings", tags=["FinOps Management"])
+async def mgmt_savings(hourly_rate_usd: float = 120.0):
+    """Identified / accepted / potential / realized savings and ROI %."""
+    from services import finops_savings_service as _fs
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, lambda: _fs.get_savings_rollup(hourly_rate_usd))
+
+
+@app.get("/api/finops/mgmt/recommendations", tags=["FinOps Management"])
+async def mgmt_recommendations(status: Optional[str] = None, category: Optional[str] = None,
+                               limit: int = 500):
+    """Persisted recommendations with their accept/implement lifecycle."""
+    from services import finops_savings_service as _fs
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, lambda: _fs.list_recommendations(status, category, limit))
+
+
+@app.post("/api/finops/mgmt/recommendations/sync", tags=["FinOps Management"])
+async def mgmt_recommendations_sync():
+    """Persist the currently-detected recommendations so they gain a stable
+    identity and can be accepted / implemented / measured."""
+    from services import finops_savings_service as _fs
+    loop = asyncio.get_event_loop()
+
+    def _sync():
+        # Source from the same savings summary that powers the Top Savings list, so
+        # the ledger and that list can never disagree. The per-resource
+        # `estimated_monthly_savings` field this used to read is ~0 whenever
+        # per-resource cost attribution is throttled, which synced almost nothing.
+        dash = _cache.get("data:*") or _cache.get("data")
+        try:
+            dash_dict = json.loads(dash.model_dump_json()) if dash else None
+        except Exception:
+            dash_dict = None
+        summary = finops_svc.get_savings_summary(dashboard_cache=dash_dict)
+        # A resource already carrying a recommendation must not gain a second one:
+        # the fingerprint includes the action, so syncing "review" alongside an
+        # existing "reclaim_stopped_vm" would count the same money twice.
+        claimed: set = set()
+        try:
+            from services.database import get_connection as _gc
+            with _gc() as _con:
+                claimed = {str(row[0]).lower() for row in _con.execute(
+                    "SELECT resource_id FROM finops_recommendations").fetchall() if row[0]}
+        except Exception as exc:
+            logger.warning("recommendation sync: existing lookup failed: %s", exc)
+        _effort_by_cat = {"orphan": "low", "waste": "low", "rightsize": "medium",
+                          "ri_purchase": "medium"}
+        recos: List[Dict[str, Any]] = []
+        skipped = 0
+        for o in (getattr(summary, "opportunities", None) or []):
+            savings = float(getattr(o, "potential_savings_usd", 0) or 0)
+            rid = getattr(o, "resource_id", "") or ""
+            if savings <= 0 or not rid:
+                continue
+            if rid.lower() in claimed:
+                skipped += 1
+                continue
+            cat = getattr(o, "category", "") or "waste"
+            recos.append({
+                "subscription_id": getattr(o, "subscription_id", ""),
+                "resource_id": rid,
+                "resource_name": getattr(o, "resource_name", ""),
+                "resource_group": getattr(o, "resource_group", ""),
+                "resource_type": getattr(o, "resource_type", ""),
+                "category": cat,
+                "action": "delete" if cat == "orphan" else ("resize" if cat == "rightsize" else "review"),
+                "title": getattr(o, "action", "") or f"Review {getattr(o, 'resource_name', '')}",
+                "detail": getattr(o, "action", "") or "",
+                "current_sku": "",
+                "target_sku": "",
+                "monthly_savings_usd": savings,
+                "confidence": getattr(o, "confidence", "medium") or "medium",
+                "effort": getattr(o, "effort", None) or _effort_by_cat.get(cat, "medium"),
+                "source": "savings_summary",
+            })
+        written = _fs.persist_recommendations(recos)
+        return {"ok": True, "synced": written, "detected": len(recos),
+                "skipped_already_tracked": skipped}
+
+    return await loop.run_in_executor(_pool, _sync)
+
+
+@app.post("/api/finops/mgmt/recommendations/{fingerprint}/status", tags=["FinOps Management"])
+async def mgmt_recommendation_status(fingerprint: str, status: str,
+                                     changed_by: str = "", note: str = ""):
+    """Accept / implement / dismiss a recommendation. Accepting or implementing
+    snapshots the resource's trailing 30-day cost as the savings baseline."""
+    from services import finops_savings_service as _fs
+    loop = asyncio.get_event_loop()
+
+    def _apply():
+        # Fall back to the scan's per-resource cost when the warehouse has no
+        # resource-level rows (per-resource collection can be throttled).
+        override = None
+        try:
+            info = _fs.list_recommendations()
+            match = next((r for r in info.get("recommendations", [])
+                          if r["fingerprint"] == fingerprint), None)
+            if match:
+                dash = _cache.get("data:*") or _cache.get("data")
+                for r in (getattr(dash, "resources", None) or []):
+                    if r.resource_id == match["resource_id"]:
+                        override = float(getattr(r, "cost_current_month", 0) or 0)
+                        break
+        except Exception:
+            pass
+        return _fs.set_status(fingerprint, status, changed_by, note, override)
+
+    result = await loop.run_in_executor(_pool, _apply)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "update failed"))
+    return result
+
+
+@app.post("/api/finops/mgmt/savings/measure", tags=["FinOps Management"])
+async def mgmt_savings_measure():
+    """Re-measure realized savings for every implemented recommendation."""
+    from services import finops_savings_service as _fs
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, lambda: _fs.measure_realized_savings("manual"))
+
+
+@app.get("/api/finops/mgmt/overview", tags=["FinOps Management"])
+async def mgmt_overview(days: int = 30, subscription_id: Optional[str] = None):
+    """Single call that returns every management-dashboard section."""
+    from services import finops_dashboard_service as _fd
+    from services import finops_meter_service as _fm
+    from services import finops_savings_service as _fs
+    loop = asyncio.get_event_loop()
+    subs = _mgmt_subs(subscription_id)
+
+    def _build():
+        return {
+            "service_categories": _fd.get_service_category_costs(days, subs),
+            "vm": _fd.get_vm_cost_utilization(subs),
+            "storage_tiers": _fm.get_storage_tier_costs(days, subs),
+            "storage_growth": _fd.get_storage_growth(60, subs),
+            "network": _fm.get_network_costs(days, subs),
+            "security": _fm.get_security_costs(days, subs),
+            "ingestion": _fm.get_ingestion_costs(days, subs),
+            "environments": _fd.get_environment_costs(subs),
+            "resource_groups": _fd.get_resource_group_economics(subs, 10),
+            "management_groups": _fd.get_mgmt_group_costs(),
+            "savings": _fs.get_savings_rollup(),
+            "meter_data_available": _fm.has_data(),
+        }
+
+    return await loop.run_in_executor(_pool, _build)
+
+
+@app.post("/api/finops/mgmt/collect", tags=["FinOps Management"])
+async def mgmt_collect(days: int = 30):
+    """Collect the meter grain on demand (storage tier / egress / ingestion data)."""
+    from services import finops_meter_service as _fm
+    loop = asyncio.get_event_loop()
+    rows = await loop.run_in_executor(_pool, lambda: _fm.collect_all(run_id="manual", days=days))
+    return {"ok": True, "rows": rows, "days": days}
+
+
 @app.on_event("startup")
 async def start_auto_refresh_scheduler() -> None:
     global _auto_refresh_task
@@ -7274,6 +8184,18 @@ async def start_auto_refresh_scheduler() -> None:
             logger.info("Startup: FinOps Warehouse schema migration applied")
         except Exception as _mig_err:
             logger.warning("Startup: FinOps Warehouse migration skipped: %s", _mig_err)
+
+    # ── Run FinOps management-dashboard migration on startup ──────────────────
+    try:
+        import importlib.util, os as _os
+        _mig_path2 = _os.path.join(_os.path.dirname(__file__), "migrations", "006_finops_dashboard_v2.py")
+        _spec2 = importlib.util.spec_from_file_location("finops_dashboard_v2_migration", _mig_path2)
+        _mod2 = importlib.util.module_from_spec(_spec2)
+        _spec2.loader.exec_module(_mod2)
+        _mod2.run_migration()
+        logger.info("Startup: FinOps dashboard v2 schema migration applied")
+    except Exception as _mig_err2:
+        logger.warning("Startup: FinOps dashboard v2 migration skipped: %s", _mig_err2)
 
 
 

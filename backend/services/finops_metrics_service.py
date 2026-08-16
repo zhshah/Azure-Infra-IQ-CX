@@ -142,26 +142,50 @@ def get_metrics_summary(
     prior_full = round(cache_prev if cache_prev > 0 else live_prev, 2)
 
     # ── AUTHORITATIVE OVERRIDE (warehouse) — the single source of truth ──────────
-    # Per-resource / cached KPI spend is undercounted on 429-throttled tenants, and
-    # the warehouse's CURRENT month is incomplete early in the month (+ ETL lag), so
-    # month-to-date is unreliable. The LAST 30 DAYS is fully populated and matches the
-    # Analyze tab's default window → use it as the authoritative monthly run-rate so
-    # every surface (Overview, Cost Insights, Analyze) reconciles. Falls back to cache.
-    run_rate_30d = 0.0
+    # Per-resource / cached KPI spend is undercounted on 429-throttled tenants, so the
+    # subscription-scope warehouse wins. `mtd` must be an ACTUAL month-to-date figure:
+    # it previously carried the rolling-30-day run rate, so the UI showed "This month
+    # MTD $2,491" for a month that had really cost $690. The run rate is still exposed,
+    # under its own name, for the surfaces that legitimately want a 30-day window.
+    rolling_30d = 0.0
+    mom_basis_label = "prior_month_full"
     try:
-        from services import cost_analytics_service as _ca
-        run_rate_30d = _ca.estate_total(period="last_30d", subscription_ids=subscription_ids) or 0.0
-        wh_prev = _ca.estate_total(period="last_month", subscription_ids=subscription_ids) or 0.0
-        if run_rate_30d > 0:
-            spend_mtd = round(run_rate_30d, 2)
-        if wh_prev and wh_prev > 0:
-            prior_full = round(wh_prev, 2)
-    except Exception:
-        pass
+        from services import finops_dashboard_service as _fdc
+        _auth = _fdc.get_authoritative_spend()
+        if _auth.get("mtd_usd", 0) > 0:
+            spend_mtd = round(_auth["mtd_usd"], 2)
+        if _auth.get("last_month_usd", 0) > 0:
+            prior_full = round(_auth["last_month_usd"], 2)
+        rolling_30d = round(_auth.get("rolling_30d_usd", 0) or 0, 2)
+        # Like-for-like only works when the prior period was actually collected.
+        # Cost history began mid-July here, so Jul 1-13 held $239 against a $2,200
+        # month — comparing against it invented a +212% rise. Require most of those
+        # days to be present, else prorate the full month.
+        elapsed = int(_auth.get("elapsed_days", 0) or 0)
+        have_days = int(_auth.get("prior_month_to_date_days", 0) or 0)
+        prior_days = int(_auth.get("prior_month_days", 0) or 0)
+        if elapsed and have_days >= max(1, int(elapsed * 0.8)):
+            prior_mtd = round(_auth.get("prior_month_to_date_usd", 0) or 0, 2)
+            mom_basis_label = "prior_month_to_date"
+        elif prior_full > 0 and elapsed and prior_days:
+            prior_mtd = round(prior_full * min(1.0, elapsed / prior_days), 2)
+            mom_basis_label = "prior_month_prorated"
+        else:
+            prior_mtd = prior_full
+    except Exception as e:
+        logger.debug("metrics: authoritative spend unavailable: %s", e)
+        prior_mtd = prior_full
+    if not rolling_30d:
+        try:
+            from services import cost_analytics_service as _ca
+            rolling_30d = round(_ca.estate_total(period="last_30d",
+                                                 subscription_ids=subscription_ids) or 0.0, 2)
+        except Exception:
+            pass
 
-    prior_mtd = prior_full
-    mom_delta_usd = round(spend_mtd - prior_full, 2)
-    mom_delta_pct = round((mom_delta_usd / prior_full * 100.0), 1) if prior_full > 0 else 0.0
+    _basis = prior_mtd if prior_mtd > 0 else prior_full
+    mom_delta_usd = round(spend_mtd - _basis, 2)
+    mom_delta_pct = round((mom_delta_usd / _basis * 100.0), 1) if _basis > 0 else 0.0
 
     # Trend cache-first too (live arrays can be empty under throttling).
     trend_dates = list(getattr(kpi, "cost_trend_dates", []) or []) if kpi else []
@@ -178,9 +202,9 @@ def get_metrics_summary(
     # ── Forecast (ONE model) ──────────────────────────────────────────────────────
     # When the warehouse run-rate is available, the rolling 30-day total IS the monthly
     # run-rate (robust; avoids the noisy early-month linear-MTD overshoot). Else linear.
-    if run_rate_30d and run_rate_30d > 0:
-        forecast = {"eom": round(run_rate_30d, 2), "model": "rolling-30d-run-rate",
-                    "low": round(run_rate_30d * 0.95, 2), "high": round(run_rate_30d * 1.05, 2)}
+    if rolling_30d and rolling_30d > 0:
+        forecast = {"eom": round(rolling_30d, 2), "model": "rolling-30d-run-rate",
+                    "low": round(rolling_30d * 0.95, 2), "high": round(rolling_30d * 1.05, 2)}
     else:
         forecast = _linear_mtd_forecast(spend_mtd, today)
 
@@ -271,10 +295,12 @@ def get_metrics_summary(
         "currency": "USD",
         "spend": {
             "mtd": spend_mtd,
+            "rolling30d": rolling_30d,
             "priorMonthFull": prior_full,
             "priorMonthToDate": prior_mtd,
             "momDeltaUsd": mom_delta_usd,
             "momDeltaPct": mom_delta_pct,
+            "momBasis": mom_basis_label,
         },
         "forecast": forecast,
         "resources": resource_counts,

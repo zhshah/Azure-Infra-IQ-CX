@@ -6,7 +6,7 @@ import React, { useState, useEffect } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts'
-import { RefreshCw, AlertCircle, AlertTriangle } from 'lucide-react'
+import { RefreshCw, AlertCircle, AlertTriangle, Tags } from 'lucide-react'
 import { finopsApi, fmtUsd, fmtPct, CHART_COLORS } from './finopsApi'
 import FinOpsAIPanel from './FinOpsAIPanel'
 import FinOpsExportMenu from './FinOpsExportMenu'
@@ -44,14 +44,46 @@ export default function TagAnalytics() {
   const [activeTag,  setActiveTag]  = useState(null)
   const [matLoading, setMatLoading] = useState(false)
   const [matError,   setMatError]   = useState(null)
+  const [allTags,    setAllTags]    = useState(null)
+  const [required,   setRequired]   = useState(() => {
+    try { return JSON.parse(localStorage.getItem('finops:requiredTags') || 'null') } catch { return null }
+  })
+  const [pickerOpen, setPickerOpen] = useState(false)
 
   const load = async () => {
     setLoading(true); setError(null); setMatrix(null); setActiveTag(null)
-    try { setData(await finopsApi.getTagAnalytics(timeRange, dateFrom || undefined, dateTo || undefined)) }
+    try {
+      setData(await finopsApi.getTagAnalytics(
+        timeRange, dateFrom || undefined, dateTo || undefined, undefined, required))
+    }
     catch (e) { setError(e.message) }
     finally { setLoading(false) }
   }
-  useEffect(() => { load() }, [timeRange, dateFrom, dateTo])
+  useEffect(() => { load() }, [timeRange, dateFrom, dateTo, required])
+
+  // Discover every tag key in the estate so the user can choose the compliance set.
+  useEffect(() => {
+    let cancelled = false
+    finopsApi.getTagKeys()
+      .then(r => { if (!cancelled) setAllTags(r) })
+      .catch(() => { if (!cancelled) setAllTags({ available: false, tag_keys: [] }) })
+    return () => { cancelled = true }
+  }, [])
+
+  const toggleTag = (key) => {
+    const base = required || (allTags?.default_required_tags ?? [])
+    const has = base.some(t => t.toLowerCase() === key.toLowerCase())
+    const next = has ? base.filter(t => t.toLowerCase() !== key.toLowerCase()) : [...base, key]
+    setRequired(next)
+    try { localStorage.setItem('finops:requiredTags', JSON.stringify(next)) } catch { /* ignore */ }
+  }
+
+  const resetTags = () => {
+    setRequired(null)
+    try { localStorage.removeItem('finops:requiredTags') } catch { /* ignore */ }
+  }
+
+  const activeRequired = required || data?.required_tags || []
 
   const loadMatrix = async (tagKey) => {
     setActiveTag(tagKey); setMatLoading(true); setMatrix(null); setMatError(null)
@@ -92,6 +124,13 @@ export default function TagAnalytics() {
             dateFrom={dateFrom} dateTo={dateTo}
             onDateFromChange={setDateFrom} onDateToChange={setDateTo}
           />
+          <button onClick={() => setPickerOpen(o => !o)} style={{
+            background: pickerOpen ? 'var(--c-334155)' : 'var(--c-1e293b)', border: '1px solid var(--c-334155)',
+            borderRadius: 6, padding: '5px 10px', cursor: 'pointer', color: 'var(--c-94a3b8)', fontSize: 11,
+            display: 'flex', alignItems: 'center', gap: 5,
+          }}>
+            <Tags size={12} /> Required tags ({activeRequired.length})
+          </button>
           <button onClick={load} style={{
             background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6,
             padding: '5px 10px', cursor: 'pointer', color: 'var(--c-94a3b8)', fontSize: 11,
@@ -101,6 +140,53 @@ export default function TagAnalytics() {
           </button>
         </div>
       </div>
+
+      {/* Required-tag picker — compliance is measured against whatever is ticked here */}
+      {pickerOpen && (
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+            <div>
+              <div style={{ color: 'var(--c-f1f5f9)', fontSize: 13, fontWeight: 700 }}>Choose the tags that define compliance</div>
+              <div style={{ color: 'var(--c-64748b)', fontSize: 11, marginTop: 2 }}>
+                {allTags?.available
+                  ? `${allTags.tag_keys.length} tag keys found across ${allTags.total_resources} resources · ${allTags.untagged_resource_count} resources carry no tags at all`
+                  : 'Discovering tags from the latest scan…'}
+              </div>
+            </div>
+            <button onClick={resetTags} style={{
+              background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', borderRadius: 6,
+              padding: '4px 10px', cursor: 'pointer', color: 'var(--c-94a3b8)', fontSize: 11,
+            }}>Reset to default</button>
+          </div>
+          {allTags?.available ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 6, maxHeight: 260, overflowY: 'auto' }}>
+              {allTags.tag_keys.map(t => {
+                const on = activeRequired.some(r => r.toLowerCase() === t.tag_key.toLowerCase())
+                return (
+                  <label key={t.tag_key} style={{
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', cursor: 'pointer',
+                    background: on ? 'rgba(59,130,246,0.10)' : 'transparent',
+                    border: `1px solid ${on ? '#3b82f6' : 'var(--c-1e293b)'}`, borderRadius: 6,
+                  }}>
+                    <input type="checkbox" checked={on} onChange={() => toggleTag(t.tag_key)} />
+                    <span style={{ color: 'var(--c-e2e8f0)', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {t.tag_key}
+                    </span>
+                    <span style={{ fontSize: 10, color: t.coverage_pct >= 80 ? '#22c55e' : t.coverage_pct >= 40 ? '#f59e0b' : '#ef4444' }}>
+                      {t.coverage_pct}%
+                    </span>
+                    <span style={{ fontSize: 10, color: 'var(--c-64748b)' }}>{t.covered_resources}</span>
+                  </label>
+                )
+              })}
+            </div>
+          ) : (
+            <div style={{ color: 'var(--c-64748b)', fontSize: 12 }}>
+              No tags discovered yet — run a resource scan first.
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Compliance gauge + KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16 }}>

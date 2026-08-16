@@ -58,6 +58,7 @@ const NAV_SECTIONS = [
   ]},
   { heading: 'FinOps', collapsible: true, items: [
     { key: 'finops-overview',   label: '⚡ Overview',          icon: '/icons/management + governance/00001-icon-service-Monitor.svg' },
+    { key: 'finops-management', label: '👔 Management Review', icon: '/icons/general/10015-icon-service-Dashboard.svg' },
     { key: 'finops-analysis-hub', label: '📈 Cost Analysis',   icon: '/icons/general/10015-icon-service-Dashboard.svg' },
     { key: 'finops-optimization', label: '🎯 Optimization',    icon: '/icons/management + governance/00003-icon-service-Advisor.svg' },
     { key: 'finops-commitments-hub', label: '🧾 Commitments', icon: '/icons/general/10003-icon-service-Reservations.svg' },
@@ -436,6 +437,9 @@ import CostFlow          from './finops/CostFlow'
 import AnomalyIntelligence from './finops/AnomalyIntelligence'
 import CostLens          from './finops/CostLens'
 import FinOpsDashboard    from './finops/FinOpsDashboard'
+import ManagementDashboard from './finops/ManagementDashboard'
+import SavingsLedger       from './finops/SavingsLedger'
+import SubscriptionGovernance from './finops/SubscriptionGovernance'
 import BudgetManager      from './finops/BudgetManager'
 import BudgetScenario     from './finops/BudgetScenario'
 import ForecastPanel      from './finops/ForecastPanel'
@@ -2346,6 +2350,7 @@ function AppInner() {
         {view === 'finops-optimization' && <FinOpsHub storageKey="finops:hub:opt" tabs={[
           { key: 'reco', label: 'Recommendation Studio', render: () => <RecommendationStudio /> },
           { key: 'savings', label: 'Savings Optimizer', render: () => <SavingsSummary /> },
+          { key: 'ledger', label: 'Savings Ledger & ROI', render: () => <SavingsLedger /> },
         ]} />}
         {view === 'finops-commitments-hub' && <FinOpsHub storageKey="finops:hub:commit" tabs={[
           { key: 'tracker', label: 'Reservations & Savings Plans', render: () => <CommitmentTracker /> },
@@ -2366,6 +2371,11 @@ function AppInner() {
         {view === 'finops-overview' && <FinOpsHub tabs={[
           { key: 'insights', label: 'Cost Insights', render: () => <CostInsights /> },
           { key: 'summary', label: 'Summary', render: () => <FinOpsOverview /> },
+        ]} />}
+        {view === 'finops-management' && <FinOpsHub storageKey="finops:hub:mgmt" tabs={[
+          { key: 'dashboard', label: 'Cost & Usage Review', render: () => <ManagementDashboard /> },
+          { key: 'governance', label: 'Subscription Governance', render: () => <SubscriptionGovernance /> },
+          { key: 'ledger', label: 'Savings & ROI', render: () => <SavingsLedger /> },
         ]} />}
         {view === 'finops-recommendations' && <RecommendationStudio />}
         {view === 'finops-analyze' && <AnalyzeHub />}

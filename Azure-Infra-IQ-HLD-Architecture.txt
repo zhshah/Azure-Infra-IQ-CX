@@ -1,0 +1,95 @@
+==================================================================================
+AZURE INFRA IQ  —  SOLUTION ARCHITECTURE (HIGH-LEVEL DESIGN / HLD)
+Style: Professional HLD  |  Azure native service icons  |  components + connectivity ONLY
+Topology: Hub-Spoke (Azure Landing Zone). Workload runs in the SPOKE subscription;
+shared Private DNS resolution lives in the HUB subscription. Hub & Spoke VNets are peered.
+All data services are reached ONLY over Private Endpoints (no public data paths).
+==================================================================================
+
+----------------------------------------------------------------------------------
+BOUNDARY 1  ==  HUB SUBSCRIPTION  (Connectivity)
+----------------------------------------------------------------------------------
+  [Virtual Network]      Hub Virtual Network
+  [Private DNS Zones]    Private DNS Zones (centralized):
+                            - privatelink.database.windows.net      (SQL)
+                            - privatelink.redis.cache.windows.net   (Redis)
+                            - privatelink.azurecr.io                (ACR)
+                            - privatelink.openai.azure.com          (Azure OpenAI)
+
+----------------------------------------------------------------------------------
+BOUNDARY 2  ==  SPOKE SUBSCRIPTION  (Workload: "Azure Infra IQ")
+----------------------------------------------------------------------------------
+  [Virtual Network]      Spoke Virtual Network
+      |
+      |-- Subnet: aca-infra   (delegated, VNet INJECTION)
+      |        [Container Apps Environment]   Container Apps Environment  (VNet-injected / internal)
+      |             [Container Apps]          Container App  -  "Azure Infra IQ"
+      |                  [Managed Identity]   System-assigned Managed Identity (of the Container App)
+      |
+      |-- Subnet: privatelink-endpoints
+               [Private Endpoint]  -->  [Azure SQL Database]        Azure SQL Database
+               [Private Endpoint]  -->  [Azure Cache for Redis]     Azure Managed Redis
+               [Private Endpoint]  -->  [Container Registry]        Azure Container Registry
+               [Private Endpoint]  -->  [Azure OpenAI]              Azure OpenAI  (GPT-5.x deployment)
+
+  [Log Analytics]        Log Analytics Workspace   (Container Apps diagnostics)
+
+----------------------------------------------------------------------------------
+EXTERNAL  /  IDENTITY
+----------------------------------------------------------------------------------
+  [User]                 Users / Browser
+  [Microsoft Entra ID]   Microsoft Entra ID   (sign-in / OIDC)
+  [Subscriptions]        Customer Azure Estate  (assessed, READ-ONLY)
+  [Management Groups]    Management Group hierarchy  (scope)
+
+==================================================================================
+CONNECTIVITY  (lines)
+==================================================================================
+  A.  Users                 -- HTTPS 443 -->                 Container App (ingress)
+  B.  Users                 -- sign in -->  Microsoft Entra ID  -- token -->  Container App
+  C.  Container App         -- private link -->  Private Endpoint -->  Azure SQL Database
+  D.  Container App         -- private link -->  Private Endpoint -->  Azure Managed Redis
+  E.  Container App         -- image pull (private link) -->  Private Endpoint -->  Azure Container Registry
+  F.  Container App         -- inference (private link) -->   Private Endpoint -->  Azure OpenAI (GPT-5.x)
+  G.  Hub VNet              <-- VNet Peering -->              Spoke VNet
+  H.  Private DNS Zones (Hub) -- VNet Link -->                Spoke VNet   (resolves all *.privatelink.* records)
+  I.  Container App (Managed Identity) -- RBAC: AcrPull -->                 Azure Container Registry
+  J.  Container App (Managed Identity) -- RBAC: Reader / Monitoring Reader / Cost Mgmt Reader / Security Reader -->  Customer Azure Estate
+  K.  Container App (Managed Identity) -- App roles (read) -->             Microsoft Graph / Microsoft Entra ID
+  L.  Container Apps Environment -- diagnostics -->                        Log Analytics Workspace
+
+  LINE STYLE:
+     solid line   = data-plane over Private Endpoint / Private Link
+     dotted line  = control-plane (Managed Identity + RBAC / app roles)
+     dashed line  = VNet Peering / Private DNS VNet Link
+
+==================================================================================
+ICON LEGEND  (use Azure native / Azure Architecture icon set)
+==================================================================================
+  Container App ................ Azure Container Apps
+  Container Apps Environment .... Azure Container Apps Environment
+  Azure SQL Database ........... Azure SQL Database
+  Azure Managed Redis .......... Azure Cache for Redis (Managed Redis)
+  Container Registry ........... Azure Container Registry
+  Azure OpenAI ................. Azure OpenAI Service  (GPT-5.x model deployment)
+  Private Endpoint ............. Private Endpoint
+  Private DNS Zones ............ Private DNS Zones
+  Virtual Network .............. Virtual Network
+  Managed Identity ............. Managed Identities
+  Microsoft Entra ID ........... Microsoft Entra ID
+  Log Analytics ................ Log Analytics Workspaces
+  Customer Azure Estate ........ Subscriptions  +  Management Groups
+  Users ........................ User / Client
+
+==================================================================================
+DIAGRAM GUIDANCE (for the AI renderer)
+==================================================================================
+  - Two large subscription boundaries: HUB (smaller, side/top) and SPOKE (main).
+  - Nest the Spoke VNet as a container with its two subnets inside it.
+  - Place the Container App INSIDE the Container Apps Environment INSIDE the aca-infra subnet.
+  - Group SQL, Redis, ACR, Azure OpenAI behind Private Endpoints in the privatelink-endpoints subnet.
+  - Private DNS Zones sit in the HUB; draw a dashed "VNet Link" line to the Spoke VNet.
+  - Draw a dashed "VNet Peering" line between Hub VNet and Spoke VNet.
+  - Managed Identity is the single hub for all control-plane (dotted) access lines.
+  - No public endpoints / no public data-plane lines except user HTTPS ingress.
+==================================================================================

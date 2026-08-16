@@ -158,11 +158,13 @@ export const finopsApi = {
   getForecast:   (h, signal)      => request(`/forecast?horizon=${h}`, {}, signal),
   getCommitments: (signal)        => request('/commitments', {}, signal),
   getSavings:    (signal)         => request('/savings', {}, signal),
-  getTagAnalytics: (tr, dateFrom, dateTo, signal) => {
+  getTagAnalytics: (tr, dateFrom, dateTo, signal, requiredTags) => {
     let url = `/tag-analytics?time_range=${tr}`
     if (tr === 'custom' && dateFrom) url += `&date_from=${dateFrom}&date_to=${dateTo || dateFrom}`
+    if (requiredTags && requiredTags.length) url += `&required_tags=${encodeURIComponent(requiredTags.join(','))}`
     return request(url, {}, signal)
   },
+  getTagKeys: (signal) => request('/tag-keys', {}, signal),
   getTagCostMatrix: (key, tr, signal) => request(`/tag-analytics/${encodeURIComponent(key)}?time_range=${tr}`, {}, signal),
   getTopMovers:  (dim, lim, signal) => request(`/top-movers?dimension=${encodeURIComponent(dim)}&limit=${lim}`, {}, signal),
 

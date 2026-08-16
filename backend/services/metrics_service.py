@@ -23,6 +23,7 @@ METRIC_MAP: Dict[str, List[Tuple[str, str]]] = {
     # ── Compute ───────────────────────────────────────────────────────────────
     "microsoft.compute/virtualmachines": [
         ("Percentage CPU",       "Average"),
+        ("Available Memory Bytes", "Average"),   # host-level; no guest agent required
         ("Network In Total",     "Total"),
         ("Network Out Total",    "Total"),
         ("Disk Read Bytes",      "Total"),
@@ -30,6 +31,7 @@ METRIC_MAP: Dict[str, List[Tuple[str, str]]] = {
     ],
     "microsoft.compute/virtualmachinescalesets": [
         ("Percentage CPU",       "Average"),
+        ("Available Memory Bytes", "Average"),
         ("Network In Total",     "Total"),
         ("Network Out Total",    "Total"),
     ],
@@ -428,6 +430,8 @@ NORMALISATION_BOUNDS: Dict[str, float] = {
     "UserErrors":                 1_000,
     "jobsFailed":                   100,
     "TotalErrors":               10_000,
+    # Available RAM — inverse: 64 GiB free is treated as fully idle memory.
+    "Available Memory Bytes":     64 * 1024**3,
 }
 
 # Metrics where HIGH value means BAD (lower is better → inverted)
@@ -438,6 +442,9 @@ INVERSE_METRICS = {
     "ThrottledSearchQueriesPercentage",
     "outgoing.allpns.badorexpiredchannel",
     "requests/failed", "requests/duration", "exceptions/count",
+    # More free memory = less utilisation. Kept out of the generic utilisation
+    # average; the real memory % is derived from SKU RAM in the scan.
+    "Available Memory Bytes",
 }
 
 # Metrics that on their own indicate "used" even without util% semantics.

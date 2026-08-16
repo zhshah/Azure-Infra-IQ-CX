@@ -29,6 +29,8 @@ try:
         QueryGrouping,
         QueryAggregation,
         QueryTimePeriod,
+        QueryFilter,
+        QueryComparisonExpression,
         ForecastDefinition,
         ForecastDataset,
         TimeframeType,
@@ -52,16 +54,27 @@ VALID_DIMENSIONS = {
     "SubscriptionId",
     "ResourceGroupName",
     "ResourceType",
+    "ResourceId",
     "ServiceName",
     "ServiceFamily",
     "MeterCategory",
     "MeterSubCategory",
+    "Meter",
+    "MeterName",
     "Product",
     "ResourceLocation",
     "ChargeType",
     "BillingMonth",
     "ReservationName",
     "PricingModel",
+}
+
+# Azure Cost Management names the meter dimension "Meter" on the query API even
+# though the portal labels it "Meter name"; likewise the sub-category is spelled
+# with a lowercase "c". Accept the portal spellings from callers and translate.
+_DIMENSION_ALIASES = {
+    "MeterName": "Meter",
+    "MeterSubCategory": "MeterSubcategory",
 }
 
 
@@ -186,12 +199,17 @@ def query_cost(
     cost_type: str = "ActualCost",
     extra_filters: Optional[dict] = None,
     use_cache: bool = True,
+    include_quantity: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Execute an Azure Cost Management query against `scope`.
 
     Returns a list of row dicts.  Column names are determined from the Azure
     response and normalized.  Handles pagination via skiptoken and retries 429.
+
+    `extra_filters` is a {dimension: value | [values]} map applied as an AND of
+    dimension IN (...) expressions. `include_quantity` adds a UsageQuantity sum
+    alongside the cost sum (needed for $/GB and GB-growth analytics).
 
     Mirrors the exact query pattern in cost_service.py.
     """
@@ -202,6 +220,8 @@ def query_cost(
         "from": str(from_date), "to": str(to_date),
         "gran": granularity, "grp": group_by or [],
         "type": cost_type,
+        "flt": sorted((extra_filters or {}).items()),
+        "qty": bool(include_quantity),
     })
     if use_cache:
         cached = _get_cached(cache_key)
@@ -223,7 +243,29 @@ def query_cost(
             tag_name = dim[len("TagKey:"):]
             grouping.append(QueryGrouping(type="TagKey", name=tag_name))
         elif dim in VALID_DIMENSIONS or dim.startswith("Tag"):
-            grouping.append(QueryGrouping(type="Dimension", name=dim))
+            grouping.append(QueryGrouping(type="Dimension", name=_DIMENSION_ALIASES.get(dim, dim)))
+
+    # Build filter — AND of dimension IN (...) expressions.
+    query_filter = None
+    try:
+        exprs = []
+        for dim, val in (extra_filters or {}).items():
+            if not val:
+                continue
+            values = [str(v) for v in (val if isinstance(val, (list, tuple, set)) else [val])]
+            exprs.append(QueryFilter(dimensions=QueryComparisonExpression(
+                name=_DIMENSION_ALIASES.get(dim, dim), operator="In", values=values)))
+        if len(exprs) == 1:
+            query_filter = exprs[0]
+        elif len(exprs) > 1:
+            query_filter = QueryFilter(and_property=exprs)
+    except Exception as e:
+        logger.warning("FinOps: could not build cost filter %s: %s", extra_filters, e)
+        query_filter = None
+
+    aggregation = {"totalCost": QueryAggregation(name="Cost", function="Sum")}
+    if include_quantity:
+        aggregation["totalQuantity"] = QueryAggregation(name="UsageQuantity", function="Sum")
 
     query_def = QueryDefinition(
         type=cost_type,
@@ -234,8 +276,9 @@ def query_cost(
         ),
         dataset=QueryDataset(
             granularity=granularity if granularity != "None" else None,
-            aggregation={"totalCost": QueryAggregation(name="Cost", function="Sum")},
+            aggregation=aggregation,
             grouping=grouping if grouping else None,
+            filter=query_filter,
         ),
     )
 
@@ -295,6 +338,8 @@ def query_cost_multi_subscription(
     group_by: Optional[List[str]] = None,
     cost_type: str = "ActualCost",
     use_cache: bool = True,
+    extra_filters: Optional[dict] = None,
+    include_quantity: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Run query_cost across multiple subscriptions (serial with 3 s delay between
@@ -304,7 +349,9 @@ def query_cost_multi_subscription(
     all_rows: List[Dict[str, Any]] = []
     for i, sub_id in enumerate(subscription_ids):
         scope = f"/subscriptions/{sub_id}"
-        rows  = query_cost(scope, from_date, to_date, granularity, group_by, cost_type, use_cache=use_cache)
+        rows  = query_cost(scope, from_date, to_date, granularity, group_by, cost_type,
+                           extra_filters=extra_filters, use_cache=use_cache,
+                           include_quantity=include_quantity)
         # Inject SubscriptionId for cross-subscription aggregation
         for r in rows:
             if "SubscriptionId" not in r:
@@ -470,6 +517,16 @@ def normalise_cost_rows(
                 cost = float(row[key])
                 break
 
+        # Usage quantity — only present when include_quantity was requested
+        qty = 0.0
+        for key in ("UsageQuantity", "totalQuantity", "Quantity"):
+            if key in row and row[key] is not None:
+                try:
+                    qty = float(row[key])
+                except (TypeError, ValueError):
+                    qty = 0.0
+                break
+
         # Date — present when granularity = Daily or Monthly
         date_str: Optional[str] = None
         for key in ("UsageDate", "BillingMonth", "BillingDay", "Date"):
@@ -485,15 +542,21 @@ def normalise_cost_rows(
         # Dimension values
         dims: Dict[str, str] = {}
         for dim in group_by:
-            col_name = dim if not dim.startswith("TagKey:") else dim[len("TagKey:"):]
+            if dim.startswith("TagKey:"):
+                col_name = dim[len("TagKey:"):]
+            else:
+                col_name = _DIMENSION_ALIASES.get(dim, dim)
             if col_name in row:
                 dims[dim] = str(row[col_name]) if row[col_name] is not None else ""
+            elif dim in row:
+                dims[dim] = str(row[dim]) if row[dim] is not None else ""
             else:
                 dims[dim] = ""
 
         out.append({
             "date": date_str,
             "cost_usd": cost,
+            "quantity": qty,
             "dimensions": dims,
             "subscription_id": str(row.get("SubscriptionId", subscription_id or "")),
         })

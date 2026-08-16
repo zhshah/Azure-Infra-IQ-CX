@@ -521,6 +521,45 @@ def get_savings_summary(dashboard_cache: Optional[Dict] = None) -> FinOpsSavings
     except Exception as e:
         logger.debug("savings: RI recommendations error: %s", e)
 
+    # ── Waste / orphan come from the PERSISTED recommendation ledger ────────────
+    # Recomputing them here from the live scan produced a different total than the
+    # Savings ledger showed for the same estate ($144 vs $249), and it silently
+    # ignored anything the user had dismissed. The ledger is the reviewed, stable
+    # set, so every surface reads it and the numbers reconcile by construction.
+    ledger_used = False
+    try:
+        from services import finops_savings_service as _fs
+        _led = _fs.list_recommendations(limit=500)
+        _items = _led.get("recommendations") if isinstance(_led, dict) else _led
+        for rec in (_items or []):
+            if str(rec.get("status", "")).lower() in ("dismissed", "implemented"):
+                continue
+            saving = float(rec.get("monthly_savings_usd", 0) or 0)
+            if saving <= 0:
+                continue
+            is_orphan = str(rec.get("action", "")) == "delete_orphan"
+            opportunities.append(FinOpsSavingsOpportunity(
+                id=str(rec.get("fingerprint", ""))[:16],
+                category="orphan" if is_orphan else "waste",
+                category_label="Orphan Resource" if is_orphan else "Waste Cleanup",
+                resource_id=rec.get("resource_id", "") or "",
+                resource_name=rec.get("resource_name", "") or "",
+                resource_type=rec.get("resource_type", "") or "",
+                resource_group=rec.get("resource_group", "") or "",
+                subscription_id=rec.get("subscription_id", "") or "",
+                current_monthly_cost=round(float(rec.get("baseline_cost_usd", 0) or saving), 2),
+                potential_savings_usd=round(saving, 2),
+                savings_pct=100.0,
+                confidence=str(rec.get("confidence", "medium") or "medium"),
+                effort=str(rec.get("effort", "low") or "low"),
+                action=str(rec.get("title") or rec.get("detail") or "Review and decommission"),
+                priority_score=round(min(saving, 100.0), 1),
+                source="savings_ledger",
+            ))
+            ledger_used = True
+    except Exception as e:
+        logger.debug("savings: ledger unavailable, computing from scan: %s", e)
+
     # From existing dashboard cache (rightsize, waste, orphan)
     if dashboard_cache:
         # Rightsize opportunities
@@ -545,20 +584,43 @@ def get_savings_summary(dashboard_cache: Optional[Dict] = None) -> FinOpsSavings
             ))
 
         # Waste & orphan resources
+        # The scan's per-resource cost is frequently $0 (attribution is throttled),
+        # which zeroed every savings figure. Cost Management's stored per-resource
+        # grain plus the warehouse idle flag are the authoritative signals.
+        _wh_cost: Dict[str, float] = {}
+        _idle_map: Dict[str, Any] = {}
+        try:
+            from services import finops_dashboard_service as _fdc
+            _wh_cost = _fdc._warehouse_resource_costs()
+            _idle_map = _fdc.get_idle_resource_map()
+        except Exception as _we:
+            logger.debug("savings: warehouse lookup unavailable: %s", _we)
+
         for res in dashboard_cache.get("resources", []):
             is_orphan = res.get("is_orphan", False)
+            rid_l = str(res.get("resource_id", "") or "").lower()
+            _idle = _idle_map.get(rid_l) or {}
+            is_stopped = str(_idle.get("power_state", "") or
+                             res.get("power_state", "") or "").lower() in ("deallocated", "stopped")
             waste = float(res.get("estimated_monthly_savings", 0) or 0)
-            # Run-rate fallback: early in the month (or under Cost Management throttling)
-            # the current month hasn't accrued cost, so estimated_monthly_savings is $0.
-            # For orphaned or clearly-idle (low-score) resources, attribute LAST full
-            # month's spend as the savings estimate so real opportunities aren't hidden.
-            if waste <= 0 and (is_orphan or (res.get("final_score") is not None and float(res.get("final_score") or 100) < 25)):
+            # Attribute the FULL monthly cost as savings only where deleting the
+            # resource actually removes the whole charge: an unattached disk/NIC/IP,
+            # or a powered-off VM still holding disks. A resource that is merely
+            # running at low utilisation is a downsize candidate, not $0-or-delete —
+            # claiming 100% of its bill (e.g. $2,537/mo on an in-use OpenAI account)
+            # would overstate savings, so it is surfaced in the Low-Util review list
+            # instead of being counted here.
+            if waste <= 0 and (is_orphan or is_stopped):
                 waste = float(res.get("cost_previous_month", 0) or 0)
+                if waste <= 0:
+                    waste = _wh_cost.get(rid_l, 0.0)
             if waste <= 0:
                 continue
             cat = "orphan" if is_orphan else "waste"
             cat_label = "Orphan Resource" if is_orphan else "Waste Cleanup"
-            _cmc = float(res.get("cost_current_month", 0) or 0) or float(res.get("cost_previous_month", 0) or 0)
+            _cmc = (float(res.get("cost_current_month", 0) or 0)
+                    or float(res.get("cost_previous_month", 0) or 0)
+                    or _wh_cost.get(rid_l, 0.0))
             opportunities.append(FinOpsSavingsOpportunity(
                 id=f"{cat}_{res.get('resource_id', '')[:16]}",
                 category=cat,

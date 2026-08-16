@@ -14,24 +14,48 @@ import {
 import {
   FileText, FileSpreadsheet, Sparkles, AlertCircle, Loader, DollarSign, PiggyBank,
   PieChart, ShieldCheck, Wallet, Activity, CheckCircle2, TrendingUp,
+  Layers, Server, HardDrive, Network, Shield, Database, Building2, Boxes,
 } from 'lucide-react'
 import { finopsApi, fmtUsd } from './finopsApi'
 import { C, rechartsTooltipProps } from './finopsTheme'
 
 const REPORT_TYPES = [
-  { key: 'executive',    label: 'Executive Cost Summary', Icon: DollarSign, color: '#3b82f6',
+  { key: 'executive',    label: 'Executive Cost Summary', Icon: DollarSign, color: '#3b82f6', group: 'Core',
     desc: 'Estate + per-subscription spend, trend, forecast, movers, savings & cost-at-risk. Board-ready for CEO / CIO / CFO.' },
-  { key: 'optimization', label: 'Cost Optimization & Savings', Icon: PiggyBank, color: '#22c55e',
+  { key: 'optimization', label: 'Cost Optimization & Savings', Icon: PiggyBank, color: '#22c55e', group: 'Core',
     desc: 'Waste, idle & orphaned spend, rightsizing, reservations and modernization — prioritised savings with $ impact.' },
-  { key: 'allocation',   label: 'Allocation, Showback & Chargeback', Icon: PieChart, color: '#a855f7',
+  { key: 'allocation',   label: 'Allocation, Showback & Chargeback', Icon: PieChart, color: '#a855f7', group: 'Core',
     desc: 'Where spend lands by subscription, resource group & tag — and what is unallocated (untagged).' },
-  { key: 'commitments',  label: 'Commitment & Reservation Coverage', Icon: ShieldCheck, color: '#06b6d4',
+  { key: 'commitments',  label: 'Commitment & Reservation Coverage', Icon: ShieldCheck, color: '#06b6d4', group: 'Core',
     desc: 'Reserved Instance & Savings Plan coverage, utilisation and purchase headroom.' },
-  { key: 'budgets',      label: 'Budget & Forecast', Icon: Wallet, color: '#f59e0b',
+  { key: 'budgets',      label: 'Budget & Forecast', Icon: Wallet, color: '#f59e0b', group: 'Core',
     desc: 'Budget performance, burn rate and forward spend projection.' },
-  { key: 'anomalies',    label: 'Anomaly & Cost-Spike', Icon: Activity, color: '#ef4444',
+  { key: 'anomalies',    label: 'Anomaly & Cost-Spike', Icon: Activity, color: '#ef4444', group: 'Core',
     desc: 'Detected cost spikes, their drivers and the affected spend.' },
+
+  { key: 'management',   label: 'Management Cost & Usage Review', Icon: Building2, color: '#6366f1', group: 'Management Review',
+    desc: 'The full board pack in one report — categories, compute, storage, network, security, environments and savings.' },
+  { key: 'subscriptions_mg', label: 'Subscription & Management Group', Icon: Boxes, color: '#0ea5e9', group: 'Management Review',
+    desc: 'Cost by management group and subscription, growth % per subscription and governance exceptions.' },
+  { key: 'resource_groups', label: 'Resource Group Cost', Icon: Layers, color: '#8b5cf6', group: 'Management Review',
+    desc: 'Costliest resource groups, growth, resource count vs spend and Production vs Non-Production split.' },
+  { key: 'service_categories', label: 'Azure Service Category', Icon: PieChart, color: '#14b8a6', group: 'Management Review',
+    desc: '% of spend by category — VMs, SQL/Cosmos, Storage, Firewall/LB, Log Analytics/Sentinel.' },
+  { key: 'compute',      label: 'VM Cost & Utilization', Icon: Server, color: '#f97316', group: 'Management Review',
+    desc: 'VM spend, running vs stopped, idle cost, CPU & memory utilisation and underutilised capacity.' },
+  { key: 'storage',      label: 'Storage Cost & Growth', Icon: HardDrive, color: '#eab308', group: 'Management Review',
+    desc: 'Cost by Hot/Cool/Archive tier, GB/month growth and orphaned disks & snapshots.' },
+  { key: 'network',      label: 'Network & Data Egress', Icon: Network, color: '#ec4899', group: 'Management Review',
+    desc: 'Network spend, data egress cost & volume, inter-region traffic and top VNets / gateways.' },
+  { key: 'paas',         label: 'Platform Services (PaaS)', Icon: Database, color: '#84cc16', group: 'Management Review',
+    desc: 'Managed-service spend by service and the Production vs Non-Production split.' },
+  { key: 'security_monitoring', label: 'Security & Monitoring Cost', Icon: Shield, color: '#dc2626', group: 'Management Review',
+    desc: 'Defender & Sentinel spend, GB ingested and the derived cost per GB.' },
+  { key: 'savings_roi',  label: 'Savings, Realization & ROI', Icon: TrendingUp, color: '#10b981', group: 'Management Review',
+    desc: 'Identified vs realized savings, capture rate and return on optimisation effort.' },
 ]
+
+const REPORT_GROUPS = ['Core', 'Management Review']
 
 function Kpi({ label, value, sub }) {
   return (
@@ -122,24 +146,31 @@ export default function FinOpsExecutiveReport() {
       </div>
 
       {/* Report type picker */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, marginBottom: 16 }}>
-        {REPORT_TYPES.map(t => {
-          const active = reportType === t.key
-          return (
-            <button key={t.key} onClick={() => setReportType(t.key)} style={{
-              textAlign: 'left', background: active ? 'rgba(59,130,246,0.10)' : C.surface,
-              border: `1.5px solid ${active ? t.color : C.border}`, borderRadius: 12, padding: 14, cursor: 'pointer',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
-                <t.Icon size={18} style={{ color: t.color }} />
-                <span style={{ color: C.text, fontSize: 14, fontWeight: 700 }}>{t.label}</span>
-                {active && <CheckCircle2 size={15} style={{ color: t.color, marginLeft: 'auto' }} />}
-              </div>
-              <div style={{ color: C.muted, fontSize: 11.5, lineHeight: 1.45 }}>{t.desc}</div>
-            </button>
-          )
-        })}
-      </div>
+      {REPORT_GROUPS.map(group => (
+        <div key={group} style={{ marginBottom: 16 }}>
+          <div style={{ color: C.muted, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>
+            {group === 'Core' ? 'FinOps Framework reports' : 'Management cost & usage review'}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+            {REPORT_TYPES.filter(t => t.group === group).map(t => {
+              const active = reportType === t.key
+              return (
+                <button key={t.key} onClick={() => setReportType(t.key)} style={{
+                  textAlign: 'left', background: active ? 'rgba(59,130,246,0.10)' : C.surface,
+                  border: `1.5px solid ${active ? t.color : C.border}`, borderRadius: 12, padding: 14, cursor: 'pointer',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
+                    <t.Icon size={18} style={{ color: t.color }} />
+                    <span style={{ color: C.text, fontSize: 14, fontWeight: 700 }}>{t.label}</span>
+                    {active && <CheckCircle2 size={15} style={{ color: t.color, marginLeft: 'auto' }} />}
+                  </div>
+                  <div style={{ color: C.muted, fontSize: 11.5, lineHeight: 1.45 }}>{t.desc}</div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      ))}
 
       {/* Controls */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>

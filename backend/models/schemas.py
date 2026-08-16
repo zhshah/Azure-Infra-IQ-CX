@@ -138,6 +138,7 @@ class ResourceMetrics(BaseModel):
     # Storage-specific signals (storage accounts only)
     storage_last_access_tracking: bool = False   # blob last-access time tracking enabled
     storage_has_lifecycle_policy:  bool = False   # lifecycle tiering/expiry rules configured
+    storage_capacity_gb:           float = 0.0    # used capacity in GB (raw, pre-normalisation)
 
     # Resource protection & state
     has_backup:      bool          = False   # resource is protected by an Azure Backup policy
@@ -1142,6 +1143,8 @@ class FinOpsAllocationItem(BaseModel):
     dimension_value:  str             = ""
     cost_usd:         float           = 0.0
     cost_pct:         float           = 0.0
+    resource_count:   int             = 0
+    mom_delta_pct:    float           = 0.0
 
 
 # ── Update Management ─────────────────────────────────────────────────────────
@@ -1229,10 +1232,6 @@ class UpdateFilterOptions(BaseModel):
     os_types:         List[str] = Field(default_factory=list)
     machine_types:    List[str] = Field(default_factory=list)
     locations:        List[str] = Field(default_factory=list)
-    resource_count:   int             = 0
-    mom_delta_pct:    float           = 0.0
-    top_services:     List[str]       = Field(default_factory=list)
-    subscription_ids: List[str]       = Field(default_factory=list)
 
 
 class FinOpsAllocationReport(BaseModel):

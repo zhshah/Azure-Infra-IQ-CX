@@ -101,6 +101,140 @@ REPORT_TYPES: Dict[str, Dict[str, Any]] = {
             "and its driver."
         ),
     },
+
+    # ── Management cost & usage review categories ────────────────────────────
+    # Sourced from the management-dashboard services (meter grain, utilisation
+    # snapshots, savings ledger) rather than the service-family grain alone.
+    "management": {
+        "label": "Management Cost & Usage Review",
+        "subtitle": "Board-level review across categories, compute, storage, network, security and savings",
+        "sections": ["spend_overview", "service_categories", "compute", "storage",
+                     "network", "security_monitoring", "environments", "savings_roi"],
+        "mgmt": True,
+        "focus": (
+            "A MANAGEMENT COST & USAGE REVIEW for the executive board. Cover the whole estate in one pass: total spend "
+            "and trend, the share of spend by service category, compute cost versus utilisation, storage cost by access "
+            "tier and its growth, network and data-egress cost, security and monitoring cost, the Production versus "
+            "Non-Production split, and the savings position including what has actually been realized. The headline "
+            "states total spend, the single largest category and the biggest efficiency opportunity."
+        ),
+    },
+    "subscriptions_mg": {
+        "label": "Subscription & Management Group",
+        "subtitle": "Cost by management group and subscription, growth rates and governance gaps",
+        "sections": ["subscriptions", "management_groups", "governance", "spend_overview"],
+        "mgmt": True,
+        "focus": (
+            "A SUBSCRIPTION & MANAGEMENT GROUP report about how spend distributes across the tenant hierarchy. Focus on "
+            "cost per management group (including descendant rollup), cost per subscription, the growth percentage of "
+            "each subscription, and governance gaps — subscriptions with no management-group assignment, zero-spend "
+            "subscriptions and disabled subscriptions still incurring charges. The headline states the largest "
+            "management group by rollup cost and the number of governance exceptions."
+        ),
+    },
+    "resource_groups": {
+        "label": "Resource Group Cost",
+        "subtitle": "Cost, growth and density per resource group, split by environment",
+        "sections": ["resource_groups", "environments", "spend_overview"],
+        "mgmt": True,
+        "focus": (
+            "A RESOURCE GROUP COST report. Focus on the costliest resource groups, their growth rate, how many "
+            "resources each contains versus what it costs (cost-per-resource density), the idle spend inside each, and "
+            "the Production versus Non-Production split. Call out groups where a large cost sits on very few resources "
+            "and groups where non-production spend is disproportionate. The headline states the top resource group and "
+            "the non-production share."
+        ),
+    },
+    "service_categories": {
+        "label": "Azure Service Category",
+        "subtitle": "Percentage of spend by service category across the estate",
+        "sections": ["service_categories", "spend_overview", "subscriptions"],
+        "mgmt": True,
+        "focus": (
+            "An AZURE SERVICE CATEGORY report about what proportion of spend goes to each class of service: Virtual "
+            "Machines, Azure SQL / Cosmos DB, Storage Accounts, Firewall / Load Balancer, Log Analytics / Sentinel and "
+            "the remainder. Give the percentage share of every category and comment on whether the mix is what a "
+            "well-run estate should look like. The headline states the dominant category and its share."
+        ),
+    },
+    "compute": {
+        "label": "Virtual Machines — Cost & Utilization",
+        "subtitle": "VM spend, power state, CPU and memory utilisation and underutilised capacity",
+        "sections": ["compute", "savings_roi", "spend_overview"],
+        "mgmt": True,
+        "focus": (
+            "A VIRTUAL MACHINE COST & UTILIZATION report. Focus on total VM spend, how many VMs are running versus "
+            "stopped and what each group costs, the cost of idle VMs, average CPU and memory utilisation, the "
+            "percentage of VMs that are underutilised and the specific VMs where high cost meets low utilisation. "
+            "Recommend rightsizing or decommissioning by name with the dollar impact. The headline states the VM spend "
+            "and the share of it that is underutilised."
+        ),
+    },
+    "storage": {
+        "label": "Storage Cost & Growth",
+        "subtitle": "Storage spend by access tier, capacity growth and orphaned disks and snapshots",
+        "sections": ["storage", "savings_roi", "spend_overview"],
+        "mgmt": True,
+        "focus": (
+            "A STORAGE COST & GROWTH report. Focus on total storage spend, how it splits across Hot, Cool, Cold and "
+            "Archive access tiers, the measured capacity growth rate in GB per month, and the cost of orphaned disks "
+            "and snapshots. Recommend lifecycle-management and tiering actions where hot-tier data is not being read, "
+            "and cleanup where unattached disks or snapshots persist. The headline states storage spend, the growth "
+            "rate and the reclaimable amount."
+        ),
+    },
+    "network": {
+        "label": "Network & Data Egress Cost",
+        "subtitle": "Network spend, data egress, inter-region transfer and the costliest network resources",
+        "sections": ["network", "spend_overview"],
+        "mgmt": True,
+        "focus": (
+            "A NETWORK & DATA EGRESS COST report. Focus on total network spend, the portion that is data egress "
+            "(including the gigabytes transferred), inter-region traffic cost, and the individual VNets, gateways, "
+            "firewalls and load balancers that cost the most. Comment on whether egress volume suggests chatty "
+            "cross-region architecture or unnecessary internet-bound traffic. The headline states network spend and the "
+            "egress share of it."
+        ),
+    },
+    "paas": {
+        "label": "Platform Services (PaaS) Cost",
+        "subtitle": "Managed-service spend by service and by environment",
+        "sections": ["service_categories", "environments", "spend_overview", "subscriptions"],
+        "mgmt": True,
+        "focus": (
+            "A PLATFORM SERVICES (PaaS) COST report about managed services — databases, app services, functions, "
+            "integration, containers and AI services. Focus on cost per PaaS service and the split of that spend "
+            "between Production and Non-Production. Call out non-production platform spend that could be scaled down or "
+            "scheduled off. The headline states total PaaS spend and the non-production share."
+        ),
+    },
+    "security_monitoring": {
+        "label": "Security & Monitoring Cost",
+        "subtitle": "Defender and Sentinel spend, log ingestion volume and cost per GB",
+        "sections": ["security_monitoring", "spend_overview"],
+        "mgmt": True,
+        "focus": (
+            "A SECURITY & MONITORING COST report. Focus on total security spend broken down by service (Defender plans, "
+            "Sentinel, Key Vault), the volume of data ingested into Log Analytics and Sentinel, the derived cost per "
+            "gigabyte ingested, and retention cost. Comment on whether ingestion volume justifies its cost and where "
+            "table-level retention or basic-tier ingestion would reduce it. The headline states security spend and the "
+            "cost per GB ingested."
+        ),
+    },
+    "savings_roi": {
+        "label": "Savings, Realization & ROI",
+        "subtitle": "Identified versus realized savings, capture rate and return on optimisation effort",
+        "sections": ["savings_roi", "savings", "spend_overview"],
+        "mgmt": True,
+        "focus": (
+            "A SAVINGS REALIZATION & ROI report about whether optimisation is actually delivering. Focus on savings "
+            "identified, how much has been accepted, how much has been implemented, and how much has been MEASURED as "
+            "realized by comparing each action's baseline cost against the resource's cost afterwards. Report the "
+            "capture rate (realized divided by identified) and the return on the engineering effort spent. Where the "
+            "capture rate is low, explain what is stalling in the pipeline. The headline states realized savings and "
+            "ROI percentage."
+        ),
+    },
 }
 
 
@@ -113,6 +247,106 @@ def _f(v: Any, default: float = 0.0) -> float:
 
 def _pct(part: float, whole: float) -> Optional[float]:
     return round(part / whole * 100.0, 1) if whole and whole > 0 else None
+
+
+def _gather_mgmt_facts(subscription_ids: List[str], days: int = 30) -> Dict[str, Any]:
+    """Facts for the management review categories.
+
+    Sourced from the management-dashboard services (meter grain, utilisation
+    snapshots, savings ledger). Every block degrades to an `available: False`
+    payload rather than raising, so a report still renders when a collector has
+    not run yet."""
+    subs = [s for s in (subscription_ids or []) if s] or None
+    out: Dict[str, Any] = {}
+
+    def _safe(name: str, fn, default):
+        try:
+            return fn()
+        except Exception as exc:
+            logger.warning("FinOps report: %s facts unavailable: %s", name, exc)
+            return default
+
+    try:
+        from services import finops_dashboard_service as fd
+        from services import finops_meter_service as fm
+        from services import finops_savings_service as fs
+    except Exception as exc:
+        logger.warning("FinOps report: management services unavailable: %s", exc)
+        return {"service_categories": {"available": False}, "compute": {"available": False},
+                "storage": {"available": False}, "network": {"available": False},
+                "security_monitoring": {"available": False}, "environments": {"available": False},
+                "resource_groups": {"available": False}, "management_groups": {"available": False},
+                "savings_roi": {"available": False}, "governance": {"available": False}}
+
+    out["service_categories"] = _safe(
+        "service categories", lambda: fd.get_service_category_costs(days, subs), {"available": False})
+    out["compute"] = _safe(
+        "compute", lambda: fd.get_vm_cost_utilization(subs), {"available": False})
+    out["environments"] = _safe(
+        "environments", lambda: fd.get_environment_costs(subs), {"available": False})
+    out["resource_groups"] = _safe(
+        "resource groups", lambda: fd.get_resource_group_economics(subs, 25), {"available": False})
+    out["management_groups"] = _safe(
+        "management groups", lambda: fd.get_mgmt_group_costs(), {"available": False})
+    out["network"] = _safe(
+        "network", lambda: fm.get_network_costs(days, subs), {"available": False})
+    out["savings_roi"] = _safe(
+        "savings roi", lambda: fs.get_savings_rollup(), {"available": False})
+
+    tiers = _safe("storage tiers", lambda: fm.get_storage_tier_costs(days, subs), {"available": False})
+    growth = _safe("storage growth", lambda: fd.get_storage_growth(60, subs), {"available": False})
+    out["storage"] = {
+        "available": bool(tiers.get("available") or growth.get("available")),
+        "tiers": tiers.get("tiers", []),
+        "total_usd": tiers.get("total_usd", 0.0),
+        "growth_gb_per_month": growth.get("growth_gb_per_month", 0.0),
+        "current_gb": growth.get("current_gb", 0.0),
+        "growth_pct": growth.get("growth_pct", 0.0),
+        "series": growth.get("series", []),
+    }
+
+    security = _safe("security", lambda: fm.get_security_costs(days, subs), {"available": False})
+    ingestion = _safe("ingestion", lambda: fm.get_ingestion_costs(days, subs), {"available": False})
+    out["security_monitoring"] = {
+        "available": bool(security.get("available") or ingestion.get("available")),
+        "total_security_usd": security.get("total_usd", 0.0),
+        "by_service": security.get("by_service", []),
+        "ingestion_cost_usd": ingestion.get("ingestion_cost_usd", 0.0),
+        "ingested_gb": ingestion.get("ingested_gb", 0.0),
+        "cost_per_gb_usd": ingestion.get("cost_per_gb_usd", 0.0),
+        "retention_cost_usd": ingestion.get("retention_cost_usd", 0.0),
+    }
+
+    # Orphaned disks and snapshots come from the scan cache, not the warehouse.
+    orphans = {"available": False, "disks_usd": 0.0, "snapshots_usd": 0.0, "total_usd": 0.0, "items": []}
+    try:
+        from services import persistence_service as _ps
+        snap = _ps.load_latest_dashboard() or {}
+        for r in (snap.get("resources") or []):
+            rt = str(r.get("resource_type", "") or "").lower()
+            is_snap = "snapshots" in rt
+            if not (r.get("is_orphan") or is_snap):
+                continue
+            cost = _f(r.get("cost_current_month"))
+            if is_snap:
+                orphans["snapshots_usd"] += cost
+            elif "disks" in rt:
+                orphans["disks_usd"] += cost
+            else:
+                continue
+            orphans["items"].append({"name": r.get("resource_name"), "type": rt,
+                                     "resource_group": r.get("resource_group"), "cost": cost})
+        orphans["disks_usd"] = round(orphans["disks_usd"], 2)
+        orphans["snapshots_usd"] = round(orphans["snapshots_usd"], 2)
+        orphans["total_usd"] = round(orphans["disks_usd"] + orphans["snapshots_usd"], 2)
+        orphans["items"].sort(key=lambda x: -x["cost"])
+        orphans["items"] = orphans["items"][:25]
+        orphans["available"] = bool(orphans["items"])
+    except Exception as exc:
+        logger.warning("FinOps report: orphan storage facts unavailable: %s", exc)
+    out["storage"]["orphans"] = orphans
+
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -318,7 +552,84 @@ def _gather_facts(
             "by_service": [{"name": s["name"], "cost": s["cost"]} for s in services if s.get("name") != "Other"],
         },
     }
+
+    # Management review categories pull from the meter grain, utilisation snapshots
+    # and savings ledger. Only gathered when the report type needs them so the
+    # existing report types keep their current cost of generation.
+    if (REPORT_TYPES.get(report_type) or {}).get("mgmt"):
+        facts.update(_gather_mgmt_facts(subs))
+        facts["governance"] = _gather_governance_facts(subscriptions)
+
     return facts
+
+
+def _gather_governance_facts(subscriptions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Subscription governance exceptions for the subscription/MG report.
+
+    Assignment is read from the persisted MG rollup. If the hierarchy was never
+    collected we report unavailable rather than guessing — claiming "0 unassigned"
+    from missing data would be a fabricated finding."""
+    try:
+        from services import finops_dashboard_service as fd
+
+        sub_costs: Dict[str, float] = {}
+        for s in subscriptions:
+            sid = s.get("id") or s.get("subscription_id") or ""
+            if sid:
+                sub_costs[sid] = _f(s.get("total"))
+
+        assigned: List[str] = []
+        hierarchy_known = False
+        try:
+            with fd._conn() as con:
+                row = con.execute("SELECT MAX(billing_month) FROM finops_mgmt_group_costs").fetchone()
+                hierarchy_known = bool(row and row[0])
+        except Exception:
+            hierarchy_known = False
+
+        if not hierarchy_known:
+            return {"available": False,
+                    "reason": "management-group hierarchy not collected — assignment cannot be determined"}
+
+        # The rollup stores counts, not ids; re-read the live hierarchy for ids.
+        try:
+            from services.azure_auth import get_credential
+            import json as _json, urllib.request as _rq
+            token = get_credential().get_token("https://management.azure.com/.default").token
+
+            def _get(path):
+                req = _rq.Request("https://management.azure.com" + path,
+                                  headers={"Authorization": f"Bearer {token}"})
+                with _rq.urlopen(req, timeout=30) as r:
+                    return _json.loads(r.read().decode())
+
+            listing = _get("/providers/Microsoft.Management/managementGroups?api-version=2020-05-01")
+            vals = listing.get("value") or []
+            if vals:
+                tree = _get(f"/providers/Microsoft.Management/managementGroups/{vals[0]['name']}"
+                            "?api-version=2020-05-01&$expand=children&$recurse=true")
+
+                def walk(node):
+                    props = node.get("properties") or node
+                    for ch in (props.get("children") or []):
+                        ctype = (ch.get("type") or "").lower()
+                        if "subscription" in ctype and ch.get("name"):
+                            assigned.append(ch["name"])
+                        elif "managementgroup" in ctype:
+                            walk(ch)
+                walk(tree)
+        except Exception as exc:
+            logger.warning("FinOps report: MG assignment lookup failed: %s", exc)
+            return {"available": False,
+                    "reason": "management-group hierarchy unreadable — assignment cannot be determined"}
+
+        subs_in = [{"subscription_id": (s.get("id") or s.get("subscription_id") or ""),
+                    "display_name": s.get("name") or "",
+                    "state": s.get("state") or "Enabled"} for s in subscriptions]
+        return fd.find_orphan_subscriptions(subs_in, assigned, sub_costs)
+    except Exception as exc:
+        logger.warning("FinOps report: governance facts unavailable: %s", exc)
+        return {"available": False, "reason": str(exc)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -401,6 +712,155 @@ def _kpis_for(rt: str, f: Dict[str, Any]) -> List[Dict[str, str]]:
             k("Biggest Decrease", _fmt_usd(down.get("delta_usd")), str(down.get("name") or "—")),
             forecast,
         ]
+
+    # ── Management review categories ─────────────────────────────────────────
+    cat = f.get("service_categories", {}) or {}
+    vm = f.get("compute", {}) or {}
+    sto = f.get("storage", {}) or {}
+    net = f.get("network", {}) or {}
+    secm = f.get("security_monitoring", {}) or {}
+    envs = f.get("environments", {}) or {}
+    rgs = f.get("resource_groups", {}) or {}
+    mgs = f.get("management_groups", {}) or {}
+    gov = f.get("governance", {}) or {}
+    roi = f.get("savings_roi", {}) or {}
+
+    def _env_cost(name: str) -> float:
+        for e in (envs.get("environments") or []):
+            if e.get("environment") == name:
+                return _f(e.get("cost_usd"))
+        return 0.0
+
+    def _top_cat() -> Dict[str, Any]:
+        cats = cat.get("categories") or []
+        return cats[0] if cats else {}
+
+    if rt == "management":
+        tc = _top_cat()
+        return [
+            spend, forecast,
+            k("Top Category", str(tc.get("category") or "—"),
+              f"{tc.get('cost_pct', 0)}% of spend" if tc else "—"),
+            k("VM Spend", _fmt_usd(vm.get("total_vm_cost_usd")),
+              f"{vm.get('underutilized_pct', 0)}% underutilised"),
+            k("Storage Growth", f"{sto.get('growth_gb_per_month', 0)} GB/mo",
+              _fmt_usd(sto.get("total_usd")) + " storage spend"),
+            k("Realized Savings", _fmt_usd(roi.get("realized_monthly_usd")) + "/mo",
+              (f"ROI {roi.get('roi_pct')}%" if roi.get("roi_available") else "not yet measured")),
+        ]
+    if rt == "subscriptions_mg":
+        mg_list = mgs.get("management_groups") or []
+        top_mg = mg_list[0] if mg_list else {}
+        return [
+            spend,
+            k("Management Groups", str(len(mg_list)), "in hierarchy"),
+            k("Top Group", str(top_mg.get("mg_name") or "—"),
+              _fmt_usd(top_mg.get("rollup_cost_usd")) + " rollup" if top_mg else "—"),
+            k("Subscriptions", str(f.get("subscription_count", 0)), "with billable spend"),
+            k("Unassigned Subs", str(gov.get("unassigned_count", 0)), "outside any group"),
+            k("Zero-Spend Subs", str(gov.get("zero_spend_count", 0)), "cleanup candidates"),
+        ]
+    if rt == "resource_groups":
+        prod, nonprod = _env_cost("Production"), _env_cost("Non-Production")
+        rg_list = rgs.get("resource_groups") or []
+        top_rg = rg_list[0] if rg_list else {}
+        return [
+            spend,
+            k("Resource Groups", str(rgs.get("rg_count", 0)), "with spend"),
+            k("Top Group", str(top_rg.get("resource_group") or "—"),
+              _fmt_usd(top_rg.get("cost_usd")) if top_rg else "—"),
+            k("Production", _fmt_usd(prod), "classified prod spend"),
+            k("Non-Production", _fmt_usd(nonprod),
+              (f"{round(nonprod / (prod + nonprod) * 100)}% of classified" if (prod + nonprod) else "—")),
+            k("Idle in Groups", _fmt_usd(sum(_f(r.get("idle_cost_usd")) for r in rg_list)), "reclaimable"),
+        ]
+    if rt == "service_categories":
+        cats = cat.get("categories") or []
+        out = [spend, k("Categories", str(len(cats)), "with spend")]
+        for c in cats[:4]:
+            out.append(k(str(c.get("category")), _fmt_usd(c.get("cost_usd")), f"{c.get('cost_pct')}% of spend"))
+        while len(out) < 6:
+            out.append(forecast if len(out) == 2 else k("—", "—", "no further categories"))
+        return out[:6]
+    if rt == "compute":
+        return [
+            k("Total VM Spend", _fmt_usd(vm.get("total_vm_cost_usd")), f"{vm.get('vm_count', 0)} VMs"),
+            k("Running / Stopped", f"{vm.get('running_count', 0)} / {vm.get('stopped_count', 0)}",
+              _fmt_usd(vm.get("stopped_cost_usd")) + " on stopped"),
+            k("Idle VM Cost", _fmt_usd(vm.get("idle_cost_usd")), "deallocated or inactive"),
+            k("Avg CPU", (f"{vm.get('avg_cpu_pct')}%" if vm.get("avg_cpu_pct") is not None else "—"), "30-day average"),
+            k("Avg Memory", (f"{vm.get('avg_memory_pct')}%" if vm.get("avg_memory_pct") is not None else "—"),
+              f"{vm.get('memory_coverage_pct', 0)}% of VMs reporting"),
+            k("% Underutilised", f"{vm.get('underutilized_pct', 0)}%",
+              _fmt_usd(vm.get("underutilized_cost_usd")) + " at stake"),
+        ]
+    if rt == "storage":
+        orph = (sto.get("orphans") or {})
+        tiers = sto.get("tiers") or []
+        top_tier = tiers[0] if tiers else {}
+        return [
+            k("Storage Spend", _fmt_usd(sto.get("total_usd")), "metered storage"),
+            k("Largest Tier", str(top_tier.get("tier") or "—"),
+              (f"{top_tier.get('cost_pct')}% of storage" if top_tier else "—")),
+            k("Capacity", f"{sto.get('current_gb', 0)} GB", "current used"),
+            k("Growth", f"{sto.get('growth_gb_per_month', 0)} GB/mo", f"{sto.get('growth_pct', 0)}% over window"),
+            k("Orphaned Disks", _fmt_usd(orph.get("disks_usd")), "unattached"),
+            k("Orphaned Snapshots", _fmt_usd(orph.get("snapshots_usd")), "reclaimable"),
+        ]
+    if rt == "network":
+        tops = net.get("top_meters") or []
+        return [
+            k("Network Spend", _fmt_usd(net.get("total_usd")), "metered network"),
+            k("Data Egress", _fmt_usd(net.get("egress_usd")), f"{net.get('egress_gb', 0)} GB out"),
+            k("Inter-Region", _fmt_usd(net.get("inter_region_usd")), f"{net.get('inter_region_gb', 0)} GB"),
+            k("Egress Share", (f"{round(_f(net.get('egress_usd')) / _f(net.get('total_usd')) * 100)}%"
+                               if _f(net.get("total_usd")) else "—"), "of network spend"),
+            k("Other Network", _fmt_usd(net.get("other_network_usd")), "gateways, LB, firewall"),
+            k("Top Meter", str((tops[0] or {}).get("meter_name") or "—") if tops else "—",
+              _fmt_usd((tops[0] or {}).get("cost_usd")) if tops else "—"),
+        ]
+    if rt == "security_monitoring":
+        svcs = secm.get("by_service") or []
+        top_svc = svcs[0] if svcs else {}
+        return [
+            k("Security Spend", _fmt_usd(secm.get("total_security_usd")), "Defender, Sentinel, Key Vault"),
+            k("Top Security Service", str(top_svc.get("service") or "—"),
+              _fmt_usd(top_svc.get("cost_usd")) if top_svc else "—"),
+            k("Ingestion Cost", _fmt_usd(secm.get("ingestion_cost_usd")), "Log Analytics / Sentinel"),
+            k("GB Ingested", f"{secm.get('ingested_gb', 0)} GB", "over the window"),
+            k("Cost per GB", (f"${secm.get('cost_per_gb_usd')}" if secm.get("cost_per_gb_usd") else "—"),
+              "derived from metered usage"),
+            k("Retention Cost", _fmt_usd(secm.get("retention_cost_usd")), "beyond included period"),
+        ]
+    if rt == "paas":
+        prod, nonprod = _env_cost("Production"), _env_cost("Non-Production")
+        cats = cat.get("categories") or []
+        paas_names = ("Azure SQL / Cosmos DB", "App / Web Services", "Containers / Kubernetes",
+                      "AI / Machine Learning")
+        paas_total = sum(_f(c.get("cost_usd")) for c in cats if c.get("category") in paas_names)
+        return [
+            spend,
+            k("PaaS Spend", _fmt_usd(paas_total), "managed services"),
+            k("PaaS Share", (f"{round(paas_total / f['total_30d'] * 100)}%" if f.get("total_30d") else "—"),
+              "of estate spend"),
+            k("Production", _fmt_usd(prod), "classified prod"),
+            k("Non-Production", _fmt_usd(nonprod),
+              (f"{round(nonprod / (prod + nonprod) * 100)}% of classified" if (prod + nonprod) else "—")),
+            forecast,
+        ]
+    if rt == "savings_roi":
+        return [
+            k("Identified", _fmt_usd(roi.get("identified_monthly_usd")) + "/mo",
+              _fmt_usd(roi.get("identified_annualized_usd")) + "/yr"),
+            k("Potential (open)", _fmt_usd(roi.get("potential_monthly_usd")), "not yet actioned"),
+            k("Accepted", _fmt_usd(roi.get("accepted_monthly_usd")), "approved, pending work"),
+            k("Realized", _fmt_usd(roi.get("realized_monthly_usd")) + "/mo",
+              _fmt_usd(roi.get("realized_annualized_usd")) + "/yr measured"),
+            k("Capture Rate", f"{roi.get('capture_rate_pct', 0)}%", "realized / identified"),
+            k("ROI", (f"{roi.get('roi_pct')}%" if roi.get("roi_available") else "Not measured"),
+              f"impl. cost {_fmt_usd(roi.get('implementation_cost_usd'))}"),
+        ]
+
     # executive (default) — balanced overview
     return [
         spend, forecast,
@@ -479,6 +939,115 @@ def _grounding_block(rt: str, f: Dict[str, Any]) -> str:
         for c in car_subs[:8]:
             L.append(f"    - {c['subscription']} | {c.get('management_group') or '-'} | "
                      f"unprotected {_fmt_usd(c['unprotected_usd'])} | untagged {_fmt_usd(c['untagged_usd'])}")
+
+    # ── Management review facts (only present for the mgmt report types) ─────
+    cat = f.get("service_categories") or {}
+    if cat.get("available"):
+        L.append("  Spend by service category: " + "; ".join(
+            f"{c['category']} {_fmt_usd(c['cost_usd'])} ({c['cost_pct']}%)"
+            for c in (cat.get("categories") or [])[:10]))
+
+    vm = f.get("compute") or {}
+    if vm.get("available"):
+        L.append(f"  Virtual machines: {vm.get('vm_count', 0)} VMs, total {_fmt_usd(vm.get('total_vm_cost_usd'))}; "
+                 f"{vm.get('running_count', 0)} running ({_fmt_usd(vm.get('running_cost_usd'))}), "
+                 f"{vm.get('stopped_count', 0)} stopped ({_fmt_usd(vm.get('stopped_cost_usd'))}); "
+                 f"idle cost {_fmt_usd(vm.get('idle_cost_usd'))}; "
+                 f"avg CPU {vm.get('avg_cpu_pct')}%, avg memory {vm.get('avg_memory_pct')}% "
+                 f"(memory reported for {vm.get('memory_coverage_pct', 0)}% of VMs); "
+                 f"{vm.get('underutilized_pct', 0)}% of running VMs underutilised "
+                 f"({_fmt_usd(vm.get('underutilized_cost_usd'))}).")
+        top_vms = sorted((vm.get("vms") or []), key=lambda v: -(v.get("cost_month_usd") or 0))[:8]
+        if top_vms:
+            L.append("  Costliest VMs [name | size | state | cost | CPU | memory]:")
+            for v in top_vms:
+                L.append(f"    - {v.get('resource_name')} | {v.get('sku') or '-'} | {v.get('power_state')} | "
+                         f"{_fmt_usd(v.get('cost_month_usd'))} | CPU {v.get('avg_cpu_pct')}% | "
+                         f"mem {v.get('avg_memory_pct')}%")
+
+    sto = f.get("storage") or {}
+    if sto.get("available"):
+        tiers = sto.get("tiers") or []
+        if tiers:
+            L.append("  Storage by access tier: " + "; ".join(
+                f"{t['tier']} {_fmt_usd(t['cost_usd'])} ({t.get('cost_pct', 0)}%)" for t in tiers))
+        L.append(f"  Storage capacity: {sto.get('current_gb', 0)} GB now, growing "
+                 f"{sto.get('growth_gb_per_month', 0)} GB/month ({sto.get('growth_pct', 0)}% over the window).")
+        orph = sto.get("orphans") or {}
+        if orph.get("available"):
+            L.append(f"  Orphaned storage: unattached disks {_fmt_usd(orph.get('disks_usd'))}, "
+                     f"snapshots {_fmt_usd(orph.get('snapshots_usd'))}, "
+                     f"total reclaimable {_fmt_usd(orph.get('total_usd'))}.")
+
+    net = f.get("network") or {}
+    if net.get("available"):
+        L.append(f"  Network: total {_fmt_usd(net.get('total_usd'))}; data egress "
+                 f"{_fmt_usd(net.get('egress_usd'))} over {net.get('egress_gb', 0)} GB; inter-region "
+                 f"{_fmt_usd(net.get('inter_region_usd'))} over {net.get('inter_region_gb', 0)} GB; "
+                 f"other network {_fmt_usd(net.get('other_network_usd'))}.")
+        tops = net.get("top_meters") or []
+        if tops:
+            L.append("  Top network meters: " + "; ".join(
+                f"{t['meter_name']} {_fmt_usd(t['cost_usd'])}" for t in tops[:6]))
+
+    secm = f.get("security_monitoring") or {}
+    if secm.get("available"):
+        L.append(f"  Security & monitoring: security spend {_fmt_usd(secm.get('total_security_usd'))}; "
+                 f"ingestion {_fmt_usd(secm.get('ingestion_cost_usd'))} for {secm.get('ingested_gb', 0)} GB "
+                 f"(${secm.get('cost_per_gb_usd', 0)}/GB); retention {_fmt_usd(secm.get('retention_cost_usd'))}.")
+        svcs = secm.get("by_service") or []
+        if svcs:
+            L.append("  Security spend by service: " + "; ".join(
+                f"{s['service']} {_fmt_usd(s['cost_usd'])}" for s in svcs[:6]))
+
+    envs = f.get("environments") or {}
+    if envs.get("available"):
+        L.append("  Environment split: " + "; ".join(
+            f"{e['environment']} {_fmt_usd(e['cost_usd'])} ({e.get('cost_pct', 0)}%, "
+            f"{e.get('resource_count', 0)} resources)" for e in (envs.get("environments") or [])))
+
+    rgs = f.get("resource_groups") or {}
+    if rgs.get("available"):
+        L.append(f"  Resource groups with spend: {rgs.get('rg_count', 0)}. "
+                 "Top groups [name | env | resources | cost | cost/resource | idle]:")
+        for r in (rgs.get("resource_groups") or [])[:10]:
+            L.append(f"    - {r['resource_group']} | {r.get('environment')} | {r.get('resource_count')} | "
+                     f"{_fmt_usd(r.get('cost_usd'))} | {_fmt_usd(r.get('cost_per_resource_usd'))} | "
+                     f"idle {_fmt_usd(r.get('idle_cost_usd'))}")
+
+    mgs = f.get("management_groups") or {}
+    if mgs.get("available"):
+        L.append("  Management groups [name | subscriptions | direct | rollup]:")
+        for m2 in (mgs.get("management_groups") or [])[:10]:
+            L.append(f"    - {m2['mg_name']} | {m2.get('subscription_count')} | "
+                     f"{_fmt_usd(m2.get('direct_cost_usd'))} | rollup {_fmt_usd(m2.get('rollup_cost_usd'))}")
+
+    gov = f.get("governance") or {}
+    if gov.get("available"):
+        unassigned = gov.get("unassigned_count")
+        unassigned_txt = (f"{unassigned} unassigned to a management group" if unassigned is not None
+                          else "unassigned count UNKNOWN (management-group hierarchy unreadable — "
+                               "do NOT state a number for it)")
+        L.append(f"  Subscription governance: {unassigned_txt}, "
+                 f"{gov.get('zero_spend_count', 0)} zero-spend, "
+                 f"{gov.get('disabled_with_cost_count', 0)} disabled but still billing "
+                 f"(of {gov.get('total_subscriptions', 0)} total).")
+    elif gov:
+        L.append(f"  Subscription governance: NOT AVAILABLE ({gov.get('reason', 'not collected')}) — "
+                 "do NOT report governance findings.")
+
+    roi = f.get("savings_roi") or {}
+    if roi.get("available"):
+        L.append(f"  Savings realization: identified {_fmt_usd(roi.get('identified_monthly_usd'))}/mo, "
+                 f"open {_fmt_usd(roi.get('potential_monthly_usd'))}, "
+                 f"accepted {_fmt_usd(roi.get('accepted_monthly_usd'))}, "
+                 f"REALIZED (measured) {_fmt_usd(roi.get('realized_monthly_usd'))}/mo "
+                 f"({_fmt_usd(roi.get('realized_annualized_usd'))}/yr); "
+                 f"capture rate {roi.get('capture_rate_pct', 0)}%; "
+                 f"implementation cost {_fmt_usd(roi.get('implementation_cost_usd'))}; "
+                 + (f"ROI {roi.get('roi_pct')}%." if roi.get("roi_available")
+                    else "ROI not yet measurable — nothing implemented has been measured."))
+
     return "\n".join(L)
 
 
@@ -494,7 +1063,12 @@ def _system_prompt(rt: str) -> str:
         "  • Every currency figure and percentage you reference MUST come verbatim from the "
         "AUTHORITATIVE COST FACTS block. Do NOT invent, estimate, extrapolate, annualize or alter any number.\n"
         "  • If a figure is not in the facts, do not state one — describe it qualitatively instead.\n"
-        "  • Never contradict the supplied totals, deltas or per-subscription figures.\n\n"
+        "  • Never contradict the supplied totals, deltas or per-subscription figures.\n"
+        "  • A section absent from the facts has NOT been collected. Say so plainly (e.g. 'meter-level "
+        "data has not been collected yet') and leave that section_narratives key an empty string. "
+        "Never infer, model or substitute a value for missing data, and never present an absence as a zero.\n"
+        "  • Where the facts explicitly say UNKNOWN or NOT AVAILABLE, repeat that as the finding — do not "
+        "resolve it with a guess.\n\n"
         "Write for a senior audience: clear, confident, no hype, no filler. Reference subscriptions by "
         "their friendly names. Tie cost to business outcomes (efficiency, risk, governance, forecast confidence).\n\n"
         "DEPTH: this is a board-level document — be thorough and analytical (comparable to a consultant-grade "
@@ -513,6 +1087,11 @@ def _system_prompt(rt: str) -> str:
         '     "spend_overview": "...", "cost_drivers": "why spend concentrates where it does", "subscriptions": "...",\n'
         '     "movers": "...", "savings": "...", "cost_at_risk": "...", "allocation": "...", "governance": "tagging/allocation/commitment governance posture",\n'
         '     "commitments": "...", "budgets": "...", "anomalies": "...", "financial_outlook": "forecast + run-rate trajectory and confidence",\n'
+        '     "service_categories": "what the category mix says about the estate", "compute": "VM cost vs utilisation and rightsizing",\n'
+        '     "storage": "tiering, growth trajectory and reclaimable storage", "network": "egress and inter-region traffic economics",\n'
+        '     "security_monitoring": "security spend and log-ingestion economics", "environments": "production vs non-production balance",\n'
+        '     "resource_groups": "resource-group concentration and density", "management_groups": "cost across the tenant hierarchy",\n'
+        '     "savings_roi": "realization pipeline, capture rate and return on effort",\n'
         '     "finops_maturity": "assessment of the estate against the FinOps Framework (Inform/Optimize/Operate)"\n'
         "  },\n"
         '  "scorecard": [\n'
@@ -685,4 +1264,13 @@ def generate_finops_report(
         "model": model,
         "generated_at": now.isoformat(),
     }
+
+    # Management review blocks — only present for those report types, so the
+    # existing six report shapes are unchanged.
+    if meta.get("mgmt"):
+        for block in ("service_categories", "compute", "storage", "network",
+                      "security_monitoring", "environments", "resource_groups",
+                      "management_groups", "savings_roi", "governance"):
+            report[block] = facts.get(block, {"available": False})
+
     return report

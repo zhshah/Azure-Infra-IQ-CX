@@ -245,6 +245,54 @@ def get_vm_power_states(
     return power_map, size_map
 
 
+# Cached {vm_size_lower: memory_gb} built from the Compute resource-SKUs catalogue.
+_VM_MEMORY_GB_CACHE: Dict[str, float] = {}
+_VM_MEMORY_FETCH_ATTEMPTED = False
+
+
+def get_vm_memory_gb_map(subscription_ids: Optional[List[str]] = None) -> Dict[str, float]:
+    """{vm_size_lower: memory_gb} from the Azure Compute SKU catalogue.
+
+    Needed to turn the 'Available Memory Bytes' platform metric into a memory
+    utilisation percentage. Fetched at most once per process — the catalogue is
+    large and static, and a failed fetch must not be retried once per VM."""
+    global _VM_MEMORY_FETCH_ATTEMPTED
+    if _VM_MEMORY_GB_CACHE or _VM_MEMORY_FETCH_ATTEMPTED:
+        return _VM_MEMORY_GB_CACHE
+    _VM_MEMORY_FETCH_ATTEMPTED = True
+    try:
+        credential = get_credential()
+        sub_ids = subscription_ids or get_subscription_ids()
+        if not sub_ids:
+            return _VM_MEMORY_GB_CACHE
+        client = ComputeManagementClient(credential, sub_ids[0])
+        for sku in client.resource_skus.list():
+            if (sku.resource_type or "").lower() != "virtualmachines" or not sku.name:
+                continue
+            for cap in (sku.capabilities or []):
+                if cap.name == "MemoryGB":
+                    try:
+                        _VM_MEMORY_GB_CACHE[sku.name.lower()] = float(cap.value)
+                    except (TypeError, ValueError):
+                        pass
+                    break
+        logger.info("VM memory catalogue loaded: %d sizes", len(_VM_MEMORY_GB_CACHE))
+    except Exception as exc:
+        logger.warning("VM memory catalogue fetch failed (memory %% stays blank): %s", exc)
+    return _VM_MEMORY_GB_CACHE
+
+
+def memory_used_pct(vm_size: Optional[str], available_bytes: Optional[float]) -> Optional[float]:
+    """Memory utilisation % from total RAM and the available-memory metric."""
+    if not vm_size or available_bytes is None:
+        return None
+    total_gb = get_vm_memory_gb_map().get(str(vm_size).lower())
+    if not total_gb or total_gb <= 0:
+        return None
+    used_gb = total_gb - (float(available_bytes) / (1024 ** 3))
+    return round(max(0.0, min(100.0, used_gb / total_gb * 100.0)), 1)
+
+
 def get_app_insights_links(
     resources: List[Dict],
     subscription_ids: Optional[List[str]] = None,

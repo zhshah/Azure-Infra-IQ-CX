@@ -272,6 +272,13 @@ export default function FinOpsOverview() {
   const optimOversized    = optim?.oversized    || []
   const optimUnderutilized = optim?.underutilized || []
   const optimOrphaned  = optim?.orphaned    || []
+  // Land on a tab that actually has findings. "Oversized" is empty whenever no VM
+  // carries a rightsizing recommendation (e.g. a fleet that is powered off), which
+  // made the whole panel look broken even with 39 idle resources one click away.
+  const optimCounts = { oversized: optimOversized.length, underutilized: optimUnderutilized.length, orphaned: optimOrphaned.length }
+  const activeOptimTab = optimCounts[optimTab] > 0
+    ? optimTab
+    : (['oversized', 'underutilized', 'orphaned'].find(k => optimCounts[k] > 0) || optimTab)
   const topSavings = (savings?.opportunities || []).slice(0, 5)
   const budgetAlerts = alerts?.alerts || []
 
@@ -733,9 +740,17 @@ export default function FinOpsOverview() {
                 style={{ background: 'var(--c-0f172a)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6, cursor: op.resource_id ? 'pointer' : 'default' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <span style={{ color: 'var(--c-e2e8f0)', fontSize: 11, fontWeight: 600, flex: 1, paddingRight: 8 }}>{op.resource_name || op.title || '—'}</span>
-                  <span style={{ color: 'var(--c-4ade80)', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtUsd(op.savings_usd ?? op.monthly_savings ?? 0)}/mo</span>
+                  <span style={{ color: 'var(--c-4ade80)', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtUsd(op.potential_savings_usd ?? op.savings_usd ?? op.monthly_savings ?? 0)}/mo</span>
                 </div>
-                <div style={{ color: 'var(--c-64748b)', fontSize: 10 }}>{op.recommendation || op.action || '—'}</div>
+                <div style={{ color: 'var(--c-64748b)', fontSize: 10 }}>{op.action || op.recommendation || '—'}</div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {op.category_label && (
+                    <span style={{ fontSize: 9, color: 'var(--c-94a3b8)', background: 'var(--c-1e293b)', borderRadius: 4, padding: '1px 5px' }}>{op.category_label}</span>
+                  )}
+                  {op.current_monthly_cost > 0 && (
+                    <span style={{ fontSize: 9, color: 'var(--c-475569)' }}>costs {fmtUsd(op.current_monthly_cost)}/mo</span>
+                  )}
+                </div>
                 {op.current_sku && op.rightsize_sku && (
                   <div style={{ color: 'var(--c-475569)', fontSize: 10 }}>
                     {op.current_sku} <ChevronRight size={10} style={{ display: 'inline' }} /> {op.rightsize_sku}
@@ -759,10 +774,10 @@ export default function FinOpsOverview() {
               { key: 'orphaned', label: `Orphaned (${optim?.orphaned_count ?? 0})`, color: 'var(--c-64748b)' },
             ].map(tab => (
               <button key={tab.key} onClick={() => setOptimTab(tab.key)} style={{
-                background: optimTab === tab.key ? 'var(--c-0f172a)' : 'none',
-                border: `1px solid ${optimTab === tab.key ? tab.color + '55' : 'var(--c-1e293b)'}`,
+                background: activeOptimTab === tab.key ? 'var(--c-0f172a)' : 'none',
+                border: `1px solid ${activeOptimTab === tab.key ? tab.color + '55' : 'var(--c-1e293b)'}`,
                 borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
-                color: optimTab === tab.key ? tab.color : 'var(--c-475569)', fontSize: 11,
+                color: activeOptimTab === tab.key ? tab.color : 'var(--c-475569)', fontSize: 11,
               }}>{tab.label}</button>
             ))}
           </div>
@@ -770,12 +785,16 @@ export default function FinOpsOverview() {
 
         {/* Tab content */}
         {(() => {
-          const rows = optimTab === 'oversized' ? optimOversized
-            : optimTab === 'underutilized' ? optimUnderutilized
+          const rows = activeOptimTab === 'oversized' ? optimOversized
+            : activeOptimTab === 'underutilized' ? optimUnderutilized
             : optimOrphaned
           if (!rows || rows.length === 0) return (
-            <div style={{ color: 'var(--c-475569)', fontSize: 12, padding: '8px 0' }}>
-              No {optimTab} resources found.
+            <div style={{ color: 'var(--c-475569)', fontSize: 12, padding: '8px 0', lineHeight: 1.6 }}>
+              {activeOptimTab === 'oversized'
+                ? 'No rightsizing candidates. Azure only proposes a smaller SKU for a VM that has been running long enough to produce CPU and memory history — a powered-off or newly-created VM produces none.'
+                : activeOptimTab === 'underutilized'
+                  ? 'Nothing is running below the utilisation threshold with meaningful spend.'
+                  : 'No unattached disks, NICs or public IPs were found.'}
             </div>
           )
           return (
@@ -784,8 +803,8 @@ export default function FinOpsOverview() {
                 <thead>
                   <tr>
                     {['Resource', 'Type', 'Resource Group',
-                      optimTab === 'oversized' ? 'Current SKU → Recommended' : optimTab === 'underutilized' ? 'Avg CPU %' : 'Days Inactive',
-                      'Monthly Cost', optimTab !== 'orphaned' ? 'Savings %' : 'Recommendation',
+                      activeOptimTab === 'oversized' ? 'Current SKU → Recommended' : activeOptimTab === 'underutilized' ? 'Utilisation' : 'Days Inactive',
+                      'Monthly Cost', activeOptimTab === 'oversized' ? 'Savings %' : 'Recommendation',
                     ].map(h => (
                       <th key={h} style={{ textAlign: 'left', color: 'var(--c-475569)', padding: '5px 8px', borderBottom: '1px solid var(--c-1e293b)', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
@@ -802,17 +821,23 @@ export default function FinOpsOverview() {
                       <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{(r.resource_type || '').split('/').pop()}</td>
                       <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{r.resource_group}</td>
                       <td style={{ padding: '6px 8px', color: 'var(--c-94a3b8)' }}>
-                        {optimTab === 'oversized'
+                        {activeOptimTab === 'oversized'
                           ? <span>{r.sku || r.current_sku || '—'} <ChevronRight size={10} style={{ display: 'inline' }} /> <span style={{ color: 'var(--c-4ade80)' }}>{r.rightsize_sku || '—'}</span></span>
-                          : optimTab === 'underutilized'
-                            ? <span style={{ color: (r.avg_cpu_pct ?? 100) < 10 ? '#ef4444' : '#f59e0b' }}>{r.avg_cpu_pct != null ? r.avg_cpu_pct.toFixed(1) + '%' : '—'}</span>
+                          : activeOptimTab === 'underutilized'
+                            ? (r.power_state === 'deallocated' || r.power_state === 'stopped'
+                              ? <span style={{ color: '#f59e0b' }} title="Powered off — it emits no live CPU, so any percentage would be stale">Stopped</span>
+                              : r.utilization_pct != null
+                                ? <span style={{ color: r.utilization_pct < 5 ? '#ef4444' : '#f59e0b' }}>{r.utilization_pct.toFixed(2)}%</span>
+                                : r.avg_cpu_pct != null
+                                  ? <span style={{ color: r.avg_cpu_pct < 10 ? '#ef4444' : '#f59e0b' }}>{r.avg_cpu_pct.toFixed(1)}%</span>
+                                  : <span style={{ color: 'var(--c-64748b)' }}>{r.days_since_active ? `idle ${r.days_since_active}d` : '—'}</span>)
                             : r.days_since_active != null ? `${r.days_since_active}d` : '—'}
                       </td>
                       <td style={{ padding: '6px 8px', color: 'var(--c-e2e8f0)' }}>{fmtUsd(r.cost_current_month)}</td>
                       <td style={{ padding: '6px 8px' }}>
-                        {optimTab !== 'orphaned'
-                          ? <span style={{ color: 'var(--c-4ade80)', fontWeight: 600 }}>{r.rightsize_savings_pct != null ? r.rightsize_savings_pct.toFixed(0) + '%' : '—'}</span>
-                          : <span style={{ color: 'var(--c-94a3b8)' }}>{r.recommendation || 'Review & remove'}</span>}
+                        {activeOptimTab === 'oversized'
+                          ? <span style={{ color: 'var(--c-4ade80)', fontWeight: 600 }}>{r.savings_pct != null ? r.savings_pct.toFixed(0) + '%' : '—'}</span>
+                          : <span style={{ color: 'var(--c-94a3b8)' }} title={r.recommendation || ''}>{r.recommendation || (activeOptimTab === 'orphaned' ? 'Review & remove' : '—')}</span>}
                       </td>
                     </tr>
                   ))}
