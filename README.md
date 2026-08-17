@@ -870,6 +870,7 @@ Use this when you already have a Provisioned Throughput (PTU) or dedicated Azure
     -OpenAIMode           "Existing" `
     -OpenAIResourceName   "<existing-openai-resource-name>" `
     -OpenAIResourceGroup  "<existing-openai-rg>" `
+    -OpenAISubscriptionId "<existing-openai-subscription-id>" `
     -OpenAIDeploymentName "<existing-ptu-deployment-name>" `
     `
     -DeploymentMode                  "Private" `
@@ -884,7 +885,8 @@ Use this when you already have a Provisioned Throughput (PTU) or dedicated Azure
 In `Existing` mode:
 - No new OpenAI account or model deployment is created
 - `-OpenAILocation` is not required and is never prompted
-- The script resolves the endpoint and key from the existing resource via `-OpenAIResourceName` + `-OpenAIResourceGroup`, or you can supply `-OpenAIEndpoint` + `-OpenAIKey` directly to bypass control-plane lookups (useful when the deploying identity cannot read the OpenAI resource)
+- **`-OpenAISubscriptionId` is required when the existing OpenAI resource lives in a different subscription than `-SubscriptionId`** (the common PTU case). If omitted, the script looks for the resource in `-SubscriptionId`, fails to find it, and exits — so always set it for cross-subscription deployments
+- The script resolves the endpoint and key from the existing resource via `-OpenAIResourceName` + `-OpenAIResourceGroup` (+ `-OpenAISubscriptionId`), or you can supply `-OpenAIEndpoint` + `-OpenAIKey` directly to bypass control-plane lookups (useful when the deploying identity cannot read the OpenAI resource)
 - RBAC (`Cognitive Services OpenAI User`) is assigned to the App Service Managed Identity on the existing OpenAI resource
 
 ---
