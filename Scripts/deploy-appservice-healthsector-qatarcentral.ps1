@@ -1497,22 +1497,37 @@ if ($DeploySql) {
             Write-Success "Private Endpoint created: $sqlPeName"
         }
 
-        # Private DNS zone for SQL
-        $existingSqlDns = az network private-dns zone list --subscription $dnsZoneSubscriptionId --query "[?name=='$sqlDnsZoneName'].{Name:name, RG:resourceGroup}" -o json 2>$null | ConvertFrom-Json
-        if (-not ($existingSqlDns -and $existingSqlDns.Count -gt 0)) {
-            Write-Info "Creating Private DNS Zone: $sqlDnsZoneName..."
-            az network private-dns zone create `
-                --name $sqlDnsZoneName `
-                --resource-group $dnsZoneResourceGroup `
-                --subscription $dnsZoneSubscriptionId `
-                --output none 2>$null
-        } else {
-            $dnsZoneResourceGroup = $existingSqlDns[0].RG
+        # Private DNS zone for SQL — robustly pick the zone THIS VNet already resolves through.
+        # A VNet can be linked to only ONE zone per namespace. In hub / shared-DNS setups the
+        # VNet is often already linked to a 'privatelink.database.windows.net' zone; creating or
+        # linking a second same-named zone then fails with:
+        #   "A virtual network cannot be linked to multiple zones with overlapping namespaces".
+        # So: find the zone already linked to THIS VNet and reuse it; only create/link if none is.
+        $sqlZones = az network private-dns zone list --subscription $dnsZoneSubscriptionId --query "[?name=='$sqlDnsZoneName'].{RG:resourceGroup}" -o json 2>$null | ConvertFrom-Json
+        $sqlLinkedZoneRg = $null
+        foreach ($z in @($sqlZones)) {
+            $links = az network private-dns link vnet list --zone-name $sqlDnsZoneName --resource-group $z.RG --subscription $dnsZoneSubscriptionId --query "[].virtualNetwork.id" -o tsv 2>$null
+            if ($links -and (($links -split "`n") | Where-Object { $_.Trim() -ieq $vnetResourceId })) {
+                $sqlLinkedZoneRg = $z.RG
+                break
+            }
         }
 
-        $sqlDnsLinkName = "link-$VNetName-sql"
-        $sqlLinkExists = az network private-dns link vnet show --name $sqlDnsLinkName --zone-name $sqlDnsZoneName --resource-group $dnsZoneResourceGroup --subscription $dnsZoneSubscriptionId 2>&1
-        if ($LASTEXITCODE -ne 0) {
+        if ($sqlLinkedZoneRg) {
+            $dnsZoneResourceGroup = $sqlLinkedZoneRg
+            Write-Info "VNet already linked to '$sqlDnsZoneName' in RG '$dnsZoneResourceGroup' - reusing (no new link)."
+        } else {
+            if ($sqlZones -and @($sqlZones).Count -gt 0) {
+                $dnsZoneResourceGroup = @($sqlZones)[0].RG
+            } else {
+                Write-Info "Creating Private DNS Zone: $sqlDnsZoneName..."
+                az network private-dns zone create `
+                    --name $sqlDnsZoneName `
+                    --resource-group $dnsZoneResourceGroup `
+                    --subscription $dnsZoneSubscriptionId `
+                    --output none 2>$null
+            }
+            $sqlDnsLinkName = "link-$VNetName-sql"
             Write-Info "Linking SQL DNS Zone to VNet..."
             az network private-dns link vnet create `
                 --name $sqlDnsLinkName `
@@ -1521,7 +1536,7 @@ if ($DeploySql) {
                 --subscription $dnsZoneSubscriptionId `
                 --virtual-network $vnetResourceId `
                 --registration-enabled false `
-                --output none
+                --output none 2>$null
         }
 
         Write-Info "Creating DNS Zone Group for SQL Private Endpoint..."
@@ -1919,12 +1934,21 @@ if ($DeploymentMode -eq "Private") {
         exit 1
     }
 
-    # Route ALL outbound traffic (incl. DNS) through the VNet so privatelink zones resolve
+    # Route ALL outbound traffic (incl. DNS) through the VNet so privatelink zones resolve.
     Write-Info "Enabling route-all so outbound DNS uses the private DNS zones..."
     az webapp config set `
         --name $WebAppName `
         --resource-group $ResourceGroupName `
         --vnet-route-all-enabled true `
+        --output none 2>$null
+    # Belt-and-suspenders: some az CLI / API versions silently ignore the site-config
+    # property above ("WARNING: vnet_route_all_enabled is not a known attribute ... ignored"),
+    # leaving vnetRouteAllEnabled=false so private DNS never resolves. The WEBSITE_VNET_ROUTE_ALL
+    # app setting is honored across all versions, so set it too.
+    az webapp config appsettings set `
+        --name $WebAppName `
+        --resource-group $ResourceGroupName `
+        --settings "WEBSITE_VNET_ROUTE_ALL=1" `
         --output none 2>$null
 
     Write-Success "Web App connected to VNet: $VNetName / $AppServiceIntegrationSubnetName"
@@ -2089,6 +2113,17 @@ try {
     # Complete requirements at wwwroot root (Oryx installs these) + startup.sh
     Copy-Item (Join-Path $repoRoot "backend\requirements.txt") (Join-Path $staging "requirements.txt") -Force
     Copy-Item (Join-Path $repoRoot "startup.sh") (Join-Path $staging "startup.sh") -Force
+
+    # Force LF on every staged shell script. A Windows checkout (or a customer editing
+    # on Windows) can introduce CRLF, which makes bash fail on Linux App Service with
+    # "Container exited with exit code 127 during startup". Normalizing here guarantees
+    # the deployed package always runs, regardless of the local working-copy line endings.
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    Get-ChildItem $staging -Recurse -Filter *.sh -File | ForEach-Object {
+        $shTxt = [System.IO.File]::ReadAllText($_.FullName)
+        $shTxt = $shTxt -replace "`r`n", "`n" -replace "`r", "`n"
+        [System.IO.File]::WriteAllText($_.FullName, $shTxt, $utf8NoBom)
+    }
 
     Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $zipPath -Force
     Write-Success "Deployment package created: $zipPath"

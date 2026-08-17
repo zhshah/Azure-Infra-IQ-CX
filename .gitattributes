@@ -1,0 +1,8 @@
+# Shell scripts MUST be LF so they run on Linux (App Service / containers).
+# Prevents Windows checkouts from introducing CRLF (which breaks bash -> exit 127).
+*.sh text eol=lf
+
+# Windows scripts stay CRLF
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
