@@ -2356,6 +2356,7 @@ $graphPermissions = @(
     @{ Name = "User.Read.All";        Id = "df021288-bdef-4463-88db-98f22de89214"; Purpose = "Read all user profiles and sign-in activity" },
     @{ Name = "Directory.Read.All";   Id = "7ab1d382-f21e-4acd-a863-ba3e13f7da61"; Purpose = "Read directory data (users, groups, roles)" },
     @{ Name = "Group.Read.All";       Id = "5b567255-7703-4780-807c-7be8301ae99b"; Purpose = "Read all groups and memberships" },
+    @{ Name = "Device.Read.All";      Id = "7438b122-aefc-4978-80ed-43db9fcc7715"; Purpose = "Read Entra-registered / Intune device inventory" },
     @{ Name = "Application.Read.All"; Id = "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30"; Purpose = "Read all app registrations" },
     @{ Name = "AuditLog.Read.All";    Id = "b0afded3-3588-46d8-8b3d-9842eff778da"; Purpose = "Read audit logs and sign-in reports" },
     @{ Name = "Policy.Read.All";      Id = "246dd0d5-5bd0-4def-940b-0421030a5b68"; Purpose = "Read Conditional Access policies" }
