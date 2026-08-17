@@ -931,11 +931,15 @@ if ($DeploymentMode -eq "Private") {
         Write-Info "DNS Zone '$openaiDnsZoneName' not found - will create"
     }
     
-    # Web App DNS Zone
+    # Web App DNS Zone. Track its RG SEPARATELY — it can live in a different RG than the
+    # OpenAI/SQL zone (e.g. a shared hub-DNS zone). Reusing one shared $dnsZoneResourceGroup for
+    # every zone makes the link/zone-group target the wrong RG (ParentResourceNotFound).
     $webappDnsZoneName = "privatelink.azurewebsites.net"
+    $webAppDnsZoneResourceGroup = $null
     $existingWebAppDns = az network private-dns zone list --subscription $dnsZoneSubscriptionId --query "[?name=='$webappDnsZoneName'].{Name:name, RG:resourceGroup}" -o json 2>$null | ConvertFrom-Json
     if ($existingWebAppDns -and $existingWebAppDns.Count -gt 0) {
         $dnsZoneWebAppFound = $true
+        $webAppDnsZoneResourceGroup = $existingWebAppDns[0].RG
         if (-not $dnsZoneResourceGroup) {
             $dnsZoneResourceGroup = $existingWebAppDns[0].RG
         }
@@ -2007,43 +2011,50 @@ if ($DeploymentMode -eq "Private") {
     # can be pushed via the public SCM/Kudu endpoint in Step 8. It is disabled in
     # Step 8c AFTER a successful code deployment, ending in a fully private posture.
     
-    # Create/Configure DNS Zone
-    if (-not $dnsZoneWebAppFound) {
-        Write-Info "Creating Private DNS Zone: $webAppDnsZoneName..."
-        az network private-dns zone create `
-            --name $webAppDnsZoneName `
-            --resource-group $dnsZoneResourceGroup `
-            --subscription $dnsZoneSubscriptionId `
-            --output none 2>$null
-        
-        if ($LASTEXITCODE -eq 0) {
-            Write-Success "Private DNS Zone created: $webAppDnsZoneName"
+    # Resolve the RG that actually holds the 'privatelink.azurewebsites.net' zone (it can live in a
+    # different RG than the OpenAI/SQL zone, e.g. a shared hub-DNS zone). Reuse the zone THIS VNet
+    # already resolves through; only create/link if none exists. Prevents ParentResourceNotFound
+    # (linking in the wrong RG) and "overlapping namespaces" (linking a second same-named zone).
+    $webAppZoneRg = if ($webAppDnsZoneResourceGroup) { $webAppDnsZoneResourceGroup } else { $dnsZoneResourceGroup }
+    $waZones = az network private-dns zone list --subscription $dnsZoneSubscriptionId --query "[?name=='$webAppDnsZoneName'].{RG:resourceGroup}" -o json 2>$null | ConvertFrom-Json
+    $waLinkedZoneRg = $null
+    foreach ($z in @($waZones)) {
+        $links = az network private-dns link vnet list --zone-name $webAppDnsZoneName --resource-group $z.RG --subscription $dnsZoneSubscriptionId --query "[].virtualNetwork.id" -o tsv 2>$null
+        if ($links -and (($links -split "`n") | Where-Object { $_.Trim() -ieq $vnetResourceId })) {
+            $waLinkedZoneRg = $z.RG
+            break
         }
     }
-    
-    # Link DNS Zone to VNet
-    $webAppDnsLinkName = "link-$VNetName-webapp"
-    $linkExists = az network private-dns link vnet show `
-        --name $webAppDnsLinkName `
-        --zone-name $webAppDnsZoneName `
-        --resource-group $dnsZoneResourceGroup `
-        --subscription $dnsZoneSubscriptionId 2>&1
-    
-    if ($LASTEXITCODE -ne 0) {
+
+    if ($waLinkedZoneRg) {
+        $webAppZoneRg = $waLinkedZoneRg
+        Write-Info "VNet already linked to '$webAppDnsZoneName' in RG '$webAppZoneRg' - reusing (no new link)."
+    } else {
+        if ($waZones -and @($waZones).Count -gt 0) {
+            $webAppZoneRg = @($waZones)[0].RG
+        } else {
+            Write-Info "Creating Private DNS Zone: $webAppDnsZoneName..."
+            az network private-dns zone create `
+                --name $webAppDnsZoneName `
+                --resource-group $webAppZoneRg `
+                --subscription $dnsZoneSubscriptionId `
+                --output none 2>$null
+        }
+        $webAppDnsLinkName = "link-$VNetName-webapp"
         Write-Info "Linking DNS Zone to VNet..."
         az network private-dns link vnet create `
             --name $webAppDnsLinkName `
             --zone-name $webAppDnsZoneName `
-            --resource-group $dnsZoneResourceGroup `
+            --resource-group $webAppZoneRg `
             --subscription $dnsZoneSubscriptionId `
             --virtual-network $vnetResourceId `
             --registration-enabled false `
-            --output none
+            --output none 2>$null
     }
     
     # Create DNS Zone Group
     Write-Info "Creating DNS Zone Group for automatic A record registration..."
-    $webAppDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$dnsZoneResourceGroup/providers/Microsoft.Network/privateDnsZones/$webAppDnsZoneName"
+    $webAppDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$webAppZoneRg/providers/Microsoft.Network/privateDnsZones/$webAppDnsZoneName"
     
     az network private-endpoint dns-zone-group create `
         --name "webapp-dns-group" `
