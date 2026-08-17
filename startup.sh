@@ -4,7 +4,10 @@
 # then launches the FastAPI backend — which also serves the built React SPA
 # (frontend/dist) and the Azure service icons (/icons).
 
-WWWROOT=/home/site/wwwroot
+# Resolve the app directory from THIS script's own location. With Oryx build enabled, App Service
+# runs the app from a compressed build extracted to /tmp/<id> (NOT /home/site/wwwroot), so a
+# hardcoded path breaks with "startup.sh: No such file or directory" / missing backend/.
+WWWROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── ODBC Driver 18 for SQL Server (needed by pyodbc when DATABASE_PROVIDER=azuresql) ──
 # Best-effort install; requires outbound access to packages.microsoft.com. In a

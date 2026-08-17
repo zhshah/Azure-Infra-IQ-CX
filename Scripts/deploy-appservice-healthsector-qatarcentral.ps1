@@ -1904,9 +1904,10 @@ if ($LASTEXITCODE -ne 0) {
 # (needed by pyodbc for the managed-identity SQL connection) before launching
 # the app. Otherwise launch uvicorn directly.
 Write-Info "Setting startup command for FastAPI..."
-# Always use startup.sh - it installs the ODBC driver (for Azure SQL) and runs
-# uvicorn from the backend/ directory (which serves the API and the built SPA).
-$startupFile = "bash /home/site/wwwroot/startup.sh"
+# Relative command: with Oryx build the app runs from a /tmp/<id> extract, NOT /home/site/wwwroot,
+# so a hardcoded path fails with "startup.sh: No such file or directory". 'bash startup.sh' resolves
+# against Oryx's app dir; startup.sh is self-locating and installs the ODBC driver + runs uvicorn.
+$startupFile = "bash startup.sh"
 az webapp config set `
     --name $WebAppName `
     --resource-group $ResourceGroupName `
