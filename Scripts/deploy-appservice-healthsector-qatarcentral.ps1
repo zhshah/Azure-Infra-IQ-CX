@@ -1378,29 +1378,29 @@ if ($deployedModel) {
 }
 Write-Success "Model deployed: $modelDisplay  (deployment name: '$OpenAIDeploymentName')"
 
-# ── Size the app's AI retry budget to the deployment's REAL throughput ────────────────
+# ── Size the app's AI workload to the deployment's REAL throughput ───────────────────
 # A small pay-as-you-go quota (e.g. GlobalStandard capacity 50 = 50K TPM) returns HTTP 429
-# under the large BCDR/assessment prompts, and the default 3 retries are exhausted long
-# before the per-minute window refills — the UI then shows "rate_limit_exceeded".
-# Provisioned (PTU) capacity is dedicated, so it needs far less patience.
+# on the large BCDR/assessment prompts. Retrying alone does NOT fix it: the dominant cost is
+# the PROMPT, so a 150-resource context can exceed the entire per-minute window on its own
+# and every retry fails the same way. Shrink the context first, then allow more patience.
+# Provisioned (PTU) capacity is dedicated, so it keeps the full-detail defaults.
 $aiCapacity = 0
 if ($deployedCapacity) { [int]::TryParse($deployedCapacity, [ref]$aiCapacity) | Out-Null }
 $isProvisioned = ($deployedSku -like "*Provisioned*")
 if ($isProvisioned) {
-    $aiMaxRetries = 3;  $aiBackoff = 10; $aiMaxTokens = 8192
+    $aiMaxRetries = 3; $aiBackoff = 10; $aiMaxTokens = 8192; $aiCtxResources = 150
     $aiTuneNote = "provisioned (PTU) throughput"
 } elseif ($aiCapacity -gt 0 -and $aiCapacity -lt 100) {
-    # Tight shared quota: back off hard and shrink the response budget per call.
-    $aiMaxRetries = 6;  $aiBackoff = 30; $aiMaxTokens = 4096
+    $aiMaxRetries = 5; $aiBackoff = 20; $aiMaxTokens = 4096; $aiCtxResources = 40
     $aiTuneNote = "low shared quota (${aiCapacity}K TPM)"
 } elseif ($aiCapacity -gt 0 -and $aiCapacity -lt 400) {
-    $aiMaxRetries = 5;  $aiBackoff = 20; $aiMaxTokens = 6144
+    $aiMaxRetries = 4; $aiBackoff = 15; $aiMaxTokens = 6144; $aiCtxResources = 80
     $aiTuneNote = "moderate shared quota (${aiCapacity}K TPM)"
 } else {
-    $aiMaxRetries = 4;  $aiBackoff = 15; $aiMaxTokens = 8192
+    $aiMaxRetries = 3; $aiBackoff = 15; $aiMaxTokens = 8192; $aiCtxResources = 150
     $aiTuneNote = if ($aiCapacity -gt 0) { "ample quota (${aiCapacity}K TPM)" } else { "capacity not readable - using safe defaults" }
 }
-Write-Info "AI throughput tuning: $aiTuneNote -> retries=$aiMaxRetries backoff=${aiBackoff}s maxTokens=$aiMaxTokens"
+Write-Info "AI throughput tuning: $aiTuneNote -> retries=$aiMaxRetries backoff=${aiBackoff}s maxTokens=$aiMaxTokens contextResources=$aiCtxResources"
 
 # ============================================
 # PRIVATE ENDPOINT FOR OPENAI (PRIVATE MODE)
@@ -2012,6 +2012,7 @@ $settings = @(
     "AI_MAX_RETRIES=$aiMaxRetries",
     "AI_RETRY_BACKOFF_SECONDS=$aiBackoff",
     "AI_MAX_TOKENS_ANALYSIS=$aiMaxTokens",
+    "AI_MAX_RESOURCES_CONTEXT=$aiCtxResources",
     "AZURE_TENANT_ID=$EntraTenantId",
     "AZURE_SUBSCRIPTION_ID=$SubscriptionId",
     "AZURE_SUBSCRIPTION_IDS=$ScanSubscriptionsEnv",

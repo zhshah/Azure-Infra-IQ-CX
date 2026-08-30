@@ -39,9 +39,14 @@ MAX_TOKENS_ANALYSIS    = int(os.getenv("AI_MAX_TOKENS_ANALYSIS", "8192"))
 # pay-as-you-go quota needs far more patience than dedicated (PTU) throughput.
 AI_MAX_RETRIES         = int(os.getenv("AI_MAX_RETRIES", "3"))
 AI_RETRY_BACKOFF_SECS  = int(os.getenv("AI_RETRY_BACKOFF_SECONDS", "15"))
+# Azure OpenAI TPM windows refill every 60s, so backing off longer than one window only
+# stalls the request without improving the odds.
+AI_RETRY_MAX_WAIT_SECS = int(os.getenv("AI_RETRY_MAX_WAIT_SECONDS", "60"))
 MAX_TOKENS_NETWORKING  = 16000
 MAX_TOKENS_SUMMARY     = 4096
-MAX_RESOURCES_FULL_CTX = 150   # send full detail for up to N resources; summarize above this
+MAX_RESOURCES_FULL_CTX = int(os.getenv("AI_MAX_RESOURCES_CONTEXT", "150"))   # full detail for up to N resources; summarize above this
+# This is the dominant term in prompt size. On a small TPM quota a 150-resource prompt can
+# exceed the whole per-minute window on its own, in which case no amount of retrying helps.
 
 
 # ── Client factory ────────────────────────────────────────────────────────────
@@ -270,7 +275,7 @@ def _call_ai(system_prompt: str, user_prompt: str, max_tokens: int = MAX_TOKENS_
                 return text
         except Exception as exc:
             if _is_rate_limit(exc) and attempt < _MAX_RETRIES:
-                wait = _retry_after(exc) or (_BACKOFF_BASE * (2 ** attempt))
+                wait = min(_retry_after(exc) or (_BACKOFF_BASE * (2 ** attempt)), AI_RETRY_MAX_WAIT_SECS)
                 logger.warning(
                     "AI rate-limited (429) on attempt %d/%d — waiting %.0fs before retry | provider=%s",
                     attempt + 1, _MAX_RETRIES, wait, provider,
