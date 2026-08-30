@@ -931,15 +931,11 @@ if ($DeploymentMode -eq "Private") {
         Write-Info "DNS Zone '$openaiDnsZoneName' not found - will create"
     }
     
-    # Web App DNS Zone. Track its RG SEPARATELY — it can live in a different RG than the
-    # OpenAI/SQL zone (e.g. a shared hub-DNS zone). Reusing one shared $dnsZoneResourceGroup for
-    # every zone makes the link/zone-group target the wrong RG (ParentResourceNotFound).
+    # Web App DNS Zone
     $webappDnsZoneName = "privatelink.azurewebsites.net"
-    $webAppDnsZoneResourceGroup = $null
     $existingWebAppDns = az network private-dns zone list --subscription $dnsZoneSubscriptionId --query "[?name=='$webappDnsZoneName'].{Name:name, RG:resourceGroup}" -o json 2>$null | ConvertFrom-Json
     if ($existingWebAppDns -and $existingWebAppDns.Count -gt 0) {
         $dnsZoneWebAppFound = $true
-        $webAppDnsZoneResourceGroup = $existingWebAppDns[0].RG
         if (-not $dnsZoneResourceGroup) {
             $dnsZoneResourceGroup = $existingWebAppDns[0].RG
         }
@@ -1043,6 +1039,38 @@ if ($OpenAIMode -eq "Existing") {
         Write-Success "Resolved existing Azure OpenAI resource: $OpenAIResourceName (rg: $oaiRg, sub: $oaiSub)"
     }
     Write-Info "OpenAI Endpoint: $openaiEndpoint"
+
+    # ── PRELIMINARY MANAGED-IDENTITY READINESS CHECK (existing OpenAI — resource left intact) ──
+    # This script NEVER reconfigures the customer's existing Azure OpenAI resource: no identity
+    # toggle, no model deployment, no key / network / config change. It only READS the resource
+    # (fail-fast before any infrastructure is created) and later GRANTS the app's managed identity
+    # the "Cognitive Services OpenAI User" data-plane role so the app can call the model.
+    Write-Host ""
+    Write-Host "  ── Azure OpenAI — Managed Identity Readiness (existing resource, kept intact) ──" -ForegroundColor Cyan
+    if ([string]::IsNullOrWhiteSpace($OpenAIEndpoint)) {
+        $oaiIdentityType = az cognitiveservices account show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --query "identity.type" -o tsv 2>$null
+        $oaiLocalAuth    = az cognitiveservices account show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --query "properties.disableLocalAuth" -o tsv 2>$null
+        Write-Host "    • Resource reachable / readable           : Yes" -ForegroundColor Green
+        if ([string]::IsNullOrWhiteSpace($oaiIdentityType) -or $oaiIdentityType -eq "None") {
+            Write-Host "    • Resource's own System-Assigned identity : Off (informational only — NOT needed for" -ForegroundColor Gray
+            Write-Host "        the app to call the model; it only matters if the OpenAI resource itself must" -ForegroundColor Gray
+            Write-Host "        call other Azure services, e.g. storage for fine-tuning)" -ForegroundColor Gray
+        } else {
+            Write-Host "    • Resource's own System-Assigned identity : On ($oaiIdentityType) (informational)" -ForegroundColor Gray
+        }
+        if ($oaiLocalAuth -eq "true") {
+            Write-Host "    • Data-plane auth                         : Entra ID only (local API-key auth disabled)" -ForegroundColor Green
+        } else {
+            Write-Host "    • Data-plane auth                         : Entra ID (managed identity) supported" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "    • Endpoint + key supplied directly — resource not read here." -ForegroundColor Gray
+        Write-Host "      Ensure the app's managed identity gets 'Cognitive Services OpenAI User' on the resource." -ForegroundColor Gray
+    }
+    Write-Host "    • App authentication model                : System-Assigned Managed Identity (Entra token)" -ForegroundColor Green
+    Write-Host "    • Change made to the OpenAI resource      : NONE (only an RBAC grant to the app identity)" -ForegroundColor Green
+    Write-Host "  ─────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+    Write-Success "Existing Azure OpenAI is reachable and ready for managed-identity access."
 } else {
     # ── Create a NEW Azure OpenAI resource. ──
     $openaiExists = az cognitiveservices account show --name $OpenAIResourceName --resource-group $ResourceGroupName 2>&1
@@ -1078,8 +1106,9 @@ if ($OpenAIMode -eq "Existing") {
 
     Write-Info "OpenAI Endpoint: $openaiEndpoint"
 
-    # Capture an API key - this app authenticates to Azure OpenAI with a key
-    # (AI_PROVIDER=azure_openai), not AAD.
+    # Capture an API key as a break-glass fallback. The app authenticates to Azure OpenAI
+    # with its MANAGED IDENTITY by default (AZURE_OPENAI_USE_MANAGED_IDENTITY=true); the key
+    # is only used if that flag is later set to false.
     $openaiKey = az cognitiveservices account keys list `
         --name $OpenAIResourceName `
         --resource-group $ResourceGroupName `
@@ -1112,6 +1141,16 @@ if ($OpenAIMode -eq "Existing") {
     $deployedModel   = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --deployment-name $OpenAIDeploymentName --query "properties.model.name" -o tsv 2>$null
     $deployedVersion = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --deployment-name $OpenAIDeploymentName --query "properties.model.version" -o tsv 2>$null
     $deployedSku     = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --deployment-name $OpenAIDeploymentName --query "sku.name" -o tsv 2>$null
+    # Preliminary fail-fast: when we CAN read the resource (name-based mode) but the named deployment
+    # is absent, stop BEFORE creating any infrastructure — the app would 404 at runtime. This script
+    # does not create/alter deployments on an existing resource, so the customer must fix the name.
+    if ([string]::IsNullOrWhiteSpace($OpenAIEndpoint) -and [string]::IsNullOrWhiteSpace($deployedModel)) {
+        Write-Error "Model deployment '$OpenAIDeploymentName' was not found on existing OpenAI resource '$OpenAIResourceName' (rg: $oaiRg, sub: $oaiSub)."
+        Write-Host "  This script does NOT create or change deployments on an existing resource. Ask the customer to" -ForegroundColor Yellow
+        Write-Host "  confirm the deployment name, then re-run with -OpenAIDeploymentName <correct-name>." -ForegroundColor Yellow
+        Write-Host "  List deployments: az cognitiveservices account deployment list --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --query `"[].name`" -o tsv" -ForegroundColor Yellow
+        exit 1
+    }
     if ($deployedSku) { Write-Success "Existing deployment SKU: $deployedSku (e.g. ProvisionedManaged = PTU)" }
 } else {
     # Deployment-name policy: blank = name the deployment after the ACTUAL model deployed (newest GPT first).
@@ -1391,17 +1430,26 @@ if ($DeploySql) {
     $sqlServerExists = az sql server show --name $SqlServerName --resource-group $ResourceGroupName 2>&1
     if ($LASTEXITCODE -eq 0) {
         Write-Info "SQL server '$SqlServerName' already exists - reusing"
-        if ([string]::IsNullOrWhiteSpace($SqlAdminPassword)) {
-            Write-Error "SQL server '$SqlServerName' exists but no -SqlAdminPassword was provided to build the connection string."
-            Write-Host "  Re-run with -SqlAdminPassword '<existing-password>' (and -SqlAdminUser if not '$SqlAdminUser')." -ForegroundColor Yellow
-            exit 1
+
+        # The admin login name is fixed at creation time and can't be renamed afterwards, so always
+        # use whatever is actually configured on the server rather than trusting the requested/default value.
+        $existingAdminUser = az sql server show --name $SqlServerName --resource-group $ResourceGroupName --query administratorLogin -o tsv 2>$null
+        if (-not [string]::IsNullOrWhiteSpace($existingAdminUser) -and $existingAdminUser -ne $SqlAdminUser) {
+            Write-Info "Existing server's admin login is '$existingAdminUser' - using that instead of '$SqlAdminUser'."
+            $SqlAdminUser = $existingAdminUser
         }
-        # Reset the existing server's admin password to the provided value so the server ALWAYS
-        # matches the connection string stored below. Without this, a mismatched password causes
-        # "Login failed for user" (error 18456) and snapshot persistence silently breaks.
+
+        # The deploying identity has full control-plane (RBAC) access on this resource group, so the
+        # admin password never needs to be known ahead of time - just reset it to a freshly generated
+        # one and keep the connection string in sync. This lets the server be reused indefinitely
+        # without operator hand-off of secrets between runs.
+        if ([string]::IsNullOrWhiteSpace($SqlAdminPassword)) {
+            $SqlAdminPassword = (-join ((65..90) + (97..122) + (50..57) | Get-Random -Count 20 | ForEach-Object { [char]$_ })) + "!aZ7"
+            Write-Info "No -SqlAdminPassword supplied - generating a new one and resetting it on the existing server..."
+        }
         az sql server update --name $SqlServerName --resource-group $ResourceGroupName --admin-password $SqlAdminPassword --output none 2>$null
         if ($LASTEXITCODE -eq 0) { Write-Success "Reset SQL admin password on existing server (keeps connection string in sync)" }
-        else { Write-Warning "Could not reset SQL admin password on existing server '$SqlServerName' - ensure the provided password is correct." }
+        else { Write-Warning "Could not reset SQL admin password on existing server '$SqlServerName' - check that this identity has Contributor/SQL Server Contributor on the resource group." }
     } else {
         if ([string]::IsNullOrWhiteSpace($SqlAdminPassword)) {
             $SqlAdminPassword = (-join ((65..90) + (97..122) + (50..57) | Get-Random -Count 20 | ForEach-Object { [char]$_ })) + "!aZ7"
@@ -1501,37 +1549,22 @@ if ($DeploySql) {
             Write-Success "Private Endpoint created: $sqlPeName"
         }
 
-        # Private DNS zone for SQL — robustly pick the zone THIS VNet already resolves through.
-        # A VNet can be linked to only ONE zone per namespace. In hub / shared-DNS setups the
-        # VNet is often already linked to a 'privatelink.database.windows.net' zone; creating or
-        # linking a second same-named zone then fails with:
-        #   "A virtual network cannot be linked to multiple zones with overlapping namespaces".
-        # So: find the zone already linked to THIS VNet and reuse it; only create/link if none is.
-        $sqlZones = az network private-dns zone list --subscription $dnsZoneSubscriptionId --query "[?name=='$sqlDnsZoneName'].{RG:resourceGroup}" -o json 2>$null | ConvertFrom-Json
-        $sqlLinkedZoneRg = $null
-        foreach ($z in @($sqlZones)) {
-            $links = az network private-dns link vnet list --zone-name $sqlDnsZoneName --resource-group $z.RG --subscription $dnsZoneSubscriptionId --query "[].virtualNetwork.id" -o tsv 2>$null
-            if ($links -and (($links -split "`n") | Where-Object { $_.Trim() -ieq $vnetResourceId })) {
-                $sqlLinkedZoneRg = $z.RG
-                break
-            }
+        # Private DNS zone for SQL
+        $existingSqlDns = az network private-dns zone list --subscription $dnsZoneSubscriptionId --query "[?name=='$sqlDnsZoneName'].{Name:name, RG:resourceGroup}" -o json 2>$null | ConvertFrom-Json
+        if (-not ($existingSqlDns -and $existingSqlDns.Count -gt 0)) {
+            Write-Info "Creating Private DNS Zone: $sqlDnsZoneName..."
+            az network private-dns zone create `
+                --name $sqlDnsZoneName `
+                --resource-group $dnsZoneResourceGroup `
+                --subscription $dnsZoneSubscriptionId `
+                --output none 2>$null
+        } else {
+            $dnsZoneResourceGroup = $existingSqlDns[0].RG
         }
 
-        if ($sqlLinkedZoneRg) {
-            $dnsZoneResourceGroup = $sqlLinkedZoneRg
-            Write-Info "VNet already linked to '$sqlDnsZoneName' in RG '$dnsZoneResourceGroup' - reusing (no new link)."
-        } else {
-            if ($sqlZones -and @($sqlZones).Count -gt 0) {
-                $dnsZoneResourceGroup = @($sqlZones)[0].RG
-            } else {
-                Write-Info "Creating Private DNS Zone: $sqlDnsZoneName..."
-                az network private-dns zone create `
-                    --name $sqlDnsZoneName `
-                    --resource-group $dnsZoneResourceGroup `
-                    --subscription $dnsZoneSubscriptionId `
-                    --output none 2>$null
-            }
-            $sqlDnsLinkName = "link-$VNetName-sql"
+        $sqlDnsLinkName = "link-$VNetName-sql"
+        $sqlLinkExists = az network private-dns link vnet show --name $sqlDnsLinkName --zone-name $sqlDnsZoneName --resource-group $dnsZoneResourceGroup --subscription $dnsZoneSubscriptionId 2>&1
+        if ($LASTEXITCODE -ne 0) {
             Write-Info "Linking SQL DNS Zone to VNet..."
             az network private-dns link vnet create `
                 --name $sqlDnsLinkName `
@@ -1540,7 +1573,7 @@ if ($DeploySql) {
                 --subscription $dnsZoneSubscriptionId `
                 --virtual-network $vnetResourceId `
                 --registration-enabled false `
-                --output none 2>$null
+                --output none
         }
 
         Write-Info "Creating DNS Zone Group for SQL Private Endpoint..."
@@ -1677,7 +1710,10 @@ if ($LASTEXITCODE -eq 0) {
         param([string]$Sku, [string]$Region)
         $regionKey = ($Region -replace '\s', '').ToLower()
         $scope = "/subscriptions/$SubscriptionId/providers/Microsoft.Web/locations/$regionKey"
-        $q = az quota show --resource-name $Sku --scope $scope -o json 2>$null
+        # Avoid an interactive "install extension?" prompt hanging the script if the quota
+        # extension isn't pre-installed (common on locked-down customer machines).
+        az config set extension.use_dynamic_install=yes_without_prompt --only-show-errors 2>$null | Out-Null
+        $q = az quota show --resource-name $Sku --scope $scope -o json --only-show-errors 2>$null
         if ($LASTEXITCODE -ne 0 -or -not $q) { return -1 }
         try {
             $val = ($q | ConvertFrom-Json).properties.limit.value
@@ -1855,9 +1891,16 @@ Write-Info "Setting application configuration..."
 # The app authenticates to Azure with the Web App's SYSTEM-ASSIGNED MANAGED
 # IDENTITY via DefaultAzureCredential, so we deliberately do NOT set
 # AZURE_CLIENT_ID / AZURE_CLIENT_SECRET (that would force a service-principal path).
+# Azure OpenAI is called with that SAME managed identity (Entra AAD token), NOT the API
+# key: AZURE_OPENAI_USE_MANAGED_IDENTITY=true makes every AI service acquire a bearer
+# token for https://cognitiveservices.azure.com/.default. This is the customer-preferred
+# model for an existing / PTU resource (works even when local key auth is disabled). The
+# identity is granted "Cognitive Services OpenAI User" on the OpenAI resource in Step 9.
+# AZURE_OPENAI_KEY is still passed as a break-glass fallback (set the flag to false to use it).
 $settings = @(
     "AI_PROVIDER=azure_openai",
     "AZURE_OPENAI_ENDPOINT=$openaiEndpoint",
+    "AZURE_OPENAI_USE_MANAGED_IDENTITY=true",
     "AZURE_OPENAI_KEY=$openaiKey",
     "AZURE_OPENAI_DEPLOYMENT=$OpenAIDeploymentName",
     "AZURE_TENANT_ID=$EntraTenantId",
@@ -1904,10 +1947,9 @@ if ($LASTEXITCODE -ne 0) {
 # (needed by pyodbc for the managed-identity SQL connection) before launching
 # the app. Otherwise launch uvicorn directly.
 Write-Info "Setting startup command for FastAPI..."
-# Relative command: with Oryx build the app runs from a /tmp/<id> extract, NOT /home/site/wwwroot,
-# so a hardcoded path fails with "startup.sh: No such file or directory". 'bash startup.sh' resolves
-# against Oryx's app dir; startup.sh is self-locating and installs the ODBC driver + runs uvicorn.
-$startupFile = "bash startup.sh"
+# Always use startup.sh - it installs the ODBC driver (for Azure SQL) and runs
+# uvicorn from the backend/ directory (which serves the API and the built SPA).
+$startupFile = "bash /home/site/wwwroot/startup.sh"
 az webapp config set `
     --name $WebAppName `
     --resource-group $ResourceGroupName `
@@ -1917,13 +1959,150 @@ az webapp config set `
 Write-Success "Web App configuration applied"
 
 # ============================================
+# DEPLOY APPLICATION CODE
+# Runs BEFORE VNet integration and BEFORE the Web App's Private Endpoint. The Oryx
+# remote build (SCM_DO_BUILD_DURING_DEPLOYMENT=true) runs pip install inside the Kudu
+# container, so it needs public egress to pypi.org. Once route-all pushes outbound
+# traffic into a locked-down VNet with no internet path, every wheel download stalls on
+# TCP connect and the build dies after ~15 min with a bare "Build failed".
+# Deploying first also avoids the Private Endpoint DNS trap: a PE makes the app's public
+# .scm hostname CNAME to the privatelink subdomain, which resolves only from inside the
+# linked VNet (NXDOMAIN elsewhere), regardless of the publicNetworkAccess setting.
+# ============================================
+Write-Step "Step 7a: Deploying Application Code"
+
+# Re-run safety: a previous run may have already integrated the app with the VNet, which
+# leaves route-all on and would black-hole the build's pip traffic. Step 7b re-enables it.
+if ($DeploymentMode -eq "Private") {
+    Write-Info "Temporarily routing outbound traffic direct-to-internet so the Oryx build can reach PyPI..."
+    az webapp config set `
+        --name $WebAppName `
+        --resource-group $ResourceGroupName `
+        --vnet-route-all-enabled false `
+        --output none 2>$null
+    az webapp config appsettings set `
+        --name $WebAppName `
+        --resource-group $ResourceGroupName `
+        --settings "WEBSITE_VNET_ROUTE_ALL=0" `
+        --output none 2>$null
+}
+
+# The application root is the REPO ROOT (the parent of this Scripts/ folder).
+$repoRoot = Split-Path -Parent $PSScriptRoot
+# Tolerate a copy of this script sitting at the repo root instead of in Scripts/.
+if (-not (Test-Path (Join-Path $repoRoot "backend/main.py")) -and (Test-Path (Join-Path $PSScriptRoot "backend/main.py"))) {
+    $repoRoot = $PSScriptRoot
+}
+Write-Info "Application root: $repoRoot"
+
+foreach ($req in @("backend/main.py", "backend/requirements.txt", "frontend/package.json", "startup.sh")) {
+    if (-not (Test-Path (Join-Path $repoRoot $req))) {
+        Write-Error "Required path not found: $req"
+        Write-Host "  Run this script from the repository's Scripts/ folder." -ForegroundColor Yellow
+        exit 1
+    }
+}
+Write-Success "Application sources found"
+
+# 1) Build the React frontend (the backend serves frontend/dist as the SPA).
+$prebuiltDist = Join-Path $repoRoot "frontend/dist/index.html"
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    if (Test-Path $prebuiltDist) {
+        Write-Warning "npm not found - using the pre-built 'frontend/dist' already present on disk (not rebuilding)."
+    } else {
+        Write-Error "npm not found and no pre-built 'frontend/dist/index.html' exists. Install Node.js LTS to build the frontend (or copy a pre-built frontend/dist onto this machine), then re-run."
+        exit 1
+    }
+} else {
+    Write-Info "Building frontend (npm)... this can take a few minutes"
+    Push-Location (Join-Path $repoRoot "frontend")
+    & npm ci 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { & npm install 2>&1 | Out-Null }
+    & npm run build 2>&1 | Out-Null
+    $buildExit = $LASTEXITCODE
+    Pop-Location
+    if ($buildExit -ne 0 -or -not (Test-Path $prebuiltDist)) {
+        Write-Error "Frontend build failed (frontend/dist not produced)."
+        exit 1
+    }
+    Write-Success "Frontend built (frontend/dist)"
+}
+
+# 2) Stage the real app layout, EXCLUDING secrets / venv / caches / local data.
+Write-Info "Creating deployment package..."
+$zipPath = Join-Path $env:TEMP "costopt-deploy-$(Get-Date -Format 'yyyyMMddHHmmss').zip"
+$staging = Join-Path $env:TEMP "costopt-stage-$(Get-Date -Format 'yyyyMMddHHmmss')"
+if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+New-Item -ItemType Directory -Path $staging -Force | Out-Null
+try {
+    # backend/ (drop venv, caches, local sqlite data and any .env secrets)
+    robocopy (Join-Path $repoRoot "backend") (Join-Path $staging "backend") /E `
+        /XD ".venv" "__pycache__" ".pytest_cache" "data" `
+        /XF ".env" "*.pyc" | Out-Null
+    # built SPA
+    robocopy (Join-Path $repoRoot "frontend\dist") (Join-Path $staging "frontend\dist") /E | Out-Null
+    # Azure service icons (served at /icons)
+    if (Test-Path (Join-Path $repoRoot "Icons")) {
+        robocopy (Join-Path $repoRoot "Icons") (Join-Path $staging "Icons") /E | Out-Null
+    }
+    # Complete requirements at wwwroot root (Oryx installs these) + startup.sh
+    Copy-Item (Join-Path $repoRoot "backend\requirements.txt") (Join-Path $staging "requirements.txt") -Force
+    Copy-Item (Join-Path $repoRoot "startup.sh") (Join-Path $staging "startup.sh") -Force
+
+    Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $zipPath -Force
+    Write-Success "Deployment package created: $zipPath"
+} catch {
+    Write-Error "Failed to create deployment package: $_"
+    exit 1
+} finally {
+    Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# Deploy using zip deployment
+Write-Info "Deploying application to Azure App Service..."
+Write-Info "This may take 2-5 minutes (includes pip install)..."
+
+az webapp deploy `
+    --name $WebAppName `
+    --resource-group $ResourceGroupName `
+    --src-path $zipPath `
+    --type zip `
+    --async false `
+    --output none
+
+if ($LASTEXITCODE -ne 0) {
+    # Try alternative deployment method
+    Write-Info "Retrying with alternative deployment method..."
+    az webapp deployment source config-zip `
+        --name $WebAppName `
+        --resource-group $ResourceGroupName `
+        --src $zipPath `
+        --output none
+    
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to deploy application code"
+        Write-Host "  Oryx build log: https://$WebAppName.scm.azurewebsites.net/api/deployments/latest/log" -ForegroundColor Yellow
+        Write-Host "  Runtime log:    az webapp log tail --name $WebAppName --resource-group $ResourceGroupName" -ForegroundColor Yellow
+        Write-Host "  If the build stalled for many minutes before failing, the build container could not reach PyPI." -ForegroundColor Yellow
+        Write-Host "  Allow outbound HTTPS to pypi.org, files.pythonhosted.org and oryx-cdn.microsoft.io, then re-run." -ForegroundColor Yellow
+        exit 1
+    }
+}
+
+# Clean up zip file
+Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+
+Write-Success "Application code deployed"
+
+# ============================================
 # WEB APP VNET INTEGRATION (PRIVATE MODE)
-# Required so the app's OUTBOUND calls reach the PRIVATE Azure OpenAI endpoint
-# (OpenAI public access is disabled). Without this the app deploys but fails at
-# runtime resolving *.openai.azure.com to the blocked public IP.
+# Required so the app's OUTBOUND calls reach the PRIVATE Azure OpenAI / SQL endpoints
+# (their public access is disabled). Without this the app deploys but fails at runtime
+# resolving *.openai.azure.com to the blocked public IP.
+# Applied AFTER the code deploy so the Oryx build kept its public egress to PyPI.
 # ============================================
 if ($DeploymentMode -eq "Private") {
-    Write-Step "Step 7a: Connecting Web App to VNet (Regional Integration)"
+    Write-Step "Step 7b: Connecting Web App to VNet (Regional Integration)"
 
     Write-Info "Adding regional VNet integration into subnet '$AppServiceIntegrationSubnetName'..."
     az webapp vnet-integration add `
@@ -1939,17 +2118,17 @@ if ($DeploymentMode -eq "Private") {
         exit 1
     }
 
-    # Route ALL outbound traffic (incl. DNS) through the VNet so privatelink zones resolve.
+    # Route ALL outbound traffic (incl. DNS) through the VNet so privatelink zones resolve
     Write-Info "Enabling route-all so outbound DNS uses the private DNS zones..."
     az webapp config set `
         --name $WebAppName `
         --resource-group $ResourceGroupName `
         --vnet-route-all-enabled true `
         --output none 2>$null
-    # Belt-and-suspenders: some az CLI / API versions silently ignore the site-config
-    # property above ("WARNING: vnet_route_all_enabled is not a known attribute ... ignored"),
-    # leaving vnetRouteAllEnabled=false so private DNS never resolves. The WEBSITE_VNET_ROUTE_ALL
-    # app setting is honored across all versions, so set it too.
+    # Some az CLI / API versions silently ignore the site-config property above
+    # ("WARNING: vnet_route_all_enabled is not a known attribute ... ignored"), leaving
+    # vnetRouteAllEnabled=false so private DNS never resolves. This app setting is
+    # honored across all versions, so set it too.
     az webapp config appsettings set `
         --name $WebAppName `
         --resource-group $ResourceGroupName `
@@ -1962,9 +2141,11 @@ if ($DeploymentMode -eq "Private") {
 
 # ============================================
 # PRIVATE ENDPOINT FOR WEB APP (PRIVATE MODE)
+# Created AFTER code deploy (see note above) so the public SCM endpoint used for
+# zip-deploy stays resolvable/reachable for the whole deploy step.
 # ============================================
 if ($DeploymentMode -eq "Private") {
-    Write-Step "Step 7b: Creating Private Endpoint for Web App"
+    Write-Step "Step 8: Creating Private Endpoint for Web App"
     
     $webAppResourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Web/sites/$WebAppName"
     $webAppPeName = "${WebAppName}-pe"
@@ -2008,54 +2189,48 @@ if ($DeploymentMode -eq "Private") {
         Write-Success "Private Endpoint created: $webAppPeName"
     }
     
-    # NOTE: Public network access is intentionally left ENABLED here so the app (zip)
-    # can be pushed via the public SCM/Kudu endpoint in Step 8. It is disabled in
-    # Step 8c AFTER a successful code deployment, ending in a fully private posture.
+    # NOTE: Code is already deployed at this point (Step 7a, above), so it's now safe
+    # to attach the Private Endpoint. Public network access stays ENABLED until the very
+    # last step (Step 14) so RBAC, Graph, SQL grant, restart and the health probe all run
+    # against a reachable app.
     
-    # Resolve the RG that actually holds the 'privatelink.azurewebsites.net' zone (it can live in a
-    # different RG than the OpenAI/SQL zone, e.g. a shared hub-DNS zone). Reuse the zone THIS VNet
-    # already resolves through; only create/link if none exists. Prevents ParentResourceNotFound
-    # (linking in the wrong RG) and "overlapping namespaces" (linking a second same-named zone).
-    $webAppZoneRg = if ($webAppDnsZoneResourceGroup) { $webAppDnsZoneResourceGroup } else { $dnsZoneResourceGroup }
-    $waZones = az network private-dns zone list --subscription $dnsZoneSubscriptionId --query "[?name=='$webAppDnsZoneName'].{RG:resourceGroup}" -o json 2>$null | ConvertFrom-Json
-    $waLinkedZoneRg = $null
-    foreach ($z in @($waZones)) {
-        $links = az network private-dns link vnet list --zone-name $webAppDnsZoneName --resource-group $z.RG --subscription $dnsZoneSubscriptionId --query "[].virtualNetwork.id" -o tsv 2>$null
-        if ($links -and (($links -split "`n") | Where-Object { $_.Trim() -ieq $vnetResourceId })) {
-            $waLinkedZoneRg = $z.RG
-            break
+    # Create/Configure DNS Zone
+    if (-not $dnsZoneWebAppFound) {
+        Write-Info "Creating Private DNS Zone: $webAppDnsZoneName..."
+        az network private-dns zone create `
+            --name $webAppDnsZoneName `
+            --resource-group $dnsZoneResourceGroup `
+            --subscription $dnsZoneSubscriptionId `
+            --output none 2>$null
+        
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Private DNS Zone created: $webAppDnsZoneName"
         }
     }
-
-    if ($waLinkedZoneRg) {
-        $webAppZoneRg = $waLinkedZoneRg
-        Write-Info "VNet already linked to '$webAppDnsZoneName' in RG '$webAppZoneRg' - reusing (no new link)."
-    } else {
-        if ($waZones -and @($waZones).Count -gt 0) {
-            $webAppZoneRg = @($waZones)[0].RG
-        } else {
-            Write-Info "Creating Private DNS Zone: $webAppDnsZoneName..."
-            az network private-dns zone create `
-                --name $webAppDnsZoneName `
-                --resource-group $webAppZoneRg `
-                --subscription $dnsZoneSubscriptionId `
-                --output none 2>$null
-        }
-        $webAppDnsLinkName = "link-$VNetName-webapp"
+    
+    # Link DNS Zone to VNet
+    $webAppDnsLinkName = "link-$VNetName-webapp"
+    $linkExists = az network private-dns link vnet show `
+        --name $webAppDnsLinkName `
+        --zone-name $webAppDnsZoneName `
+        --resource-group $dnsZoneResourceGroup `
+        --subscription $dnsZoneSubscriptionId 2>&1
+    
+    if ($LASTEXITCODE -ne 0) {
         Write-Info "Linking DNS Zone to VNet..."
         az network private-dns link vnet create `
             --name $webAppDnsLinkName `
             --zone-name $webAppDnsZoneName `
-            --resource-group $webAppZoneRg `
+            --resource-group $dnsZoneResourceGroup `
             --subscription $dnsZoneSubscriptionId `
             --virtual-network $vnetResourceId `
             --registration-enabled false `
-            --output none 2>$null
+            --output none
     }
     
     # Create DNS Zone Group
     Write-Info "Creating DNS Zone Group for automatic A record registration..."
-    $webAppDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$webAppZoneRg/providers/Microsoft.Network/privateDnsZones/$webAppDnsZoneName"
+    $webAppDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$dnsZoneResourceGroup/providers/Microsoft.Network/privateDnsZones/$webAppDnsZoneName"
     
     az network private-endpoint dns-zone-group create `
         --name "webapp-dns-group" `
@@ -2066,143 +2241,6 @@ if ($DeploymentMode -eq "Private") {
         --output none 2>$null
     
     Write-Success "Web App Private Endpoint configured"
-    Write-Host ""
-}
-
-# ============================================
-# DEPLOY APPLICATION CODE
-# ============================================
-Write-Step "Step 8: Deploying Application Code"
-
-# The application root is the REPO ROOT (the parent of this Scripts/ folder).
-$repoRoot = Split-Path -Parent $PSScriptRoot
-Write-Info "Application root: $repoRoot"
-
-foreach ($req in @("backend/main.py", "backend/requirements.txt", "frontend/package.json", "startup.sh")) {
-    if (-not (Test-Path (Join-Path $repoRoot $req))) {
-        Write-Error "Required path not found: $req"
-        Write-Host "  Run this script from the repository's Scripts/ folder." -ForegroundColor Yellow
-        exit 1
-    }
-}
-Write-Success "Application sources found"
-
-# 1) Build the React frontend (the backend serves frontend/dist as the SPA).
-Write-Info "Building frontend (npm)... this can take a few minutes"
-if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-    Write-Error "npm not found. Install Node.js LTS to build the frontend, then re-run."
-    exit 1
-}
-Push-Location (Join-Path $repoRoot "frontend")
-& npm ci 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { & npm install 2>&1 | Out-Null }
-& npm run build 2>&1 | Out-Null
-$buildExit = $LASTEXITCODE
-Pop-Location
-if ($buildExit -ne 0 -or -not (Test-Path (Join-Path $repoRoot "frontend/dist/index.html"))) {
-    Write-Error "Frontend build failed (frontend/dist not produced)."
-    exit 1
-}
-Write-Success "Frontend built (frontend/dist)"
-
-# 2) Stage the real app layout, EXCLUDING secrets / venv / caches / local data.
-Write-Info "Creating deployment package..."
-$zipPath = Join-Path $env:TEMP "costopt-deploy-$(Get-Date -Format 'yyyyMMddHHmmss').zip"
-$staging = Join-Path $env:TEMP "costopt-stage-$(Get-Date -Format 'yyyyMMddHHmmss')"
-if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-New-Item -ItemType Directory -Path $staging -Force | Out-Null
-try {
-    # backend/ (drop venv, caches, local sqlite data and any .env secrets)
-    robocopy (Join-Path $repoRoot "backend") (Join-Path $staging "backend") /E `
-        /XD ".venv" "__pycache__" ".pytest_cache" "data" `
-        /XF ".env" "*.pyc" | Out-Null
-    # built SPA
-    robocopy (Join-Path $repoRoot "frontend\dist") (Join-Path $staging "frontend\dist") /E | Out-Null
-    # Azure service icons (served at /icons)
-    if (Test-Path (Join-Path $repoRoot "Icons")) {
-        robocopy (Join-Path $repoRoot "Icons") (Join-Path $staging "Icons") /E | Out-Null
-    }
-    # Complete requirements at wwwroot root (Oryx installs these) + startup.sh
-    Copy-Item (Join-Path $repoRoot "backend\requirements.txt") (Join-Path $staging "requirements.txt") -Force
-    Copy-Item (Join-Path $repoRoot "startup.sh") (Join-Path $staging "startup.sh") -Force
-
-    # Force LF on every staged shell script. A Windows checkout (or a customer editing
-    # on Windows) can introduce CRLF, which makes bash fail on Linux App Service with
-    # "Container exited with exit code 127 during startup". Normalizing here guarantees
-    # the deployed package always runs, regardless of the local working-copy line endings.
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    Get-ChildItem $staging -Recurse -Filter *.sh -File | ForEach-Object {
-        $shTxt = [System.IO.File]::ReadAllText($_.FullName)
-        $shTxt = $shTxt -replace "`r`n", "`n" -replace "`r", "`n"
-        [System.IO.File]::WriteAllText($_.FullName, $shTxt, $utf8NoBom)
-    }
-
-    Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $zipPath -Force
-    Write-Success "Deployment package created: $zipPath"
-} catch {
-    Write-Error "Failed to create deployment package: $_"
-    exit 1
-} finally {
-    Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
-}
-
-# Deploy using zip deployment
-Write-Info "Deploying application to Azure App Service..."
-Write-Info "This may take 2-5 minutes (includes pip install)..."
-
-az webapp deploy `
-    --name $WebAppName `
-    --resource-group $ResourceGroupName `
-    --src-path $zipPath `
-    --type zip `
-    --async false `
-    --output none
-
-if ($LASTEXITCODE -ne 0) {
-    # Try alternative deployment method
-    Write-Info "Retrying with alternative deployment method..."
-    az webapp deployment source config-zip `
-        --name $WebAppName `
-        --resource-group $ResourceGroupName `
-        --src $zipPath `
-        --output none
-    
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to deploy application code"
-        Write-Host "  Check logs: az webapp log tail --name $WebAppName --resource-group $ResourceGroupName" -ForegroundColor Yellow
-        exit 1
-    }
-}
-
-# Clean up zip file
-Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-
-Write-Success "Application code deployed"
-
-# ============================================
-# LOCK DOWN PUBLIC ACCESS (PRIVATE MODE) - after code is deployed
-# ============================================
-if ($DeploymentMode -eq "Private") {
-    Write-Step "Step 8c: Disabling Public Network Access on Web App"
-    Write-Info "Code is deployed - sealing the Web App behind its Private Endpoint..."
-    $webAppResourceIdLockdown = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Web/sites/$WebAppName"
-    az webapp update `
-        --name $WebAppName `
-        --resource-group $ResourceGroupName `
-        --set publicNetworkAccess=Disabled `
-        --output none 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        az resource update `
-            --ids $webAppResourceIdLockdown `
-            --set properties.publicNetworkAccess=Disabled `
-            --output none 2>$null
-    }
-    if ($LASTEXITCODE -eq 0) {
-        Write-Success "Public network access disabled - Web App is now reachable only via the Private Endpoint"
-    } else {
-        Write-Host "  ⚠️  Could not disable public network access automatically. Disable it manually:" -ForegroundColor Yellow
-        Write-Host "     az webapp update --name $WebAppName --resource-group $ResourceGroupName --set publicNetworkAccess=Disabled" -ForegroundColor Yellow
-    }
     Write-Host ""
 }
 
@@ -2236,6 +2274,8 @@ $miRbacRef = @(
     @{ Role = "Reservations Reader";            Scope = $mgScope;     ScopeLabel = "Tenant Root MG";                     Purpose = "Read Reserved Instances inventory & recommendations" }
 )
 $permIssues = @()   # collects { Kind, Name, Scope, Command } for anything not auto-assigned
+$openaiGrantFailed = $false   # set true if the app MI could not be granted OpenAI access (customer must grant it)
+$openaiGrantCmd = ""          # exact command the customer runs to grant that access
 
 # Define roles - Assigned at Management Group level to cover ALL subscriptions
 $roles = @(
@@ -2295,8 +2335,44 @@ if ($subList.Count -gt 0) {
     }
 }
 
-# NOTE: No "Cognitive Services OpenAI User" role is assigned - this app calls Azure OpenAI
-# with an API KEY (AI_PROVIDER=azure_openai), not the Web App's managed identity.
+# ── Azure OpenAI access for the Web App's SYSTEM-ASSIGNED MANAGED IDENTITY ──
+# The app calls Azure OpenAI with its managed identity (AZURE_OPENAI_USE_MANAGED_IDENTITY=true),
+# so the identity MUST hold "Cognitive Services OpenAI User" on the target OpenAI resource.
+# In Existing mode that resource lives in the customer's own resource group / subscription, so
+# this grant is CROSS-SUBSCRIPTION — it targets $openaiScope (resolved above from
+# $openaiSubForScope / $openaiRgForScope / $OpenAIResourceName). Skipped only when the resource
+# name is unknown (endpoint + key were supplied directly). --assignee-object-id +
+# --assignee-principal-type ServicePrincipal avoids a Graph lookup that can fail for a
+# just-created managed identity (replication lag).
+if (-not [string]::IsNullOrWhiteSpace($OpenAIResourceName)) {
+    Write-Host ""
+    Write-Host "  Role: Cognitive Services OpenAI User" -ForegroundColor Cyan
+    Write-Host "    Scope: Azure OpenAI resource ONLY ($OpenAIResourceName)" -ForegroundColor White
+    Write-Host "    Purpose: Let the app's managed identity call the model for chat completions" -ForegroundColor Gray
+    Write-Host ""
+    Write-Info "Assigning 'Cognitive Services OpenAI User' on the OpenAI resource (sub: $openaiSubForScope)..."
+    $oaiRoleResult = az role assignment create `
+        --assignee-object-id $principalId `
+        --assignee-principal-type ServicePrincipal `
+        --role "Cognitive Services OpenAI User" `
+        --scope $openaiScope `
+        --output none 2>&1
+
+    $openaiGrantCmd = "az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal --role `"Cognitive Services OpenAI User`" --scope `"$openaiScope`""
+    if ($LASTEXITCODE -eq 0 -or $oaiRoleResult -match "already exists|RoleAssignmentExists") {
+        Write-Success "Cognitive Services OpenAI User - Assigned (OpenAI resource)"
+    } else {
+        $openaiGrantFailed = $true
+        Write-Host "  ⚠️  Could not assign 'Cognitive Services OpenAI User' on the OpenAI resource" -ForegroundColor Yellow
+        Write-Host "      (the deployer needs Owner / User Access Administrator on that resource in subscription $openaiSubForScope)" -ForegroundColor Yellow
+        $permIssues += @{ Kind = "RBAC"; Name = "Cognitive Services OpenAI User"; Scope = $openaiScope; Command = $openaiGrantCmd }
+    }
+} else {
+    $openaiGrantFailed = $true
+    $openaiGrantCmd = "az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal --role `"Cognitive Services OpenAI User`" --scope `"<your-Azure-OpenAI-resource-id>`""
+    Write-Info "Skipping OpenAI RBAC grant (no resource name — endpoint/key supplied directly)."
+    Write-Host "      Ensure the app's managed identity ($principalId) has 'Cognitive Services OpenAI User' on the target OpenAI resource." -ForegroundColor Yellow
+}
 
 # Management Group Reader
 Write-Host ""
@@ -2534,6 +2610,74 @@ if (-not [string]::IsNullOrWhiteSpace($EntraAppClientId)) {
 }
 
 # ============================================
+# VERIFY THE APPLICATION RESPONDS
+# Probed while the public endpoint is still reachable, so a broken deployment surfaces
+# here rather than after the app has been sealed behind its Private Endpoint.
+# ============================================
+Write-Step "Step 13: Verifying Application Health"
+
+$healthUrl = "https://$appUrl/api/auth/config"
+$healthOk = $false
+# In Private mode the probe is only informational (the Private Endpoint makes the
+# hostname resolve to a private IP), so don't spend long on it.
+$healthAttempts = if ($DeploymentMode -eq "Private") { 4 } else { 12 }
+Write-Info "Probing $healthUrl ..."
+foreach ($attempt in 1..$healthAttempts) {
+    try {
+        $resp = Invoke-WebRequest -Uri $healthUrl -Method GET -TimeoutSec 20 -UseBasicParsing -ErrorAction Stop
+        if ($resp.StatusCode -eq 200) { $healthOk = $true; break }
+    } catch {
+        $status = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+        # An auth challenge still proves the app started and is serving requests.
+        if ($status -eq 401 -or $status -eq 403) { $healthOk = $true; break }
+    }
+    if ($attempt -lt $healthAttempts) { Start-Sleep -Seconds 15 }
+}
+
+if ($healthOk) {
+    Write-Success "Application responded successfully: https://$appUrl"
+} elseif ($DeploymentMode -eq "Private") {
+    Write-Host "  No response from the public hostname (probe inconclusive)." -ForegroundColor Yellow
+    Write-Host "     This is EXPECTED when running from outside the VNet - the Web App Private Endpoint" -ForegroundColor Gray
+    Write-Host "     makes $appUrl resolve to a private IP. Browse the URL from a VNet-connected host." -ForegroundColor Gray
+} else {
+    Write-Host "  WARNING: the app did not respond yet - it may still be warming up after the restart." -ForegroundColor Yellow
+    Write-Host "     Check: az webapp log tail --name $WebAppName --resource-group $ResourceGroupName" -ForegroundColor Yellow
+}
+Write-Host ""
+
+# ============================================
+# LOCK DOWN PUBLIC ACCESS (PRIVATE MODE)
+# Deliberately the LAST action of the deployment. Everything before it - the Oryx code
+# deploy, RBAC, Graph permissions, the SQL grant, the restart, the Entra redirect URI and
+# the health probe - runs while the app is still publicly reachable, so nothing is sealed
+# off until the deployment has actually succeeded.
+# ============================================
+if ($DeploymentMode -eq "Private") {
+    Write-Step "Step 14: Disabling Public Network Access on Web App"
+    Write-Info "Deployment complete - sealing the Web App behind its Private Endpoint..."
+    $webAppResourceIdLockdown = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Web/sites/$WebAppName"
+    az webapp update `
+        --name $WebAppName `
+        --resource-group $ResourceGroupName `
+        --set publicNetworkAccess=Disabled `
+        --output none 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        az resource update `
+            --ids $webAppResourceIdLockdown `
+            --set properties.publicNetworkAccess=Disabled `
+            --output none 2>$null
+    }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "Public network access disabled - Web App is now reachable only via the Private Endpoint"
+    } else {
+        Write-Host "  WARNING: Could not disable public network access automatically. Disable it manually:" -ForegroundColor Yellow
+        Write-Host "     az webapp update --name $WebAppName --resource-group $ResourceGroupName --set publicNetworkAccess=Disabled" -ForegroundColor Yellow
+    }
+    Write-Host ""
+}
+
+# ============================================
 # DEPLOYMENT SUMMARY
 # ============================================
 Write-Host ""
@@ -2645,6 +2789,21 @@ Write-Host "  Principal ID:       $principalId" -ForegroundColor White
 Write-Host "  SP Object ID:       $spForCmd" -ForegroundColor White
 Write-Host ""
 
+if ($openaiGrantFailed) {
+    Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Red
+    Write-Host "  ║  ⚠  ACTION REQUIRED — grant Azure OpenAI access (AI features are OFFLINE)   ║" -ForegroundColor Red
+    Write-Host "  ╚════════════════════════════════════════════════════════════╝" -ForegroundColor Red
+    Write-Host "  The app is deployed and authenticates to Azure OpenAI with its managed identity, but this" -ForegroundColor Yellow
+    Write-Host "  deployer could NOT grant it access on the existing OpenAI resource. The resource was NOT modified." -ForegroundColor Yellow
+    Write-Host "  Ask an Owner / User Access Administrator of that OpenAI resource to run:" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "      $openaiGrantCmd" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  App managed-identity object id: $principalId" -ForegroundColor DarkGray
+    Write-Host "  Until this is granted, AI responses fail with 401/403 (no other AI change is needed)." -ForegroundColor Yellow
+    Write-Host ""
+}
+
 if ($permIssues.Count -gt 0) {
     Write-Host "  ⚠️  ACTION NEEDED - these could NOT be auto-assigned with your current" -ForegroundColor Yellow
     Write-Host "      privileges. Ask an admin with the right role to run the matching command:" -ForegroundColor Yellow
@@ -2683,8 +2842,13 @@ Write-Host ""
 Write-Host "📝 WHAT WAS AUTOMATED" -ForegroundColor Cyan
 Write-Host "─────────────────────────────────────────────────────────────────" -ForegroundColor Gray
 Write-Host "  ✅ Registered required Azure resource providers" -ForegroundColor Green
-Write-Host "  ✅ Created Azure OpenAI resource" -ForegroundColor Green
-Write-Host "  ✅ Deployed Azure OpenAI model: $modelDisplay" -ForegroundColor Green
+if ($OpenAIMode -eq "Existing") {
+    Write-Host "  ✅ Reused EXISTING Azure OpenAI resource (left intact — no config change)" -ForegroundColor Green
+    Write-Host "  ✅ Used existing model deployment: $modelDisplay" -ForegroundColor Green
+} else {
+    Write-Host "  ✅ Created Azure OpenAI resource" -ForegroundColor Green
+    Write-Host "  ✅ Deployed Azure OpenAI model: $modelDisplay" -ForegroundColor Green
+}
 Write-Host "  ✅ Created App Service Plan (Linux, $AppServiceSku)" -ForegroundColor Green
 Write-Host "  ✅ Created Web App with Python 3.11 runtime" -ForegroundColor Green
 Write-Host "  ✅ Enabled System-Assigned Managed Identity" -ForegroundColor Green
@@ -2693,7 +2857,11 @@ Write-Host "  ✅ Deployed application code with pip install" -ForegroundColor G
 if ($DeploymentMode -eq "Private") {
     Write-Host "  ✅ Validated VNet and subnet configuration" -ForegroundColor Green
     Write-Host "  ✅ Connected Web App to VNet (regional integration + route-all)" -ForegroundColor Green
-    Write-Host "  ✅ Created Private Endpoint for Azure OpenAI" -ForegroundColor Green
+    if ($OpenAIMode -ne "Existing") {
+        Write-Host "  ✅ Created Private Endpoint for Azure OpenAI" -ForegroundColor Green
+    } else {
+        Write-Host "  ℹ️  Skipped OpenAI Private Endpoint (existing resource keeps its own networking)" -ForegroundColor Gray
+    }
     Write-Host "  ✅ Created Private Endpoint for Web App" -ForegroundColor Green
     Write-Host "  ✅ Configured Private DNS Zones and VNet links" -ForegroundColor Green
     Write-Host "  ✅ Disabled public network access on all resources" -ForegroundColor Green

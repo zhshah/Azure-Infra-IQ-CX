@@ -1430,17 +1430,26 @@ if ($DeploySql) {
     $sqlServerExists = az sql server show --name $SqlServerName --resource-group $ResourceGroupName 2>&1
     if ($LASTEXITCODE -eq 0) {
         Write-Info "SQL server '$SqlServerName' already exists - reusing"
-        if ([string]::IsNullOrWhiteSpace($SqlAdminPassword)) {
-            Write-Error "SQL server '$SqlServerName' exists but no -SqlAdminPassword was provided to build the connection string."
-            Write-Host "  Re-run with -SqlAdminPassword '<existing-password>' (and -SqlAdminUser if not '$SqlAdminUser')." -ForegroundColor Yellow
-            exit 1
+
+        # The admin login name is fixed at creation time and can't be renamed afterwards, so always
+        # use whatever is actually configured on the server rather than trusting the requested/default value.
+        $existingAdminUser = az sql server show --name $SqlServerName --resource-group $ResourceGroupName --query administratorLogin -o tsv 2>$null
+        if (-not [string]::IsNullOrWhiteSpace($existingAdminUser) -and $existingAdminUser -ne $SqlAdminUser) {
+            Write-Info "Existing server's admin login is '$existingAdminUser' - using that instead of '$SqlAdminUser'."
+            $SqlAdminUser = $existingAdminUser
         }
-        # Reset the existing server's admin password to the provided value so the server ALWAYS
-        # matches the connection string stored below. Without this, a mismatched password causes
-        # "Login failed for user" (error 18456) and snapshot persistence silently breaks.
+
+        # The deploying identity has full control-plane (RBAC) access on this resource group, so the
+        # admin password never needs to be known ahead of time - just reset it to a freshly generated
+        # one and keep the connection string in sync. This lets the server be reused indefinitely
+        # without operator hand-off of secrets between runs.
+        if ([string]::IsNullOrWhiteSpace($SqlAdminPassword)) {
+            $SqlAdminPassword = (-join ((65..90) + (97..122) + (50..57) | Get-Random -Count 20 | ForEach-Object { [char]$_ })) + "!aZ7"
+            Write-Info "No -SqlAdminPassword supplied - generating a new one and resetting it on the existing server..."
+        }
         az sql server update --name $SqlServerName --resource-group $ResourceGroupName --admin-password $SqlAdminPassword --output none 2>$null
         if ($LASTEXITCODE -eq 0) { Write-Success "Reset SQL admin password on existing server (keeps connection string in sync)" }
-        else { Write-Warning "Could not reset SQL admin password on existing server '$SqlServerName' - ensure the provided password is correct." }
+        else { Write-Warning "Could not reset SQL admin password on existing server '$SqlServerName' - check that this identity has Contributor/SQL Server Contributor on the resource group." }
     } else {
         if ([string]::IsNullOrWhiteSpace($SqlAdminPassword)) {
             $SqlAdminPassword = (-join ((65..90) + (97..122) + (50..57) | Get-Random -Count 20 | ForEach-Object { [char]$_ })) + "!aZ7"
@@ -1701,7 +1710,10 @@ if ($LASTEXITCODE -eq 0) {
         param([string]$Sku, [string]$Region)
         $regionKey = ($Region -replace '\s', '').ToLower()
         $scope = "/subscriptions/$SubscriptionId/providers/Microsoft.Web/locations/$regionKey"
-        $q = az quota show --resource-name $Sku --scope $scope -o json 2>$null
+        # Avoid an interactive "install extension?" prompt hanging the script if the quota
+        # extension isn't pre-installed (common on locked-down customer machines).
+        az config set extension.use_dynamic_install=yes_without_prompt --only-show-errors 2>$null | Out-Null
+        $q = az quota show --resource-name $Sku --scope $scope -o json --only-show-errors 2>$null
         if ($LASTEXITCODE -ne 0 -or -not $q) { return -1 }
         try {
             $val = ($q | ConvertFrom-Json).properties.limit.value
@@ -1947,149 +1959,40 @@ az webapp config set `
 Write-Success "Web App configuration applied"
 
 # ============================================
-# WEB APP VNET INTEGRATION (PRIVATE MODE)
-# Required so the app's OUTBOUND calls reach the PRIVATE Azure OpenAI endpoint
-# (OpenAI public access is disabled). Without this the app deploys but fails at
-# runtime resolving *.openai.azure.com to the blocked public IP.
+# DEPLOY APPLICATION CODE
+# Runs BEFORE VNet integration and BEFORE the Web App's Private Endpoint. The Oryx
+# remote build (SCM_DO_BUILD_DURING_DEPLOYMENT=true) runs pip install inside the Kudu
+# container, so it needs public egress to pypi.org. Once route-all pushes outbound
+# traffic into a locked-down VNet with no internet path, every wheel download stalls on
+# TCP connect and the build dies after ~15 min with a bare "Build failed".
+# Deploying first also avoids the Private Endpoint DNS trap: a PE makes the app's public
+# .scm hostname CNAME to the privatelink subdomain, which resolves only from inside the
+# linked VNet (NXDOMAIN elsewhere), regardless of the publicNetworkAccess setting.
 # ============================================
+Write-Step "Step 7a: Deploying Application Code"
+
+# Re-run safety: a previous run may have already integrated the app with the VNet, which
+# leaves route-all on and would black-hole the build's pip traffic. Step 7b re-enables it.
 if ($DeploymentMode -eq "Private") {
-    Write-Step "Step 7a: Connecting Web App to VNet (Regional Integration)"
-
-    Write-Info "Adding regional VNet integration into subnet '$AppServiceIntegrationSubnetName'..."
-    az webapp vnet-integration add `
-        --name $WebAppName `
-        --resource-group $ResourceGroupName `
-        --vnet $vnetResourceId `
-        --subnet $AppServiceIntegrationSubnetName `
-        --output none 2>$null
-
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to add VNet integration for the Web App"
-        Write-Host "  Verify subnet '$AppServiceIntegrationSubnetName' is delegated to Microsoft.Web/serverFarms and has free address space." -ForegroundColor Yellow
-        exit 1
-    }
-
-    # Route ALL outbound traffic (incl. DNS) through the VNet so privatelink zones resolve
-    Write-Info "Enabling route-all so outbound DNS uses the private DNS zones..."
+    Write-Info "Temporarily routing outbound traffic direct-to-internet so the Oryx build can reach PyPI..."
     az webapp config set `
         --name $WebAppName `
         --resource-group $ResourceGroupName `
-        --vnet-route-all-enabled true `
+        --vnet-route-all-enabled false `
         --output none 2>$null
-
-    Write-Success "Web App connected to VNet: $VNetName / $AppServiceIntegrationSubnetName"
-    Write-Host ""
-}
-
-# ============================================
-# PRIVATE ENDPOINT FOR WEB APP (PRIVATE MODE)
-# ============================================
-if ($DeploymentMode -eq "Private") {
-    Write-Step "Step 7b: Creating Private Endpoint for Web App"
-    
-    $webAppResourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Web/sites/$WebAppName"
-    $webAppPeName = "${WebAppName}-pe"
-    $webAppDnsZoneName = "privatelink.azurewebsites.net"
-    
-    # Check if PE exists
-    $webAppPeExists = az network private-endpoint show --name $webAppPeName --resource-group $ResourceGroupName 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Info "Private Endpoint '$webAppPeName' already exists"
-    } else {
-        Write-Info "Creating Private Endpoint for Web App..."
-        az network private-endpoint create `
-            --name $webAppPeName `
-            --resource-group $ResourceGroupName `
-            --location $Location `
-            --vnet-name $VNetName `
-            --subnet $PrivateEndpointSubnetName `
-            --private-connection-resource-id $webAppResourceId `
-            --group-id "sites" `
-            --connection-name "${WebAppName}-connection" `
-            --output none 2>$null
-        
-        if ($LASTEXITCODE -ne 0) {
-            # Try with full subnet resource ID
-            Write-Info "Retrying with full subnet resource ID..."
-            az network private-endpoint create `
-                --name $webAppPeName `
-                --resource-group $ResourceGroupName `
-                --location $Location `
-                --subnet $peSubnetResourceId `
-                --private-connection-resource-id $webAppResourceId `
-                --group-id "sites" `
-                --connection-name "${WebAppName}-connection" `
-                --output none
-            
-            if ($LASTEXITCODE -ne 0) {
-                Write-Error "Failed to create Private Endpoint for Web App"
-                exit 1
-            }
-        }
-        Write-Success "Private Endpoint created: $webAppPeName"
-    }
-    
-    # NOTE: Public network access is intentionally left ENABLED here so the app (zip)
-    # can be pushed via the public SCM/Kudu endpoint in Step 8. It is disabled in
-    # Step 8c AFTER a successful code deployment, ending in a fully private posture.
-    
-    # Create/Configure DNS Zone
-    if (-not $dnsZoneWebAppFound) {
-        Write-Info "Creating Private DNS Zone: $webAppDnsZoneName..."
-        az network private-dns zone create `
-            --name $webAppDnsZoneName `
-            --resource-group $dnsZoneResourceGroup `
-            --subscription $dnsZoneSubscriptionId `
-            --output none 2>$null
-        
-        if ($LASTEXITCODE -eq 0) {
-            Write-Success "Private DNS Zone created: $webAppDnsZoneName"
-        }
-    }
-    
-    # Link DNS Zone to VNet
-    $webAppDnsLinkName = "link-$VNetName-webapp"
-    $linkExists = az network private-dns link vnet show `
-        --name $webAppDnsLinkName `
-        --zone-name $webAppDnsZoneName `
-        --resource-group $dnsZoneResourceGroup `
-        --subscription $dnsZoneSubscriptionId 2>&1
-    
-    if ($LASTEXITCODE -ne 0) {
-        Write-Info "Linking DNS Zone to VNet..."
-        az network private-dns link vnet create `
-            --name $webAppDnsLinkName `
-            --zone-name $webAppDnsZoneName `
-            --resource-group $dnsZoneResourceGroup `
-            --subscription $dnsZoneSubscriptionId `
-            --virtual-network $vnetResourceId `
-            --registration-enabled false `
-            --output none
-    }
-    
-    # Create DNS Zone Group
-    Write-Info "Creating DNS Zone Group for automatic A record registration..."
-    $webAppDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$dnsZoneResourceGroup/providers/Microsoft.Network/privateDnsZones/$webAppDnsZoneName"
-    
-    az network private-endpoint dns-zone-group create `
-        --name "webapp-dns-group" `
-        --endpoint-name $webAppPeName `
+    az webapp config appsettings set `
+        --name $WebAppName `
         --resource-group $ResourceGroupName `
-        --private-dns-zone $webAppDnsZoneId `
-        --zone-name "webapp" `
+        --settings "WEBSITE_VNET_ROUTE_ALL=0" `
         --output none 2>$null
-    
-    Write-Success "Web App Private Endpoint configured"
-    Write-Host ""
 }
-
-# ============================================
-# DEPLOY APPLICATION CODE
-# ============================================
-Write-Step "Step 8: Deploying Application Code"
 
 # The application root is the REPO ROOT (the parent of this Scripts/ folder).
 $repoRoot = Split-Path -Parent $PSScriptRoot
+# Tolerate a copy of this script sitting at the repo root instead of in Scripts/.
+if (-not (Test-Path (Join-Path $repoRoot "backend/main.py")) -and (Test-Path (Join-Path $PSScriptRoot "backend/main.py"))) {
+    $repoRoot = $PSScriptRoot
+}
 Write-Info "Application root: $repoRoot"
 
 foreach ($req in @("backend/main.py", "backend/requirements.txt", "frontend/package.json", "startup.sh")) {
@@ -2102,22 +2005,28 @@ foreach ($req in @("backend/main.py", "backend/requirements.txt", "frontend/pack
 Write-Success "Application sources found"
 
 # 1) Build the React frontend (the backend serves frontend/dist as the SPA).
-Write-Info "Building frontend (npm)... this can take a few minutes"
+$prebuiltDist = Join-Path $repoRoot "frontend/dist/index.html"
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-    Write-Error "npm not found. Install Node.js LTS to build the frontend, then re-run."
-    exit 1
+    if (Test-Path $prebuiltDist) {
+        Write-Warning "npm not found - using the pre-built 'frontend/dist' already present on disk (not rebuilding)."
+    } else {
+        Write-Error "npm not found and no pre-built 'frontend/dist/index.html' exists. Install Node.js LTS to build the frontend (or copy a pre-built frontend/dist onto this machine), then re-run."
+        exit 1
+    }
+} else {
+    Write-Info "Building frontend (npm)... this can take a few minutes"
+    Push-Location (Join-Path $repoRoot "frontend")
+    & npm ci 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { & npm install 2>&1 | Out-Null }
+    & npm run build 2>&1 | Out-Null
+    $buildExit = $LASTEXITCODE
+    Pop-Location
+    if ($buildExit -ne 0 -or -not (Test-Path $prebuiltDist)) {
+        Write-Error "Frontend build failed (frontend/dist not produced)."
+        exit 1
+    }
+    Write-Success "Frontend built (frontend/dist)"
 }
-Push-Location (Join-Path $repoRoot "frontend")
-& npm ci 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { & npm install 2>&1 | Out-Null }
-& npm run build 2>&1 | Out-Null
-$buildExit = $LASTEXITCODE
-Pop-Location
-if ($buildExit -ne 0 -or -not (Test-Path (Join-Path $repoRoot "frontend/dist/index.html"))) {
-    Write-Error "Frontend build failed (frontend/dist not produced)."
-    exit 1
-}
-Write-Success "Frontend built (frontend/dist)"
 
 # 2) Stage the real app layout, EXCLUDING secrets / venv / caches / local data.
 Write-Info "Creating deployment package..."
@@ -2172,7 +2081,10 @@ if ($LASTEXITCODE -ne 0) {
     
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Failed to deploy application code"
-        Write-Host "  Check logs: az webapp log tail --name $WebAppName --resource-group $ResourceGroupName" -ForegroundColor Yellow
+        Write-Host "  Oryx build log: https://$WebAppName.scm.azurewebsites.net/api/deployments/latest/log" -ForegroundColor Yellow
+        Write-Host "  Runtime log:    az webapp log tail --name $WebAppName --resource-group $ResourceGroupName" -ForegroundColor Yellow
+        Write-Host "  If the build stalled for many minutes before failing, the build container could not reach PyPI." -ForegroundColor Yellow
+        Write-Host "  Allow outbound HTTPS to pypi.org, files.pythonhosted.org and oryx-cdn.microsoft.io, then re-run." -ForegroundColor Yellow
         exit 1
     }
 }
@@ -2183,29 +2095,152 @@ Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
 Write-Success "Application code deployed"
 
 # ============================================
-# LOCK DOWN PUBLIC ACCESS (PRIVATE MODE) - after code is deployed
+# WEB APP VNET INTEGRATION (PRIVATE MODE)
+# Required so the app's OUTBOUND calls reach the PRIVATE Azure OpenAI / SQL endpoints
+# (their public access is disabled). Without this the app deploys but fails at runtime
+# resolving *.openai.azure.com to the blocked public IP.
+# Applied AFTER the code deploy so the Oryx build kept its public egress to PyPI.
 # ============================================
 if ($DeploymentMode -eq "Private") {
-    Write-Step "Step 8c: Disabling Public Network Access on Web App"
-    Write-Info "Code is deployed - sealing the Web App behind its Private Endpoint..."
-    $webAppResourceIdLockdown = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Web/sites/$WebAppName"
-    az webapp update `
+    Write-Step "Step 7b: Connecting Web App to VNet (Regional Integration)"
+
+    Write-Info "Adding regional VNet integration into subnet '$AppServiceIntegrationSubnetName'..."
+    az webapp vnet-integration add `
         --name $WebAppName `
         --resource-group $ResourceGroupName `
-        --set publicNetworkAccess=Disabled `
+        --vnet $vnetResourceId `
+        --subnet $AppServiceIntegrationSubnetName `
         --output none 2>$null
+
     if ($LASTEXITCODE -ne 0) {
-        az resource update `
-            --ids $webAppResourceIdLockdown `
-            --set properties.publicNetworkAccess=Disabled `
-            --output none 2>$null
+        Write-Error "Failed to add VNet integration for the Web App"
+        Write-Host "  Verify subnet '$AppServiceIntegrationSubnetName' is delegated to Microsoft.Web/serverFarms and has free address space." -ForegroundColor Yellow
+        exit 1
     }
+
+    # Route ALL outbound traffic (incl. DNS) through the VNet so privatelink zones resolve
+    Write-Info "Enabling route-all so outbound DNS uses the private DNS zones..."
+    az webapp config set `
+        --name $WebAppName `
+        --resource-group $ResourceGroupName `
+        --vnet-route-all-enabled true `
+        --output none 2>$null
+    # Some az CLI / API versions silently ignore the site-config property above
+    # ("WARNING: vnet_route_all_enabled is not a known attribute ... ignored"), leaving
+    # vnetRouteAllEnabled=false so private DNS never resolves. This app setting is
+    # honored across all versions, so set it too.
+    az webapp config appsettings set `
+        --name $WebAppName `
+        --resource-group $ResourceGroupName `
+        --settings "WEBSITE_VNET_ROUTE_ALL=1" `
+        --output none 2>$null
+
+    Write-Success "Web App connected to VNet: $VNetName / $AppServiceIntegrationSubnetName"
+    Write-Host ""
+}
+
+# ============================================
+# PRIVATE ENDPOINT FOR WEB APP (PRIVATE MODE)
+# Created AFTER code deploy (see note above) so the public SCM endpoint used for
+# zip-deploy stays resolvable/reachable for the whole deploy step.
+# ============================================
+if ($DeploymentMode -eq "Private") {
+    Write-Step "Step 8: Creating Private Endpoint for Web App"
+    
+    $webAppResourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Web/sites/$WebAppName"
+    $webAppPeName = "${WebAppName}-pe"
+    $webAppDnsZoneName = "privatelink.azurewebsites.net"
+    
+    # Check if PE exists
+    $webAppPeExists = az network private-endpoint show --name $webAppPeName --resource-group $ResourceGroupName 2>&1
     if ($LASTEXITCODE -eq 0) {
-        Write-Success "Public network access disabled - Web App is now reachable only via the Private Endpoint"
+        Write-Info "Private Endpoint '$webAppPeName' already exists"
     } else {
-        Write-Host "  ⚠️  Could not disable public network access automatically. Disable it manually:" -ForegroundColor Yellow
-        Write-Host "     az webapp update --name $WebAppName --resource-group $ResourceGroupName --set publicNetworkAccess=Disabled" -ForegroundColor Yellow
+        Write-Info "Creating Private Endpoint for Web App..."
+        az network private-endpoint create `
+            --name $webAppPeName `
+            --resource-group $ResourceGroupName `
+            --location $Location `
+            --vnet-name $VNetName `
+            --subnet $PrivateEndpointSubnetName `
+            --private-connection-resource-id $webAppResourceId `
+            --group-id "sites" `
+            --connection-name "${WebAppName}-connection" `
+            --output none 2>$null
+        
+        if ($LASTEXITCODE -ne 0) {
+            # Try with full subnet resource ID
+            Write-Info "Retrying with full subnet resource ID..."
+            az network private-endpoint create `
+                --name $webAppPeName `
+                --resource-group $ResourceGroupName `
+                --location $Location `
+                --subnet $peSubnetResourceId `
+                --private-connection-resource-id $webAppResourceId `
+                --group-id "sites" `
+                --connection-name "${WebAppName}-connection" `
+                --output none
+            
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "Failed to create Private Endpoint for Web App"
+                exit 1
+            }
+        }
+        Write-Success "Private Endpoint created: $webAppPeName"
     }
+    
+    # NOTE: Code is already deployed at this point (Step 7a, above), so it's now safe
+    # to attach the Private Endpoint. Public network access stays ENABLED until the very
+    # last step (Step 14) so RBAC, Graph, SQL grant, restart and the health probe all run
+    # against a reachable app.
+    
+    # Create/Configure DNS Zone
+    if (-not $dnsZoneWebAppFound) {
+        Write-Info "Creating Private DNS Zone: $webAppDnsZoneName..."
+        az network private-dns zone create `
+            --name $webAppDnsZoneName `
+            --resource-group $dnsZoneResourceGroup `
+            --subscription $dnsZoneSubscriptionId `
+            --output none 2>$null
+        
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Private DNS Zone created: $webAppDnsZoneName"
+        }
+    }
+    
+    # Link DNS Zone to VNet
+    $webAppDnsLinkName = "link-$VNetName-webapp"
+    $linkExists = az network private-dns link vnet show `
+        --name $webAppDnsLinkName `
+        --zone-name $webAppDnsZoneName `
+        --resource-group $dnsZoneResourceGroup `
+        --subscription $dnsZoneSubscriptionId 2>&1
+    
+    if ($LASTEXITCODE -ne 0) {
+        Write-Info "Linking DNS Zone to VNet..."
+        az network private-dns link vnet create `
+            --name $webAppDnsLinkName `
+            --zone-name $webAppDnsZoneName `
+            --resource-group $dnsZoneResourceGroup `
+            --subscription $dnsZoneSubscriptionId `
+            --virtual-network $vnetResourceId `
+            --registration-enabled false `
+            --output none
+    }
+    
+    # Create DNS Zone Group
+    Write-Info "Creating DNS Zone Group for automatic A record registration..."
+    $webAppDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$dnsZoneResourceGroup/providers/Microsoft.Network/privateDnsZones/$webAppDnsZoneName"
+    
+    az network private-endpoint dns-zone-group create `
+        --name "webapp-dns-group" `
+        --endpoint-name $webAppPeName `
+        --resource-group $ResourceGroupName `
+        --private-dns-zone $webAppDnsZoneId `
+        --zone-name "webapp" `
+        --output none 2>$null
+    
+    Write-Success "Web App Private Endpoint configured"
     Write-Host ""
 }
 
@@ -2397,6 +2432,7 @@ $graphPermissions = @(
     @{ Name = "User.Read.All";        Id = "df021288-bdef-4463-88db-98f22de89214"; Purpose = "Read all user profiles and sign-in activity" },
     @{ Name = "Directory.Read.All";   Id = "7ab1d382-f21e-4acd-a863-ba3e13f7da61"; Purpose = "Read directory data (users, groups, roles)" },
     @{ Name = "Group.Read.All";       Id = "5b567255-7703-4780-807c-7be8301ae99b"; Purpose = "Read all groups and memberships" },
+    @{ Name = "Device.Read.All";      Id = "7438b122-aefc-4978-80ed-43db9fcc7715"; Purpose = "Read Entra-registered / Intune device inventory" },
     @{ Name = "Application.Read.All"; Id = "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30"; Purpose = "Read all app registrations" },
     @{ Name = "AuditLog.Read.All";    Id = "b0afded3-3588-46d8-8b3d-9842eff778da"; Purpose = "Read audit logs and sign-in reports" },
     @{ Name = "Policy.Read.All";      Id = "246dd0d5-5bd0-4def-940b-0421030a5b68"; Purpose = "Read Conditional Access policies" }
@@ -2569,6 +2605,74 @@ if (-not [string]::IsNullOrWhiteSpace($EntraAppClientId)) {
         Write-Host "  WARNING: App registration $EntraAppClientId not found / no access." -ForegroundColor Yellow
         Write-Host "  Add this SPA redirect URI under the app registration's Authentication blade:" -ForegroundColor Yellow
         Write-Host "     $redirectOrigin" -ForegroundColor Cyan
+    }
+    Write-Host ""
+}
+
+# ============================================
+# VERIFY THE APPLICATION RESPONDS
+# Probed while the public endpoint is still reachable, so a broken deployment surfaces
+# here rather than after the app has been sealed behind its Private Endpoint.
+# ============================================
+Write-Step "Step 13: Verifying Application Health"
+
+$healthUrl = "https://$appUrl/api/auth/config"
+$healthOk = $false
+# In Private mode the probe is only informational (the Private Endpoint makes the
+# hostname resolve to a private IP), so don't spend long on it.
+$healthAttempts = if ($DeploymentMode -eq "Private") { 4 } else { 12 }
+Write-Info "Probing $healthUrl ..."
+foreach ($attempt in 1..$healthAttempts) {
+    try {
+        $resp = Invoke-WebRequest -Uri $healthUrl -Method GET -TimeoutSec 20 -UseBasicParsing -ErrorAction Stop
+        if ($resp.StatusCode -eq 200) { $healthOk = $true; break }
+    } catch {
+        $status = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+        # An auth challenge still proves the app started and is serving requests.
+        if ($status -eq 401 -or $status -eq 403) { $healthOk = $true; break }
+    }
+    if ($attempt -lt $healthAttempts) { Start-Sleep -Seconds 15 }
+}
+
+if ($healthOk) {
+    Write-Success "Application responded successfully: https://$appUrl"
+} elseif ($DeploymentMode -eq "Private") {
+    Write-Host "  No response from the public hostname (probe inconclusive)." -ForegroundColor Yellow
+    Write-Host "     This is EXPECTED when running from outside the VNet - the Web App Private Endpoint" -ForegroundColor Gray
+    Write-Host "     makes $appUrl resolve to a private IP. Browse the URL from a VNet-connected host." -ForegroundColor Gray
+} else {
+    Write-Host "  WARNING: the app did not respond yet - it may still be warming up after the restart." -ForegroundColor Yellow
+    Write-Host "     Check: az webapp log tail --name $WebAppName --resource-group $ResourceGroupName" -ForegroundColor Yellow
+}
+Write-Host ""
+
+# ============================================
+# LOCK DOWN PUBLIC ACCESS (PRIVATE MODE)
+# Deliberately the LAST action of the deployment. Everything before it - the Oryx code
+# deploy, RBAC, Graph permissions, the SQL grant, the restart, the Entra redirect URI and
+# the health probe - runs while the app is still publicly reachable, so nothing is sealed
+# off until the deployment has actually succeeded.
+# ============================================
+if ($DeploymentMode -eq "Private") {
+    Write-Step "Step 14: Disabling Public Network Access on Web App"
+    Write-Info "Deployment complete - sealing the Web App behind its Private Endpoint..."
+    $webAppResourceIdLockdown = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Web/sites/$WebAppName"
+    az webapp update `
+        --name $WebAppName `
+        --resource-group $ResourceGroupName `
+        --set publicNetworkAccess=Disabled `
+        --output none 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        az resource update `
+            --ids $webAppResourceIdLockdown `
+            --set properties.publicNetworkAccess=Disabled `
+            --output none 2>$null
+    }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "Public network access disabled - Web App is now reachable only via the Private Endpoint"
+    } else {
+        Write-Host "  WARNING: Could not disable public network access automatically. Disable it manually:" -ForegroundColor Yellow
+        Write-Host "     az webapp update --name $WebAppName --resource-group $ResourceGroupName --set publicNetworkAccess=Disabled" -ForegroundColor Yellow
     }
     Write-Host ""
 }
