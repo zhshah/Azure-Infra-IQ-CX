@@ -34,7 +34,11 @@ logger = logging.getLogger(__name__)
 
 CLAUDE_MODEL_PRIMARY   = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250514")
 CLAUDE_MODEL_FAST      = os.getenv("CLAUDE_MODEL_FAST", "claude-haiku-4-5-20251001")
-MAX_TOKENS_ANALYSIS    = 8192
+MAX_TOKENS_ANALYSIS    = int(os.getenv("AI_MAX_TOKENS_ANALYSIS", "8192"))
+# Sized by the deploy script from the model deployment's real TPM capacity: a small
+# pay-as-you-go quota needs far more patience than dedicated (PTU) throughput.
+AI_MAX_RETRIES         = int(os.getenv("AI_MAX_RETRIES", "3"))
+AI_RETRY_BACKOFF_SECS  = int(os.getenv("AI_RETRY_BACKOFF_SECONDS", "15"))
 MAX_TOKENS_NETWORKING  = 16000
 MAX_TOKENS_SUMMARY     = 4096
 MAX_RESOURCES_FULL_CTX = 150   # send full detail for up to N resources; summarize above this
@@ -160,8 +164,8 @@ def _call_ai(system_prompt: str, user_prompt: str, max_tokens: int = MAX_TOKENS_
     if not client:
         raise RuntimeError("No AI provider configured. Set AZURE_OPENAI_ENDPOINT + AZURE_OPENAI_KEY or ANTHROPIC_API_KEY.")
 
-    _MAX_RETRIES = 3
-    _BACKOFF_BASE = 15  # seconds: 15, 30, 60
+    _MAX_RETRIES = AI_MAX_RETRIES
+    _BACKOFF_BASE = AI_RETRY_BACKOFF_SECS
 
     def _is_rate_limit(exc) -> bool:
         msg = str(exc).lower()

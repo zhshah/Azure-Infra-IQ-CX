@@ -1212,6 +1212,7 @@ if ($OpenAIMode -eq "Existing") {
     $deployedModel   = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --deployment-name $OpenAIDeploymentName --query "properties.model.name" -o tsv 2>$null
     $deployedVersion = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --deployment-name $OpenAIDeploymentName --query "properties.model.version" -o tsv 2>$null
     $deployedSku     = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --deployment-name $OpenAIDeploymentName --query "sku.name" -o tsv 2>$null
+    $deployedCapacity = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --deployment-name $OpenAIDeploymentName --query "sku.capacity" -o tsv 2>$null
     # Preliminary fail-fast: when we CAN read the resource (name-based mode) but the named deployment
     # is absent, stop BEFORE creating any infrastructure — the app would 404 at runtime. This script
     # does not create/alter deployments on an existing resource, so the customer must fix the name.
@@ -1376,6 +1377,30 @@ if ($deployedModel) {
     $modelDisplay = "(deployment name '$OpenAIDeploymentName')"
 }
 Write-Success "Model deployed: $modelDisplay  (deployment name: '$OpenAIDeploymentName')"
+
+# ── Size the app's AI retry budget to the deployment's REAL throughput ────────────────
+# A small pay-as-you-go quota (e.g. GlobalStandard capacity 50 = 50K TPM) returns HTTP 429
+# under the large BCDR/assessment prompts, and the default 3 retries are exhausted long
+# before the per-minute window refills — the UI then shows "rate_limit_exceeded".
+# Provisioned (PTU) capacity is dedicated, so it needs far less patience.
+$aiCapacity = 0
+if ($deployedCapacity) { [int]::TryParse($deployedCapacity, [ref]$aiCapacity) | Out-Null }
+$isProvisioned = ($deployedSku -like "*Provisioned*")
+if ($isProvisioned) {
+    $aiMaxRetries = 3;  $aiBackoff = 10; $aiMaxTokens = 8192
+    $aiTuneNote = "provisioned (PTU) throughput"
+} elseif ($aiCapacity -gt 0 -and $aiCapacity -lt 100) {
+    # Tight shared quota: back off hard and shrink the response budget per call.
+    $aiMaxRetries = 6;  $aiBackoff = 30; $aiMaxTokens = 4096
+    $aiTuneNote = "low shared quota (${aiCapacity}K TPM)"
+} elseif ($aiCapacity -gt 0 -and $aiCapacity -lt 400) {
+    $aiMaxRetries = 5;  $aiBackoff = 20; $aiMaxTokens = 6144
+    $aiTuneNote = "moderate shared quota (${aiCapacity}K TPM)"
+} else {
+    $aiMaxRetries = 4;  $aiBackoff = 15; $aiMaxTokens = 8192
+    $aiTuneNote = if ($aiCapacity -gt 0) { "ample quota (${aiCapacity}K TPM)" } else { "capacity not readable - using safe defaults" }
+}
+Write-Info "AI throughput tuning: $aiTuneNote -> retries=$aiMaxRetries backoff=${aiBackoff}s maxTokens=$aiMaxTokens"
 
 # ============================================
 # PRIVATE ENDPOINT FOR OPENAI (PRIVATE MODE)
@@ -1984,6 +2009,9 @@ $settings = @(
     "AZURE_OPENAI_USE_MANAGED_IDENTITY=true",
     "AZURE_OPENAI_KEY=$openaiKey",
     "AZURE_OPENAI_DEPLOYMENT=$OpenAIDeploymentName",
+    "AI_MAX_RETRIES=$aiMaxRetries",
+    "AI_RETRY_BACKOFF_SECONDS=$aiBackoff",
+    "AI_MAX_TOKENS_ANALYSIS=$aiMaxTokens",
     "AZURE_TENANT_ID=$EntraTenantId",
     "AZURE_SUBSCRIPTION_ID=$SubscriptionId",
     "AZURE_SUBSCRIPTION_IDS=$ScanSubscriptionsEnv",
