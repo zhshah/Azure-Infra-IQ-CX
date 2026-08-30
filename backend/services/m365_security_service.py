@@ -54,16 +54,30 @@ def _creds() -> Tuple[str, str, str]:
 
 
 def _get_token() -> Optional[str]:
-    """App-only Graph token via client credentials. Cached until ~5 min before expiry."""
+    """App-only Graph token. Prefers an explicit service principal, otherwise falls back to
+    the platform managed identity (which the deployment grants the Graph app roles to)."""
     now = time.time()
     if _token_cache["token"] and now < _token_cache["exp"] - 300:
         return _token_cache["token"]
     tid, cid, sec = _creds()
-    if not (tid and cid and sec):
-        return None
+    cred = None
+    if tid and cid and sec:
+        try:
+            from azure.identity import ClientSecretCredential
+            cred = ClientSecretCredential(tenant_id=tid, client_id=cid, client_secret=sec)
+        except Exception as exc:
+            logger.info("M365: service-principal credential unavailable: %s", exc)
+    if cred is None:
+        # App Service / Container Apps deployments authenticate as the system-assigned managed
+        # identity; no client secret exists, and without this branch the dashboard would be
+        # permanently stuck on sample data even with the Graph roles granted.
+        try:
+            from azure.identity import DefaultAzureCredential
+            cred = DefaultAzureCredential(exclude_interactive_browser_credential=True)
+        except Exception as exc:
+            logger.info("M365: no usable credential for Graph: %s", exc)
+            return None
     try:
-        from azure.identity import ClientSecretCredential
-        cred = ClientSecretCredential(tenant_id=tid, client_id=cid, client_secret=sec)
         tok = cred.get_token(_SCOPE)
         _token_cache["token"] = tok.token
         _token_cache["exp"] = float(tok.expires_on)

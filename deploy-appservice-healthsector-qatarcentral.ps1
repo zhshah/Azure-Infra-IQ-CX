@@ -636,11 +636,16 @@ if ($explicitSubs) {
 } else {
     $ScanSubscriptionsEnv = "auto"   # backend discovers all subs the identity can read
     Write-Host "  Discovering accessible subscriptions (for RBAC grants)..." -ForegroundColor DarkGray
-    $allSubs = az account list --query "[?state=='Enabled'].id" -o tsv 2>$null
+    # Scope to the DEPLOYMENT tenant only. The local az profile can hold subscriptions from every
+    # tenant the operator has ever signed into, and an unfiltered list would try to grant roles on
+    # subscriptions in unrelated tenants (which fails, is slow, and is not ours to touch).
+    $deployTenantId = az account show --subscription $SubscriptionId --query tenantId -o tsv 2>$null
+    if ([string]::IsNullOrWhiteSpace($deployTenantId)) { $deployTenantId = $EntraTenantId }
+    $allSubs = az account list --query "[?state=='Enabled' && tenantId=='$deployTenantId'].id" -o tsv 2>$null
     $subList = @($allSubs -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if ($subList.Count -gt 0) {
         $SubscriptionIds = ($subList -join ',')
-        Write-Success "Found $($subList.Count) enabled subscription(s) — granting identity Reader on each; app discovers them at runtime"
+        Write-Success "Found $($subList.Count) enabled subscription(s) in tenant $deployTenantId — granting identity Reader on each; app discovers them at runtime"
     } else {
         $SubscriptionIds = $SubscriptionId
     }
@@ -912,6 +917,66 @@ if ($DeploymentMode -eq "Private") {
     Write-Host "    Integration Subnet:    $AppServiceIntegrationSubnetName" -ForegroundColor White
     Write-Host "    DNS Zone Subscription: $dnsZoneSubscriptionId" -ForegroundColor White
     Write-Host ""
+}
+
+# ============================================
+# ============================================
+# PRIVATE DNS HELPERS
+# ============================================
+# A VNet can be linked to only ONE Private DNS zone per namespace. When several copies of the
+# same zone exist (common with a hub/connectivity subscription), the ONLY correct target is the
+# zone this VNet is ALREADY linked to. Registering the private endpoint's A record in any other
+# copy produces a record the app can never resolve, while the link call fails with
+# "cannot be linked to multiple zones with overlapping namespaces".
+function Resolve-PrivateDnsZoneRg {
+    param([string]$ZoneName, [string]$DnsSubscriptionId, [string]$VNetId, [string]$FallbackRg)
+
+    $raw = az network private-dns zone list --subscription $DnsSubscriptionId `
+        --query "[?name=='$ZoneName'].resourceGroup" -o tsv 2>$null
+    $rgs = @($raw -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
+    foreach ($rg in $rgs) {
+        $linked = az network private-dns link vnet list --zone-name $ZoneName --resource-group $rg `
+            --subscription $DnsSubscriptionId --query "[].virtualNetwork.id" -o tsv 2>$null
+        if ($linked -and (@($linked -split "`n" | ForEach-Object { $_.Trim() }) -contains $VNetId)) {
+            return [pscustomobject]@{ ResourceGroup = $rg; Exists = $true; Linked = $true }
+        }
+    }
+    if ($rgs.Count -gt 0) { return [pscustomobject]@{ ResourceGroup = $rgs[0]; Exists = $true; Linked = $false } }
+    return [pscustomobject]@{ ResourceGroup = $FallbackRg; Exists = $false; Linked = $false }
+}
+
+# Safety net: the DNS zone group is what normally writes the A record, but it silently targets
+# whatever zone it was given. Verify the record actually exists in the zone the VNet resolves
+# against and create it from the private endpoint's real NIC IP if it doesn't.
+function Confirm-PrivateDnsARecord {
+    param(
+        [string]$RecordName, [string]$ZoneName, [string]$ZoneRg,
+        [string]$DnsSubscriptionId, [string]$PeName, [string]$PeResourceGroup
+    )
+    $have = az network private-dns record-set a show --name $RecordName --zone-name $ZoneName `
+        --resource-group $ZoneRg --subscription $DnsSubscriptionId --query "aRecords[0].ipv4Address" -o tsv 2>$null
+    if (-not [string]::IsNullOrWhiteSpace($have)) {
+        Write-Success "DNS A record OK: $RecordName.$ZoneName -> $have"
+        return
+    }
+    $nicId = az network private-endpoint show --name $PeName --resource-group $PeResourceGroup `
+        --query "networkInterfaces[0].id" -o tsv 2>$null
+    $peIp = if ($nicId) { az network nic show --ids $nicId --query "ipConfigurations[0].privateIPAddress" -o tsv 2>$null } else { $null }
+    if ([string]::IsNullOrWhiteSpace($peIp)) {
+        Write-Host "  WARNING: could not read the private endpoint IP for '$PeName' - add the A record manually." -ForegroundColor Yellow
+        return
+    }
+    Write-Info "A record missing in the VNet-linked zone - creating $RecordName -> $peIp ..."
+    az network private-dns record-set a create --name $RecordName --zone-name $ZoneName `
+        --resource-group $ZoneRg --subscription $DnsSubscriptionId --output none 2>$null
+    az network private-dns record-set a add-record --record-set-name $RecordName --zone-name $ZoneName `
+        --resource-group $ZoneRg --subscription $DnsSubscriptionId --ipv4-address $peIp --output none 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "DNS A record created: $RecordName.$ZoneName -> $peIp"
+    } else {
+        Write-Host "  WARNING: failed to create the A record for $RecordName.$ZoneName" -ForegroundColor Yellow
+    }
 }
 
 # ============================================
@@ -1555,35 +1620,40 @@ if ($DeploySql) {
             Write-Success "Private Endpoint created: $sqlPeName"
         }
 
-        # Private DNS zone for SQL
-        $existingSqlDns = az network private-dns zone list --subscription $dnsZoneSubscriptionId --query "[?name=='$sqlDnsZoneName'].{Name:name, RG:resourceGroup}" -o json 2>$null | ConvertFrom-Json
-        if (-not ($existingSqlDns -and $existingSqlDns.Count -gt 0)) {
-            Write-Info "Creating Private DNS Zone: $sqlDnsZoneName..."
+        # Private DNS zone for SQL - target the zone THIS VNet resolves against, not just any copy.
+        $sqlZoneInfo   = Resolve-PrivateDnsZoneRg -ZoneName $sqlDnsZoneName -DnsSubscriptionId $dnsZoneSubscriptionId -VNetId $vnetResourceId -FallbackRg $dnsZoneResourceGroup
+        $sqlDnsZoneRg  = $sqlZoneInfo.ResourceGroup
+        if (-not $sqlZoneInfo.Exists) {
+            Write-Info "Creating Private DNS Zone: $sqlDnsZoneName in RG $sqlDnsZoneRg..."
             az network private-dns zone create `
                 --name $sqlDnsZoneName `
-                --resource-group $dnsZoneResourceGroup `
+                --resource-group $sqlDnsZoneRg `
                 --subscription $dnsZoneSubscriptionId `
                 --output none 2>$null
+        } elseif ($sqlZoneInfo.Linked) {
+            Write-Info "Reusing the '$sqlDnsZoneName' zone already linked to '$VNetName' (RG: $sqlDnsZoneRg)"
         } else {
-            $dnsZoneResourceGroup = $existingSqlDns[0].RG
+            Write-Info "Using existing '$sqlDnsZoneName' zone in RG $sqlDnsZoneRg"
         }
 
-        $sqlDnsLinkName = "link-$VNetName-sql"
-        $sqlLinkExists = az network private-dns link vnet show --name $sqlDnsLinkName --zone-name $sqlDnsZoneName --resource-group $dnsZoneResourceGroup --subscription $dnsZoneSubscriptionId 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-Info "Linking SQL DNS Zone to VNet..."
-            az network private-dns link vnet create `
-                --name $sqlDnsLinkName `
-                --zone-name $sqlDnsZoneName `
-                --resource-group $dnsZoneResourceGroup `
-                --subscription $dnsZoneSubscriptionId `
-                --virtual-network $vnetResourceId `
-                --registration-enabled false `
-                --output none
+        if (-not $sqlZoneInfo.Linked) {
+            $sqlDnsLinkName = "link-$VNetName-sql"
+            az network private-dns link vnet show --name $sqlDnsLinkName --zone-name $sqlDnsZoneName --resource-group $sqlDnsZoneRg --subscription $dnsZoneSubscriptionId 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Info "Linking SQL DNS Zone to VNet..."
+                az network private-dns link vnet create `
+                    --name $sqlDnsLinkName `
+                    --zone-name $sqlDnsZoneName `
+                    --resource-group $sqlDnsZoneRg `
+                    --subscription $dnsZoneSubscriptionId `
+                    --virtual-network $vnetResourceId `
+                    --registration-enabled false `
+                    --output none 2>$null
+            }
         }
 
         Write-Info "Creating DNS Zone Group for SQL Private Endpoint..."
-        $sqlDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$dnsZoneResourceGroup/providers/Microsoft.Network/privateDnsZones/$sqlDnsZoneName"
+        $sqlDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$sqlDnsZoneRg/providers/Microsoft.Network/privateDnsZones/$sqlDnsZoneName"
         az network private-endpoint dns-zone-group create `
             --name "sql-dns-group" `
             --endpoint-name $sqlPeName `
@@ -1591,6 +1661,11 @@ if ($DeploySql) {
             --private-dns-zone $sqlDnsZoneId `
             --zone-name "sql" `
             --output none 2>$null
+
+        # Without a resolvable A record here every pyodbc call blocks for the full 30s login
+        # timeout, which makes the whole app look hung ("Connecting to backend...").
+        Confirm-PrivateDnsARecord -RecordName $SqlServerName -ZoneName $sqlDnsZoneName -ZoneRg $sqlDnsZoneRg `
+            -DnsSubscriptionId $dnsZoneSubscriptionId -PeName $sqlPeName -PeResourceGroup $ResourceGroupName
 
         Write-Success "Azure SQL Private Endpoint configured"
     } else {
@@ -1971,6 +2046,19 @@ az webapp config set `
 
 Write-Success "Web App configuration applied"
 
+# Without this the container's stdout is never captured, so a startup failure shows only a bare
+# 502 with no way to see the Python traceback.
+Write-Info "Enabling application and container logging..."
+az webapp log config `
+    --name $WebAppName `
+    --resource-group $ResourceGroupName `
+    --application-logging filesystem `
+    --level information `
+    --docker-container-logging filesystem `
+    --detailed-error-messages true `
+    --output none 2>$null
+if ($LASTEXITCODE -eq 0) { Write-Success "Diagnostic logging enabled (az webapp log tail / log download)" }
+
 # ============================================
 # DEPLOY APPLICATION CODE
 # Runs BEFORE VNet integration and BEFORE the Web App's Private Endpoint. The Oryx
@@ -2298,43 +2386,49 @@ if ($DeploymentMode -eq "Private") {
     # last step (Step 14) so RBAC, Graph, SQL grant, restart and the health probe all run
     # against a reachable app.
     
-    # Create/Configure DNS Zone
-    if (-not $dnsZoneWebAppFound) {
-        Write-Info "Creating Private DNS Zone: $webAppDnsZoneName..."
+    # Create/Configure DNS Zone - target the zone THIS VNet resolves against, not just any copy.
+    $webAppZoneInfo = Resolve-PrivateDnsZoneRg -ZoneName $webAppDnsZoneName -DnsSubscriptionId $dnsZoneSubscriptionId -VNetId $vnetResourceId -FallbackRg $dnsZoneResourceGroup
+    $webAppDnsZoneRg = $webAppZoneInfo.ResourceGroup
+    if (-not $webAppZoneInfo.Exists) {
+        Write-Info "Creating Private DNS Zone: $webAppDnsZoneName in RG $webAppDnsZoneRg..."
         az network private-dns zone create `
             --name $webAppDnsZoneName `
-            --resource-group $dnsZoneResourceGroup `
+            --resource-group $webAppDnsZoneRg `
             --subscription $dnsZoneSubscriptionId `
             --output none 2>$null
         
         if ($LASTEXITCODE -eq 0) {
             Write-Success "Private DNS Zone created: $webAppDnsZoneName"
         }
+    } elseif ($webAppZoneInfo.Linked) {
+        Write-Info "Reusing the '$webAppDnsZoneName' zone already linked to '$VNetName' (RG: $webAppDnsZoneRg)"
     }
     
     # Link DNS Zone to VNet
-    $webAppDnsLinkName = "link-$VNetName-webapp"
-    $linkExists = az network private-dns link vnet show `
-        --name $webAppDnsLinkName `
-        --zone-name $webAppDnsZoneName `
-        --resource-group $dnsZoneResourceGroup `
-        --subscription $dnsZoneSubscriptionId 2>&1
-    
-    if ($LASTEXITCODE -ne 0) {
-        Write-Info "Linking DNS Zone to VNet..."
-        az network private-dns link vnet create `
+    if (-not $webAppZoneInfo.Linked) {
+        $webAppDnsLinkName = "link-$VNetName-webapp"
+        az network private-dns link vnet show `
             --name $webAppDnsLinkName `
             --zone-name $webAppDnsZoneName `
-            --resource-group $dnsZoneResourceGroup `
-            --subscription $dnsZoneSubscriptionId `
-            --virtual-network $vnetResourceId `
-            --registration-enabled false `
-            --output none
+            --resource-group $webAppDnsZoneRg `
+            --subscription $dnsZoneSubscriptionId 2>&1 | Out-Null
+        
+        if ($LASTEXITCODE -ne 0) {
+            Write-Info "Linking DNS Zone to VNet..."
+            az network private-dns link vnet create `
+                --name $webAppDnsLinkName `
+                --zone-name $webAppDnsZoneName `
+                --resource-group $webAppDnsZoneRg `
+                --subscription $dnsZoneSubscriptionId `
+                --virtual-network $vnetResourceId `
+                --registration-enabled false `
+                --output none 2>$null
+        }
     }
     
     # Create DNS Zone Group
     Write-Info "Creating DNS Zone Group for automatic A record registration..."
-    $webAppDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$dnsZoneResourceGroup/providers/Microsoft.Network/privateDnsZones/$webAppDnsZoneName"
+    $webAppDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$webAppDnsZoneRg/providers/Microsoft.Network/privateDnsZones/$webAppDnsZoneName"
     
     az network private-endpoint dns-zone-group create `
         --name "webapp-dns-group" `
@@ -2343,6 +2437,9 @@ if ($DeploymentMode -eq "Private") {
         --private-dns-zone $webAppDnsZoneId `
         --zone-name "webapp" `
         --output none 2>$null
+
+    Confirm-PrivateDnsARecord -RecordName $WebAppName -ZoneName $webAppDnsZoneName -ZoneRg $webAppDnsZoneRg `
+        -DnsSubscriptionId $dnsZoneSubscriptionId -PeName $webAppPeName -PeResourceGroup $ResourceGroupName
     
     Write-Success "Web App Private Endpoint configured"
     Write-Host ""
@@ -2370,12 +2467,15 @@ $mgScope     = "/providers/Microsoft.Management/managementGroups/$EntraTenantId"
 $openaiRgForScope  = if ($OpenAIMode -eq "Existing" -and -not [string]::IsNullOrWhiteSpace($OpenAIResourceGroup))    { $OpenAIResourceGroup    } else { $ResourceGroupName }
 $openaiSubForScope = if ($OpenAIMode -eq "Existing" -and -not [string]::IsNullOrWhiteSpace($OpenAISubscriptionId))   { $OpenAISubscriptionId   } else { $SubscriptionId    }
 $openaiScope = "/subscriptions/$openaiSubForScope/resourceGroups/$openaiRgForScope/providers/Microsoft.CognitiveServices/accounts/$OpenAIResourceName"
+# Reservations Reader accepts EXACTLY this scope - it is not assignable at MG or subscription level.
+$capacityScope = "/providers/Microsoft.Capacity"
 $miRbacRef = @(
     @{ Role = "Reader";                         Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "Resource Graph / inventory reads across all subscriptions" },
     @{ Role = "Cost Management Reader";          Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "Cost analysis, spend trends, budgets" },
+    @{ Role = "Monitoring Reader";               Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "CPU / memory / network metrics for right-sizing" },
     @{ Role = "Cognitive Services OpenAI User";  Scope = $openaiScope; ScopeLabel = "Azure OpenAI resource ONLY";         Purpose = "Call the deployed model for chat completions" },
     @{ Role = "Management Group Reader";         Scope = $mgScope;     ScopeLabel = "Tenant Root MG";                     Purpose = "List management groups in the hierarchy dropdown" },
-    @{ Role = "Reservations Reader";            Scope = $mgScope;     ScopeLabel = "Tenant Root MG";                     Purpose = "Read Reserved Instances inventory & recommendations" }
+    @{ Role = "Reservations Reader";            Scope = $capacityScope; ScopeLabel = "/providers/Microsoft.Capacity";     Purpose = "Read Reserved Instances inventory & recommendations" }
 )
 $permIssues = @()   # collects { Kind, Name, Scope, Command } for anything not auto-assigned
 $openaiGrantFailed = $false   # set true if the app MI could not be granted OpenAI access (customer must grant it)
@@ -2394,6 +2494,12 @@ $roles = @(
         Scope = "/providers/Microsoft.Management/managementGroups/$EntraTenantId"
         ScopeDescription = "Tenant Root Management Group (inherits to ALL subscriptions)"
         Justification = "Required for cost analysis, spending trends, and budget monitoring across ALL subscriptions"
+    },
+    @{
+        Name = "Monitoring Reader"
+        Scope = "/providers/Microsoft.Management/managementGroups/$EntraTenantId"
+        ScopeDescription = "Tenant Root Management Group (inherits to ALL subscriptions)"
+        Justification = "Required for CPU / memory / network metrics behind right-sizing and performance views"
     }
 )
 
@@ -2425,9 +2531,9 @@ foreach ($role in $roles) {
 $subList = @($SubscriptionIdsCsv -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($subList.Count -gt 0) {
     Write-Host ""
-    Write-Info "Ensuring Reader + Cost Management Reader on each target subscription ($($subList.Count))..."
+    Write-Info "Ensuring Reader + Cost Management Reader + Monitoring Reader on each target subscription ($($subList.Count))..."
     foreach ($sid in $subList) {
-        foreach ($roleName in @("Reader", "Cost Management Reader")) {
+        foreach ($roleName in @("Reader", "Cost Management Reader", "Monitoring Reader")) {
             $subAssign = az role assignment create --assignee $principalId --role $roleName --scope "/subscriptions/$sid" --output none 2>&1
             if ($LASTEXITCODE -eq 0 -or $subAssign -match "already exists") {
                 Write-Success "$roleName on $sid"
@@ -2502,22 +2608,26 @@ if ($LASTEXITCODE -eq 0 -or $mgResult -match "already exists") {
 # Reservations Reader
 Write-Host ""
 Write-Host "  Role: Reservations Reader" -ForegroundColor Cyan
-Write-Host "    Scope: Tenant Root Management Group" -ForegroundColor White
+Write-Host "    Scope: /providers/Microsoft.Capacity" -ForegroundColor White
 Write-Host "    Purpose: Read Reserved Instances inventory and recommendations" -ForegroundColor Gray
 Write-Host ""
 
-Write-Info "Assigning 'Reservations Reader' at Tenant Root scope..."
+# assignableScopes for this role is EXACTLY ["/providers/Microsoft.Capacity"], so assigning it at
+# management-group or subscription scope always fails. Use the role definition ID to dodge any
+# display-name lookup that is itself scope-bound.
+Write-Info "Assigning 'Reservations Reader' at /providers/Microsoft.Capacity scope..."
 $riResult = az role assignment create `
-    --assignee $principalId `
-    --role "Reservations Reader" `
-    --scope "/providers/Microsoft.Management/managementGroups/$EntraTenantId" `
+    --assignee-object-id $principalId `
+    --assignee-principal-type ServicePrincipal `
+    --role "582fc458-8989-419f-a480-75249bc5db7e" `
+    --scope $capacityScope `
     --output none 2>&1
 
 if ($LASTEXITCODE -eq 0 -or $riResult -match "already exists") {
-    Write-Success "Reservations Reader - Assigned (Tenant Root scope)"
+    Write-Success "Reservations Reader - Assigned (/providers/Microsoft.Capacity)"
 } else {
-    Write-Host "  ⚠️  Could not assign Reservations Reader (requires elevated permissions)" -ForegroundColor Yellow
-    $permIssues += @{ Kind = "RBAC"; Name = "Reservations Reader"; Scope = "Tenant Root MG"; Command = "az role assignment create --assignee $principalId --role `"Reservations Reader`" --scope `"$mgScope`"" }
+    Write-Host "  WARNING: Could not assign Reservations Reader (requires elevated permissions)" -ForegroundColor Yellow
+    $permIssues += @{ Kind = "RBAC"; Name = "Reservations Reader"; Scope = $capacityScope; Command = "az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal --role 582fc458-8989-419f-a480-75249bc5db7e --scope `"$capacityScope`"" }
 }
 
 Write-Host ""
@@ -2539,7 +2649,16 @@ $graphPermissions = @(
     @{ Name = "Device.Read.All";      Id = "7438b122-aefc-4978-80ed-43db9fcc7715"; Purpose = "Read Entra-registered / Intune device inventory" },
     @{ Name = "Application.Read.All"; Id = "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30"; Purpose = "Read all app registrations" },
     @{ Name = "AuditLog.Read.All";    Id = "b0afded3-3588-46d8-8b3d-9842eff778da"; Purpose = "Read audit logs and sign-in reports" },
-    @{ Name = "Policy.Read.All";      Id = "246dd0d5-5bd0-4def-940b-0421030a5b68"; Purpose = "Read Conditional Access policies" }
+    @{ Name = "Policy.Read.All";      Id = "246dd0d5-5bd0-4def-940b-0421030a5b68"; Purpose = "Read Conditional Access policies" },
+    # ── Microsoft 365 Security Operations dashboard (Defender XDR / Entra ID Protection / Intune) ──
+    # Without these the dashboard cannot call Graph and silently renders SAMPLE data instead.
+    @{ Name = "SecurityEvents.Read.All";                   Id = "bf394140-e372-4bf9-a898-299cfc7564e5"; Purpose = "Microsoft Secure Score" },
+    @{ Name = "SecurityIncident.Read.All";                 Id = "45cc0394-e837-488b-a098-1918f48d186c"; Purpose = "Defender XDR incidents" },
+    @{ Name = "SecurityAlert.Read.All";                    Id = "472e4a4d-bb4a-4026-98d1-0b0d74cb74a5"; Purpose = "Defender XDR alerts" },
+    @{ Name = "IdentityRiskyUser.Read.All";                Id = "dc5007c0-2d7d-4c42-879c-2dab87571379"; Purpose = "Entra ID Protection risky users" },
+    @{ Name = "IdentityRiskEvent.Read.All";                Id = "6e472fd1-ad78-48da-a0f0-97ab2c6b769e"; Purpose = "Entra ID Protection risk detections" },
+    @{ Name = "DeviceManagementManagedDevices.Read.All";   Id = "2f51be20-0bb4-4fed-bf7b-db946066c75e"; Purpose = "Intune device compliance inventory" },
+    @{ Name = "Reports.Read.All";                          Id = "230c1aed-a721-4c5d-9cb4-a90514e508ef"; Purpose = "MFA registration / authentication method reports" }
 )
 
 Write-Host ""
