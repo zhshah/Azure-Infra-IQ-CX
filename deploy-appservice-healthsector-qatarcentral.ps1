@@ -2706,27 +2706,36 @@ if ([string]::IsNullOrEmpty($spObjectId)) {
         foreach ($perm in $graphPermissions) {
             Write-Host "    • $($perm.Name) - $($perm.Purpose)" -ForegroundColor Gray
             
-            # Create the app role assignment using Microsoft Graph REST API
+            # PowerShell mangles the quoting of an inline `az rest --body` JSON string, so Graph
+            # rejects it with "Unable to read JSON request payload" and EVERY grant fails silently.
+            # Writing the body to a BOM-less file and passing @file is the only reliable form.
             $body = @{
                 principalId = $spObjectId
                 resourceId = $graphEnterpriseAppId
                 appRoleId = $perm.Id
             } | ConvertTo-Json -Compress
-            
-            # Use az rest to call Graph API
+            $graphBodyFile = Join-Path $env:TEMP "graph-approle-$([guid]::NewGuid().ToString('N')).json"
+            $body | Out-File -FilePath $graphBodyFile -Encoding ascii -Force
+
             $assignResult = az rest --method POST `
                 --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$spObjectId/appRoleAssignments" `
                 --headers "Content-Type=application/json" `
-                --body $body 2>&1
+                --body "@$graphBodyFile" 2>&1
+            $assignExit = $LASTEXITCODE
+            Remove-Item $graphBodyFile -Force -ErrorAction SilentlyContinue
             
-            if ($LASTEXITCODE -eq 0) {
+            if ($assignExit -eq 0) {
                 Write-Success "    $($perm.Name) - Assigned"
             } elseif ($assignResult -match "Permission being assigned already exists") {
                 Write-Info "    $($perm.Name) - Already assigned"
             } else {
-                Write-Host "    ⚠️  $($perm.Name) - Could not assign (may require admin consent)" -ForegroundColor Yellow
-                $refBody = "{`"principalId`":`"$spObjectId`",`"resourceId`":`"$graphEnterpriseAppId`",`"appRoleId`":`"$($perm.Id)`"}"
-                $permIssues += @{ Kind = "Graph"; Name = $perm.Name; Scope = "Microsoft Graph (application permission)"; Command = "az rest --method POST --uri `"https://graph.microsoft.com/v1.0/servicePrincipals/$spObjectId/appRoleAssignments`" --headers `"Content-Type=application/json`" --body '$refBody'" }
+                # Print the real Graph error instead of a generic guess - masking it is what hid
+                # the fact that none of these were ever being granted.
+                $firstErr = ($assignResult | Out-String).Trim() -split "`n" | Select-Object -First 1
+                Write-Host "    WARNING: $($perm.Name) - not assigned: $firstErr" -ForegroundColor Yellow
+                # Same file-based form as above; an inline --body will fail for the admin too.
+                $refCmd = "`$b='{`"principalId`":`"$spObjectId`",`"resourceId`":`"$graphEnterpriseAppId`",`"appRoleId`":`"$($perm.Id)`"}'; `$f=Join-Path `$env:TEMP 'graph.json'; `$b | Out-File `$f -Encoding ascii; az rest --method POST --uri `"https://graph.microsoft.com/v1.0/servicePrincipals/$spObjectId/appRoleAssignments`" --headers `"Content-Type=application/json`" --body `"@`$f`""
+                $permIssues += @{ Kind = "Graph"; Name = $perm.Name; Scope = "Microsoft Graph (application permission)"; Command = $refCmd }
             }
         }
         
