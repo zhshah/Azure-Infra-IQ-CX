@@ -157,9 +157,6 @@ export default function M365SecurityDashboard({ compact = false, onOpen }) {
           <p className="text-xs text-gray-400">Defender XDR · Entra ID Protection · Intune · Conditional Access — via Microsoft Graph</p>
         </div>
         <div className="ml-auto flex items-center gap-3">
-          <span className="text-[11px] text-gray-500 hidden sm:inline">
-            {d.graph_connected ? 'Graph connected' : 'Graph not configured'}{d.graph_connected && d.all_sample ? ' · awaiting Graph permissions' : ''}
-          </span>
           {compact ? (
             <button onClick={onOpen}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white">
