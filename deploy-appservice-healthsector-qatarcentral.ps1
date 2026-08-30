@@ -318,7 +318,13 @@ param(
     # Public URL users browse to (used to register the Entra SPA redirect URI).
     # Defaults to the Web App's default *.azurewebsites.net hostname.
     [Parameter(Mandatory = $false)]
-    [string]$AppPublicUrl = ""
+    [string]$AppPublicUrl = "",
+
+    # Bundle Linux (cp311) wheels in the package and SKIP the App Service remote build, so the
+    # deployment needs no outbound access to pypi.org at all. Used automatically as a fallback if
+    # the remote build fails. Requires Python 3 on the machine running this script.
+    [Parameter(Mandatory = $false)]
+    [switch]$OfflineDependencies
 )
 
 # ============================================
@@ -1912,7 +1918,13 @@ $settings = @(
     "AUTO_REFRESH_INTERVAL_HOURS=6",
     "SETTINGS_DIR=/home/site/wwwroot/config",
     "WEBSITES_PORT=8000",
-    "SCM_DO_BUILD_DURING_DEPLOYMENT=true",
+    "SCM_DO_BUILD_DURING_DEPLOYMENT=$(if ($OfflineDependencies) { 'false' } else { 'true' })",
+    "ENABLE_ORYX_BUILD=$(if ($OfflineDependencies) { 'false' } else { 'true' })",
+    # First boot creates the venv and installs packages; the default 230s start limit kills the
+    # container mid-install and shows up as "didn't respond to HTTP pings".
+    "WEBSITES_CONTAINER_START_TIME_LIMIT=1800",
+    # A long pip install can go quiet for minutes; the default idle timeout aborts the build.
+    "SCM_COMMAND_IDLE_TIMEOUT=1800",
     "WEBSITE_PYTHON_VERSION=3.11"
 )
 
@@ -1947,9 +1959,10 @@ if ($LASTEXITCODE -ne 0) {
 # (needed by pyodbc for the managed-identity SQL connection) before launching
 # the app. Otherwise launch uvicorn directly.
 Write-Info "Setting startup command for FastAPI..."
-# Always use startup.sh - it installs the ODBC driver (for Azure SQL) and runs
-# uvicorn from the backend/ directory (which serves the API and the built SPA).
-$startupFile = "bash /home/site/wwwroot/startup.sh"
+# Relative command: with an Oryx build the app runs from a /tmp/<id> extract, NOT /home/site/wwwroot,
+# so a hardcoded path fails with "startup.sh: No such file or directory" (container exit 127).
+# 'bash startup.sh' resolves against the app dir; startup.sh is self-locating.
+$startupFile = "bash startup.sh"
 az webapp config set `
     --name $WebAppName `
     --resource-group $ResourceGroupName `
@@ -2029,68 +2042,159 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
 }
 
 # 2) Stage the real app layout, EXCLUDING secrets / venv / caches / local data.
-Write-Info "Creating deployment package..."
-$zipPath = Join-Path $env:TEMP "costopt-deploy-$(Get-Date -Format 'yyyyMMddHHmmss').zip"
-$staging = Join-Path $env:TEMP "costopt-stage-$(Get-Date -Format 'yyyyMMddHHmmss')"
-if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-New-Item -ItemType Directory -Path $staging -Force | Out-Null
-try {
+#    Packaging is a function because the offline fallback below rebuilds the package
+#    with a bundled wheelhouse.
+$stagingRoot = Join-Path $env:TEMP "costopt-stage-$(Get-Date -Format 'yyyyMMddHHmmss')"
+
+# Locate a local Python only for the offline wheel download; not needed on the normal path.
+$pythonExe = $null
+foreach ($cand in @("python", "python3")) {
+    $found = Get-Command $cand -ErrorAction SilentlyContinue
+    if ($found) { $pythonExe = $found.Source; break }
+}
+
+function New-DeploymentPackage {
+    param([switch]$IncludeWheelhouse)
+
+    if (Test-Path $stagingRoot) { Remove-Item $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue }
+    New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
+
     # backend/ (drop venv, caches, local sqlite data and any .env secrets)
-    robocopy (Join-Path $repoRoot "backend") (Join-Path $staging "backend") /E `
+    robocopy (Join-Path $repoRoot "backend") (Join-Path $stagingRoot "backend") /E `
         /XD ".venv" "__pycache__" ".pytest_cache" "data" `
         /XF ".env" "*.pyc" | Out-Null
     # built SPA
-    robocopy (Join-Path $repoRoot "frontend\dist") (Join-Path $staging "frontend\dist") /E | Out-Null
+    robocopy (Join-Path $repoRoot "frontend\dist") (Join-Path $stagingRoot "frontend\dist") /E | Out-Null
     # Azure service icons (served at /icons)
     if (Test-Path (Join-Path $repoRoot "Icons")) {
-        robocopy (Join-Path $repoRoot "Icons") (Join-Path $staging "Icons") /E | Out-Null
+        robocopy (Join-Path $repoRoot "Icons") (Join-Path $stagingRoot "Icons") /E | Out-Null
     }
     # Complete requirements at wwwroot root (Oryx installs these) + startup.sh
-    Copy-Item (Join-Path $repoRoot "backend\requirements.txt") (Join-Path $staging "requirements.txt") -Force
-    Copy-Item (Join-Path $repoRoot "startup.sh") (Join-Path $staging "startup.sh") -Force
+    Copy-Item (Join-Path $repoRoot "backend\requirements.txt") (Join-Path $stagingRoot "requirements.txt") -Force
+    Copy-Item (Join-Path $repoRoot "startup.sh") (Join-Path $stagingRoot "startup.sh") -Force
 
-    Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $zipPath -Force
-    Write-Success "Deployment package created: $zipPath"
-} catch {
-    Write-Error "Failed to create deployment package: $_"
-    exit 1
-} finally {
-    Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+    # Force LF on every staged shell script. A Windows checkout (or a customer editing on Windows)
+    # can introduce CRLF, which makes bash fail on Linux App Service with
+    # "Container exited with exit code 127 during startup".
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    Get-ChildItem $stagingRoot -Recurse -Filter *.sh -File | ForEach-Object {
+        $shTxt = [System.IO.File]::ReadAllText($_.FullName)
+        $shTxt = $shTxt -replace "`r`n", "`n" -replace "`r", "`n"
+        [System.IO.File]::WriteAllText($_.FullName, $shTxt, $utf8NoBom)
+    }
+
+    if ($IncludeWheelhouse) {
+        Write-Info "Downloading Linux (cp311) wheels for offline install... this can take a few minutes"
+        $wheelDir = Join-Path $stagingRoot "wheelhouse"
+        New-Item -ItemType Directory -Path $wheelDir -Force | Out-Null
+        & $pythonExe -m pip download -r (Join-Path $stagingRoot "requirements.txt") `
+            --dest $wheelDir --platform manylinux2014_x86_64 --python-version 311 `
+            --implementation cp --abi cp311 --only-binary=:all: --no-cache-dir 2>&1 | Out-Null
+        $wheelCount = @(Get-ChildItem $wheelDir -Filter *.whl -ErrorAction SilentlyContinue).Count
+        if ($LASTEXITCODE -ne 0 -or $wheelCount -eq 0) {
+            Write-Error "Could not download the Linux wheels (needs internet access from THIS machine)."
+            return $null
+        }
+        Write-Success "Bundled $wheelCount wheels for offline installation"
+    }
+
+    $zip = Join-Path $env:TEMP "costopt-deploy-$(Get-Date -Format 'yyyyMMddHHmmssfff').zip"
+    if (Test-Path $zip) { Remove-Item $zip -Force }
+    Compress-Archive -Path (Join-Path $stagingRoot "*") -DestinationPath $zip -Force
+    return $zip
 }
 
-# Deploy using zip deployment
-Write-Info "Deploying application to Azure App Service..."
-Write-Info "This may take 2-5 minutes (includes pip install)..."
-
-az webapp deploy `
-    --name $WebAppName `
-    --resource-group $ResourceGroupName `
-    --src-path $zipPath `
-    --type zip `
-    --async false `
-    --output none
-
-if ($LASTEXITCODE -ne 0) {
-    # Try alternative deployment method
-    Write-Info "Retrying with alternative deployment method..."
+function Invoke-ZipDeploy {
+    param([string]$ZipPath)
+    az webapp deploy `
+        --name $WebAppName `
+        --resource-group $ResourceGroupName `
+        --src-path $ZipPath `
+        --type zip `
+        --async false `
+        --output none
+    if ($LASTEXITCODE -eq 0) { return $true }
+    # Older CLI / transient SCM errors: the legacy endpoint often succeeds where the new one fails.
+    Write-Info "Primary deploy call failed - retrying via 'config-zip'..."
     az webapp deployment source config-zip `
         --name $WebAppName `
         --resource-group $ResourceGroupName `
-        --src $zipPath `
+        --src $ZipPath `
         --output none
-    
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to deploy application code"
-        Write-Host "  Oryx build log: https://$WebAppName.scm.azurewebsites.net/api/deployments/latest/log" -ForegroundColor Yellow
-        Write-Host "  Runtime log:    az webapp log tail --name $WebAppName --resource-group $ResourceGroupName" -ForegroundColor Yellow
-        Write-Host "  If the build stalled for many minutes before failing, the build container could not reach PyPI." -ForegroundColor Yellow
-        Write-Host "  Allow outbound HTTPS to pypi.org, files.pythonhosted.org and oryx-cdn.microsoft.io, then re-run." -ForegroundColor Yellow
-        exit 1
-    }
+    return ($LASTEXITCODE -eq 0)
 }
 
-# Clean up zip file
-Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+Write-Info "Creating deployment package..."
+$deployed = $false
+try {
+    if ($OfflineDependencies) {
+        # Explicitly requested: never rely on the build container reaching pypi.org.
+        if (-not $pythonExe) {
+            Write-Error "-OfflineDependencies needs Python 3 on this machine (to download Linux wheels)."
+            Write-Host "  Install Python 3, or re-run without -OfflineDependencies to use the App Service build." -ForegroundColor Yellow
+            exit 1
+        }
+        Write-Info "Offline mode: bundling dependencies, App Service remote build is disabled."
+        $zipPath = New-DeploymentPackage -IncludeWheelhouse
+        if (-not $zipPath) { exit 1 }
+        Write-Success "Deployment package created: $zipPath"
+        Write-Info "Uploading to Azure App Service..."
+        $deployed = Invoke-ZipDeploy -ZipPath $zipPath
+        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+    } else {
+        # ── Attempt 1: standard remote (Oryx) build. ──
+        $zipPath = New-DeploymentPackage
+        Write-Success "Deployment package created: $zipPath"
+        Write-Info "Deploying application to Azure App Service..."
+        Write-Info "This may take 2-5 minutes (includes pip install)..."
+        foreach ($try in 1..2) {
+            $deployed = Invoke-ZipDeploy -ZipPath $zipPath
+            if ($deployed) { break }
+            if ($try -lt 2) {
+                Write-Info "Deploy attempt $try failed - retrying in 30s..."
+                Start-Sleep -Seconds 30
+            }
+        }
+        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+
+        # ── Attempt 2: the remote build failed. Almost always because the Kudu build container
+        #    could not reach pypi.org. Rebuild the package with the wheels bundled and deploy
+        #    with the remote build switched off, so no internet access is required server-side.
+        if (-not $deployed) {
+            Write-Host ""
+            Write-Host "  The App Service remote build failed. Falling back to an OFFLINE package" -ForegroundColor Yellow
+            Write-Host "  (dependencies bundled in the zip, no server-side internet needed)." -ForegroundColor Yellow
+            if (-not $pythonExe) {
+                Write-Error "Offline fallback needs Python 3 on this machine, which was not found."
+                Write-Host "  Either install Python 3 and re-run, or allow outbound HTTPS from the App Service" -ForegroundColor Yellow
+                Write-Host "  build container to pypi.org, files.pythonhosted.org and oryx-cdn.microsoft.io." -ForegroundColor Yellow
+                exit 1
+            }
+            az webapp config appsettings set `
+                --name $WebAppName `
+                --resource-group $ResourceGroupName `
+                --settings "SCM_DO_BUILD_DURING_DEPLOYMENT=false" "ENABLE_ORYX_BUILD=false" `
+                --output none 2>$null
+            $zipPath = New-DeploymentPackage -IncludeWheelhouse
+            if (-not $zipPath) { exit 1 }
+            Write-Info "Uploading offline package (this is larger, allow a few minutes)..."
+            $deployed = Invoke-ZipDeploy -ZipPath $zipPath
+            Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+} catch {
+    Write-Error "Failed to package or deploy the application: $_"
+    exit 1
+} finally {
+    Remove-Item $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+if (-not $deployed) {
+    Write-Error "Failed to deploy application code"
+    Write-Host "  Build log:   https://$WebAppName.scm.azurewebsites.net/api/deployments/latest/log" -ForegroundColor Yellow
+    Write-Host "  Runtime log: az webapp log tail --name $WebAppName --resource-group $ResourceGroupName" -ForegroundColor Yellow
+    exit 1
+}
 
 Write-Success "Application code deployed"
 

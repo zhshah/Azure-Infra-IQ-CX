@@ -26,11 +26,20 @@ if [ ! -d /opt/microsoft/msodbcsql18 ]; then
 fi
 
 # ── Python venv + dependencies (persisted under /home across restarts) ──
+# When the deploy script bundled a wheelhouse/, install from it with --no-index so the app
+# needs NO outbound access to pypi.org. Otherwise do a normal install.
 if [ ! -d "$WWWROOT/antenv" ]; then
     echo "First start: creating venv and installing packages..."
     python -m venv "$WWWROOT/antenv"
-    "$WWWROOT/antenv/bin/pip" install --upgrade pip -q
-    "$WWWROOT/antenv/bin/pip" install -r "$WWWROOT/requirements.txt" -q
+    if [ -d "$WWWROOT/wheelhouse" ]; then
+        echo "Installing dependencies from the bundled wheelhouse (offline)..."
+        "$WWWROOT/antenv/bin/pip" install --no-index --find-links "$WWWROOT/wheelhouse" -r "$WWWROOT/requirements.txt" -q \
+            || { echo "ERROR: offline dependency install failed."; exit 1; }
+    else
+        "$WWWROOT/antenv/bin/pip" install --upgrade pip -q
+        "$WWWROOT/antenv/bin/pip" install -r "$WWWROOT/requirements.txt" -q \
+            || { echo "ERROR: dependency install failed (no route to pypi.org?)."; exit 1; }
+    fi
     echo "Package installation complete."
 fi
 
