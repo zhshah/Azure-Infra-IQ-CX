@@ -157,6 +157,46 @@ def get_model_name() -> str:
     return model or "unavailable"
 
 
+def _is_rate_limit_error(exc) -> bool:
+    msg = str(exc).lower()
+    return "429" in msg or "too many requests" in msg or "rate limit" in msg or "rate_limit" in msg
+
+
+def _rate_limit_wait(exc, attempt: int) -> float:
+    try:
+        headers = getattr(exc, "response", None) and getattr(exc.response, "headers", {})
+        if headers:
+            val = headers.get("retry-after") or headers.get("Retry-After")
+            if val:
+                return min(float(val), AI_RETRY_MAX_WAIT_SECS)
+    except Exception:
+        pass
+    return min(AI_RETRY_BACKOFF_SECS * (2 ** attempt), AI_RETRY_MAX_WAIT_SECS)
+
+
+def _with_rate_limit_retry(call, label: str):
+    """Run `call`, retrying on 429 exactly as _call_ai does.
+
+    The BCDR and networking analyses build their own request kwargs and invoke the client
+    directly instead of going through _call_ai, so without this they surface the first 429
+    straight to the UI while every other analysis silently recovers.
+    """
+    import time as _t
+    for attempt in range(AI_MAX_RETRIES + 1):
+        try:
+            return call()
+        except Exception as exc:
+            if _is_rate_limit_error(exc) and attempt < AI_MAX_RETRIES:
+                wait = _rate_limit_wait(exc, attempt)
+                logger.warning(
+                    "AI rate-limited (429) on %s attempt %d/%d — waiting %.0fs before retry",
+                    label, attempt + 1, AI_MAX_RETRIES, wait,
+                )
+                _t.sleep(wait)
+                continue
+            raise
+
+
 def _call_ai(system_prompt: str, user_prompt: str, max_tokens: int = MAX_TOKENS_ANALYSIS) -> str:
     """
     Unified AI call that works with both Anthropic and Azure OpenAI.
@@ -1491,7 +1531,7 @@ Focus on:
                 _bcdr_kw["max_completion_tokens"] = MAX_TOKENS_ANALYSIS
                 _bcdr_kw["temperature"] = 0.3
             try:
-                response = client.chat.completions.create(**_bcdr_kw)
+                response = _with_rate_limit_retry(lambda: client.chat.completions.create(**_bcdr_kw), "BCDR analysis")
             except Exception as _pe:
                 _es = str(_pe).lower(); _changed = False
                 if "reasoning_effort" in _es and "reasoning_effort" in _bcdr_kw:
@@ -1502,7 +1542,7 @@ Focus on:
                     _bcdr_kw["max_tokens"] = _bcdr_kw.pop("max_completion_tokens"); _bcdr_kw.pop("reasoning_effort", None); _changed = True
                 if not _changed:
                     raise
-                response = client.chat.completions.create(**_bcdr_kw)
+                response = _with_rate_limit_retry(lambda: client.chat.completions.create(**_bcdr_kw), "BCDR analysis")
             raw = response.choices[0].message.content.strip()
         _latency_s = round(_time.perf_counter() - _t0, 2)
         
@@ -2755,7 +2795,7 @@ CRITICAL INSTRUCTIONS FOR HIGH-QUALITY OUTPUT:
                 _net_kw["max_completion_tokens"] = MAX_TOKENS_NETWORKING
                 _net_kw["temperature"] = 0.2
             try:
-                response = client.chat.completions.create(**_net_kw)
+                response = _with_rate_limit_retry(lambda: client.chat.completions.create(**_net_kw), "networking analysis")
             except Exception as _pe:
                 _es = str(_pe).lower(); _changed = False
                 if "reasoning_effort" in _es and "reasoning_effort" in _net_kw:
@@ -2766,7 +2806,7 @@ CRITICAL INSTRUCTIONS FOR HIGH-QUALITY OUTPUT:
                     _net_kw["max_tokens"] = _net_kw.pop("max_completion_tokens"); _net_kw.pop("reasoning_effort", None); _changed = True
                 if not _changed:
                     raise
-                response = client.chat.completions.create(**_net_kw)
+                response = _with_rate_limit_retry(lambda: client.chat.completions.create(**_net_kw), "networking analysis")
             raw = response.choices[0].message.content.strip()
 
         # Strip markdown fences
