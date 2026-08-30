@@ -128,8 +128,7 @@ def _secure_score(token: Optional[str]) -> Tuple[dict, str]:
                          "percent": round(100 * current / mx), "trend": trend}, "live")
         except Exception as exc:
             logger.info("M365 secure_score live failed: %s", exc)
-    return ({"current": 412, "max": 600, "percent": 69,
-             "trend": [58, 60, 63, 62, 66, 67, 69]}, "sample")
+    return ({"current": None, "max": None, "percent": None, "trend": []}, "unavailable")
 
 
 def _risky_users(token: Optional[str]) -> Tuple[list, str]:
@@ -147,15 +146,7 @@ def _risky_users(token: Optional[str]) -> Tuple[list, str]:
             return out, "live"
         except Exception as exc:
             logger.info("M365 risky_users live failed: %s", exc)
-    now = datetime.now(timezone.utc)
-    sample = [
-        {"user": "Adele Vance", "upn": "adelev@contoso.com", "risk_level": "high", "risk_state": "atRisk", "updated": _iso(now - timedelta(hours=3))},
-        {"user": "Lee Gu", "upn": "leeg@contoso.com", "risk_level": "high", "risk_state": "atRisk", "updated": _iso(now - timedelta(hours=9))},
-        {"user": "Isaiah Langer", "upn": "isaiahl@contoso.com", "risk_level": "medium", "risk_state": "atRisk", "updated": _iso(now - timedelta(hours=14))},
-        {"user": "Pradeep Gupta", "upn": "pradeepg@contoso.com", "risk_level": "medium", "risk_state": "confirmedSafe", "updated": _iso(now - timedelta(days=1))},
-        {"user": "Diego Siciliani", "upn": "diegos@contoso.com", "risk_level": "low", "risk_state": "atRisk", "updated": _iso(now - timedelta(days=2))},
-    ]
-    return sample, "sample"
+    return [], "unavailable"
 
 
 def _risk_detections(token: Optional[str]) -> Tuple[list, str]:
@@ -175,15 +166,7 @@ def _risk_detections(token: Optional[str]) -> Tuple[list, str]:
             return out, "live"
         except Exception as exc:
             logger.info("M365 risk_detections live failed: %s", exc)
-    now = datetime.now(timezone.utc)
-    sample = [
-        {"type": "unfamiliarFeatures", "risk_level": "high", "activity": "signin", "upn": "adelev@contoso.com", "ip": "185.220.101.43", "location": "Amsterdam, NL", "detected": _iso(now - timedelta(hours=3))},
-        {"type": "anonymizedIPAddress", "risk_level": "high", "activity": "signin", "upn": "leeg@contoso.com", "ip": "104.244.76.187", "location": "Unknown (Tor)", "detected": _iso(now - timedelta(hours=9))},
-        {"type": "impossibleTravel", "risk_level": "medium", "activity": "signin", "upn": "isaiahl@contoso.com", "ip": "20.51.200.10", "location": "Doha, QA", "detected": _iso(now - timedelta(hours=14))},
-        {"type": "maliciousIPAddress", "risk_level": "high", "activity": "signin", "upn": "alland@contoso.com", "ip": "45.137.21.9", "location": "Sofia, BG", "detected": _iso(now - timedelta(hours=20))},
-        {"type": "passwordSpray", "risk_level": "medium", "activity": "signin", "upn": "(multiple)", "ip": "193.27.228.12", "location": "Moscow, RU", "detected": _iso(now - timedelta(days=1))},
-    ]
-    return sample, "sample"
+    return [], "unavailable"
 
 
 def _mfa_coverage(token: Optional[str]) -> Tuple[dict, str]:
@@ -198,7 +181,7 @@ def _mfa_coverage(token: Optional[str]) -> Tuple[dict, str]:
                      "pct": round(100 * registered / total)}, "live")
         except Exception as exc:
             logger.info("M365 mfa live failed: %s", exc)
-    return ({"total": 248, "registered": 214, "capable": 226, "pct": 86}, "sample")
+    return ({"total": 0, "registered": 0, "capable": 0, "pct": None}, "unavailable")
 
 
 def _devices(token: Optional[str]) -> Tuple[dict, str]:
@@ -233,16 +216,8 @@ def _devices(token: Optional[str]) -> Tuple[dict, str]:
                      "stale": stale, "by_os": by_os, "noncompliant_list": noncompliant[:25]}, "live")
         except Exception as exc:
             logger.info("M365 devices live failed: %s", exc)
-    now = datetime.now(timezone.utc)
-    nc = [
-        {"device": "DESKTOP-7F3KQ2", "os": "Windows", "state": "noncompliant", "user": "isaiahl@contoso.com", "last_sync": _iso(now - timedelta(hours=6))},
-        {"device": "LAPTOP-MKTG-04", "os": "Windows", "state": "noncompliant", "user": "diegos@contoso.com", "last_sync": _iso(now - timedelta(days=1))},
-        {"device": "iPhone-CEO", "os": "iOS", "state": "noncompliant", "user": "miriamg@contoso.com", "last_sync": _iso(now - timedelta(days=3))},
-        {"device": "MacBook-Design-2", "os": "macOS", "state": "noncompliant", "user": "lidiah@contoso.com", "last_sync": _iso(now - timedelta(days=9))},
-        {"device": "ANDROID-FIELD-12", "os": "Android", "state": "noncompliant", "user": "joniw@contoso.com", "last_sync": _iso(now - timedelta(days=21))},
-    ]
-    return ({"total": 312, "compliant": 287, "noncompliant": 25, "stale": 11,
-             "by_os": {"Windows": 201, "iOS": 64, "macOS": 28, "Android": 19}, "noncompliant_list": nc}, "sample")
+    return ({"total": 0, "compliant": 0, "noncompliant": 0, "stale": 0,
+             "by_os": {}, "noncompliant_list": []}, "unavailable")
 
 
 def _incidents(token: Optional[str]) -> Tuple[dict, str]:
@@ -263,16 +238,7 @@ def _incidents(token: Optional[str]) -> Tuple[dict, str]:
             return ({"by_severity": by_sev, "by_status": by_status, "list": lst[:25]}, "live")
         except Exception as exc:
             logger.info("M365 incidents live failed: %s", exc)
-    now = datetime.now(timezone.utc)
-    lst = [
-        {"title": "Multi-stage incident involving Initial access & Credential access", "severity": "high", "status": "active", "created": _iso(now - timedelta(hours=2)), "assigned": "SOC Tier 2"},
-        {"title": "Suspicious inbox forwarding rule created", "severity": "high", "status": "active", "created": _iso(now - timedelta(hours=7)), "assigned": None},
-        {"title": "Possible AiTM phishing — token theft", "severity": "high", "status": "inProgress", "created": _iso(now - timedelta(hours=11)), "assigned": "SOC Tier 1"},
-        {"title": "Anomalous Graph API enumeration", "severity": "medium", "status": "active", "created": _iso(now - timedelta(hours=18)), "assigned": None},
-        {"title": "Mass file download from SharePoint", "severity": "medium", "status": "resolved", "created": _iso(now - timedelta(days=1)), "assigned": "SOC Tier 2"},
-        {"title": "Malware detected — EICAR test file", "severity": "low", "status": "resolved", "created": _iso(now - timedelta(days=2)), "assigned": "Auto"},
-    ]
-    return ({"by_severity": {"high": 3, "medium": 2, "low": 1}, "by_status": {"active": 3, "inProgress": 1, "resolved": 2}, "list": lst}, "sample")
+    return ({"by_severity": {}, "by_status": {}, "list": []}, "unavailable")
 
 
 def _alerts(token: Optional[str]) -> Tuple[dict, str]:
@@ -291,15 +257,7 @@ def _alerts(token: Optional[str]) -> Tuple[dict, str]:
             return ({"by_severity": by_sev, "list": lst[:30]}, "live")
         except Exception as exc:
             logger.info("M365 alerts live failed: %s", exc)
-    now = datetime.now(timezone.utc)
-    lst = [
-        {"title": "Sign-in from a malicious IP address", "severity": "high", "status": "newAlert", "category": "InitialAccess", "service": "azureAdIdentityProtection", "created": _iso(now - timedelta(hours=1))},
-        {"title": "Email messages containing malicious URL removed after delivery", "severity": "high", "status": "newAlert", "category": "Phishing", "service": "microsoftDefenderForOffice365", "created": _iso(now - timedelta(hours=4))},
-        {"title": "Suspicious PowerShell command line", "severity": "medium", "status": "inProgress", "category": "Execution", "service": "microsoftDefenderForEndpoint", "created": _iso(now - timedelta(hours=8))},
-        {"title": "Unusual addition of credentials to an OAuth app", "severity": "high", "status": "newAlert", "category": "Persistence", "service": "microsoftDefenderForCloudApps", "created": _iso(now - timedelta(hours=12))},
-        {"title": "User reported phish message", "severity": "low", "status": "newAlert", "category": "Phishing", "service": "microsoftDefenderForOffice365", "created": _iso(now - timedelta(days=1))},
-    ]
-    return ({"by_severity": {"high": 3, "medium": 1, "low": 1}, "list": lst}, "sample")
+    return ({"by_severity": {}, "list": []}, "unavailable")
 
 
 def _conditional_access(token: Optional[str]) -> Tuple[dict, str]:
@@ -317,16 +275,7 @@ def _conditional_access(token: Optional[str]) -> Tuple[dict, str]:
             return ({**counts, "total": len(rows), "policies": pols[:30]}, "live")
         except Exception as exc:
             logger.info("M365 conditional_access live failed: %s", exc)
-    pols = [
-        {"name": "MFA for all users", "state": "enabled"},
-        {"name": "Block legacy authentication", "state": "enabled"},
-        {"name": "Require compliant device for admins", "state": "enabled"},
-        {"name": "Require MFA for risky sign-ins", "state": "enabled"},
-        {"name": "Block access from outside Qatar (GCC)", "state": "report_only"},
-        {"name": "Require app protection policy (mobile)", "state": "report_only"},
-        {"name": "Legacy — per-app MFA (deprecated)", "state": "disabled"},
-    ]
-    return ({"enabled": 4, "report_only": 2, "disabled": 1, "total": 7, "policies": pols}, "sample")
+    return ({"enabled": 0, "report_only": 0, "disabled": 0, "total": 0, "policies": []}, "unavailable")
 
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────
@@ -353,7 +302,7 @@ def get_m365_security_dashboard() -> Dict[str, Any]:
                "mfa": s_mfa, "devices": s_dev, "incidents": s_inc, "alerts": s_alr,
                "conditional_access": s_ca}
     live_any = any(v == "live" for v in sources.values())
-    all_sample = all(v == "sample" for v in sources.values())
+    all_sample = all(v != "live" for v in sources.values())
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),

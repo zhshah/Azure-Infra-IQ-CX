@@ -5,8 +5,8 @@
  * Microsoft Graph-sourced M365 security signals — Microsoft Secure Score, Defender XDR
  * incidents & alerts, Entra ID Protection (risky users / risk detections / MFA), Intune
  * device compliance and Conditional Access — styled in our dark theme. The backend
- * (/api/security/m365) is read-only and degrades each card to a labelled sample when the
- * matching Graph permission or license isn't available, so the view always renders.
+ * (/api/security/m365) is read-only and reports each card as unavailable when the matching
+ * Graph permission or license isn't present — it never fabricates figures.
  */
 import React, { useState, useEffect, useCallback } from 'react'
 import { api } from '../api/client'
@@ -23,9 +23,9 @@ function SourceBadge({ source }) {
   const live = source === 'live'
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
-      style={{ background: live ? 'var(--c-06351f)' : 'var(--c-3a2c08)', color: live ? '#4ade80' : '#fbbf24', border: `1px solid ${live ? '#15803d55' : '#a1620855'}` }}>
-      <span className="w-1.5 h-1.5 rounded-full" style={{ background: live ? '#22c55e' : '#f59e0b' }} />
-      {live ? 'Live' : 'Sample data'}
+      style={{ background: live ? 'var(--c-06351f)' : 'var(--c-1f2937)', color: live ? '#4ade80' : '#9ca3af', border: `1px solid ${live ? '#15803d55' : '#4b556355'}` }}>
+      <span className="w-1.5 h-1.5 rounded-full" style={{ background: live ? '#22c55e' : '#6b7280' }} />
+      {live ? 'Live' : 'Not available'}
     </span>
   )
 }
@@ -158,7 +158,7 @@ export default function M365SecurityDashboard({ compact = false, onOpen }) {
         </div>
         <div className="ml-auto flex items-center gap-3">
           <span className="text-[11px] text-gray-500 hidden sm:inline">
-            {d.graph_connected ? 'Graph connected' : 'Graph not configured'}{d.all_sample ? ' · showing sample data' : d.live_any ? ' · live + sample' : ''}
+            {d.graph_connected ? 'Graph connected' : 'Graph not configured'}{d.graph_connected && d.all_sample ? ' · awaiting Graph permissions' : ''}
           </span>
           {compact ? (
             <button onClick={onOpen}
@@ -319,7 +319,7 @@ export default function M365SecurityDashboard({ compact = false, onOpen }) {
       </div>
 
       <p className="text-[10px] text-gray-600 text-center pt-1">
-        Read-only Microsoft Graph aggregation · cards marked “Sample data” populate live once the app registration is granted the matching <code>*.Read.All</code> permission. Approach inspired by the open-source Vigil365 project.
+        Read-only Microsoft Graph aggregation · cards marked “Not available” populate once the managed identity is granted the matching <code>*.Read.All</code> permission. Approach inspired by the open-source Vigil365 project.
       </p>
       </>)}
     </div>
