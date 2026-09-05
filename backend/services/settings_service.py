@@ -47,7 +47,8 @@ _settings: Dict[str, Any] = {
     # Azure OpenAI
     "AZURE_OPENAI_ENDPOINT":   os.getenv("AZURE_OPENAI_ENDPOINT",   ""),
     "AZURE_OPENAI_KEY":        os.getenv("AZURE_OPENAI_KEY",        ""),
-    "AZURE_OPENAI_DEPLOYMENT": os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o"),
+    "AZURE_OPENAI_DEPLOYMENT": os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-sol"),
+    "AI_REASONING_EFFORT":     os.getenv("AI_REASONING_EFFORT", "high"),
     # Scoring thresholds
     "idle_threshold_pct":      float(os.getenv("IDLE_THRESHOLD_PCT",    "3.0")),
     "no_metrics_age_days":     int(os.getenv("NO_METRICS_AGE_DAYS",     "7")),
@@ -184,6 +185,25 @@ def get_subscription_ids() -> list[str]:
 
 def get_value(key: str, default=None):
     return _settings.get(key, default)
+
+
+_REASONING_LEVELS = ("none", "low", "medium", "high", "xhigh")
+
+
+def get_reasoning_effort() -> str:
+    """Reasoning depth for gpt-5.x / o-series models across every AI module.
+
+    Measured on gpt-5.6-sol with a real analysis prompt: 'high' produces ~5x the
+    reasoning tokens of 'low' for the same latency as 'medium', so it is the default.
+    'xhigh' roughly triples reasoning again but takes ~4.6x the wall time — set
+    AI_REASONING_EFFORT=xhigh for offline depth, not for interactive pages.
+    """
+    # Saved setting wins: this is user-facing in Settings, and reading the env first
+    # would leave that control silently dead whenever AI_REASONING_EFFORT is exported.
+    val = str(_settings.get("AI_REASONING_EFFORT", "")
+              or os.getenv("AI_REASONING_EFFORT", "")
+              or "high").strip().lower()
+    return val if val in _REASONING_LEVELS else "high"
 
 
 def update(updates: Dict[str, Any], persist: bool = False) -> None:

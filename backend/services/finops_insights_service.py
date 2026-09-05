@@ -192,6 +192,11 @@ def build_cost_insights(
 
         savings = _num(mo.get("estimated_savings_usd"))
         waste = _num(r.get("cumulative_waste_usd"))
+        # Cumulative waste is accrued during scans, which recorded $0 while per-resource
+        # cost was throttled. Fall back to this month's spend on resources that are
+        # genuinely orphaned or unused — that IS the recoverable waste.
+        if not waste and (r.get("is_orphan") or score_label in ("Not Used", "Rarely Used")):
+            waste = cost
 
         total_cost += cost
         total_prev += prev

@@ -172,6 +172,7 @@ function ServiceHealthView() {
 
   useEffect(() => { load(); }, [load]);
   const d = data || {};
+  const shOk = d.collection_ok !== false;   // false => the Resource Graph query failed
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -191,11 +192,19 @@ function ServiceHealthView() {
       {tab === 'overview' && loading && !data && <Spinner label="Loading Service Health…" />}
       {tab === 'overview' && data && (
         <>
+          {!shOk && (
+            <div style={{ border: '1px solid var(--c-7f1d1d)', background: 'linear-gradient(180deg,#1a0e0e,var(--c-0f172a))', borderRadius: 10, padding: 12 }}>
+              <div style={{ color: 'var(--c-fca5a5)', fontSize: 13, fontWeight: 700, marginBottom: 4 }}>
+                Service Health could not be queried — “no events” below is unknown, not a clean bill of health
+              </div>
+              <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, wordBreak: 'break-word' }}>{d.collection_error}</div>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <KPI label="Active Events" value={d.active_events ?? 0} sub={`${d.total_events ?? 0} total`} color={(d.active_events ?? 0) > 0 ? '#ef4444' : '#22c55e'} Icon={Activity} />
-            <KPI label="Service Issues" value={d.service_issues ?? 0} color="#ef4444" />
-            <KPI label="Planned Maintenance" value={d.planned_maintenance ?? 0} color="#eab308" />
-            <KPI label="Advisories" value={(d.health_advisories ?? 0) + (d.security_advisories ?? 0)} sub={`${d.security_advisories ?? 0} security`} color="#38bdf8" />
+            <KPI label="Active Events" value={shOk ? (d.active_events ?? 0) : '—'} sub={shOk ? `${d.total_events ?? 0} total` : 'not collected'} color={shOk && (d.active_events ?? 0) > 0 ? '#ef4444' : shOk ? '#22c55e' : '#64748b'} Icon={Activity} />
+            <KPI label="Service Issues" value={shOk ? (d.service_issues ?? 0) : '—'} color="#ef4444" />
+            <KPI label="Planned Maintenance" value={shOk ? (d.planned_maintenance ?? 0) : '—'} color="#eab308" />
+            <KPI label="Advisories" value={shOk ? ((d.health_advisories ?? 0) + (d.security_advisories ?? 0)) : '—'} sub={shOk ? `${d.security_advisories ?? 0} security` : 'not collected'} color="#38bdf8" />
           </div>
           <DataGrid
             title="Events"

@@ -233,10 +233,11 @@ export default function FilterBar({
   if (!effectiveSubs.length && !resourceGroups.length && !resources.length) return null
 
   return (
-    <div data-scope-bar style={{ borderBottom: '1px solid rgba(var(--rgb-slate), 0.5)', background: 'rgba(12, 18, 32, 0.6)' }}>
-      {/* Primary filter row */}
-      <div style={{ padding: '8px 24px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+    <div data-scope-bar className="app-banner" style={{ borderBottom: '1px solid rgba(var(--rgb-slate), 0.5)' }}>
+      {/* Primary filter row — 51px + the 1px bottom border below meets the
+          sidebar logo block's 52px (border-box), so the two rules line up. */}
+      <div style={{ minHeight: 51, padding: '0 24px', display: 'flex', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', width: '100%', paddingTop: 6, paddingBottom: 6 }}>
           <span style={{ fontSize: 10, color: 'var(--c-475569)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', flexShrink: 0 }}>
             <Filter size={11} style={{ display: 'inline', verticalAlign: '-2px', marginRight: 4 }} />
             Scope

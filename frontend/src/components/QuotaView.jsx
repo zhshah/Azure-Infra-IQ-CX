@@ -56,6 +56,7 @@ function QuotaView() {
 
   useEffect(() => { load(); }, [load]);
   const d = data || {};
+  const qOk = d.collection_ok !== false;   // false => the quota API could not be read at all
   const subName = (v) => (v ? (subMap[v.toLowerCase()] || v.slice(0, 8)) : '—');
   const regions = d.regions_summary || [];
   const blocked = d.blocked || [];
@@ -72,14 +73,24 @@ function QuotaView() {
       {tab === 'overview' && loading && !data && <Spinner label="Querying compute quota across regions…" />}
       {tab === 'overview' && data && (
         <>
+          {d.collection_ok === false && (
+            <div style={{ ...card, border: '1px solid var(--c-7f1d1d)', background: 'linear-gradient(180deg,#1a0e0e,var(--c-0f172a))' }}>
+              <div style={{ color: 'var(--c-fca5a5)', fontSize: 13, fontWeight: 700, marginBottom: 4 }}>
+                Quota could not be read — the figures below are unknown, not zero
+              </div>
+              <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, wordBreak: 'break-word' }}>
+                {d.collection_error || d.note}
+              </div>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <KPI label="Regions Tracked" value={d.regions ?? 0} sub={`${d.subscriptions ?? 0} subscription(s)`} color="#38bdf8" Icon={Gauge} />
-            <KPI label="Blocked Families" value={d.blocked_count ?? 0} sub="0 quota — request needed" color={(d.blocked_count ?? 0) > 0 ? '#ef4444' : '#22c55e'} Icon={Ban} />
-            <KPI label="Near Limit (≥80%)" value={d.near_limit_count ?? 0} sub="will throttle scaling" color={(d.near_limit_count ?? 0) > 0 ? '#eab308' : '#22c55e'} Icon={AlertTriangle} />
-            <KPI label="vCPU Headroom" value={d.vcpu_headroom ?? 0} sub={`${d.total_vcpu_used ?? 0} used / ${d.total_vcpu_limit ?? 0} limit`} color="#a78bfa" />
+            <KPI label="Regions Tracked" value={qOk ? (d.regions ?? 0) : '—'} sub={qOk ? `${d.subscriptions ?? 0} subscription(s)` : 'not collected'} color="#38bdf8" Icon={Gauge} />
+            <KPI label="Blocked Families" value={qOk ? (d.blocked_count ?? 0) : '—'} sub={qOk ? '0 quota — request needed' : 'not collected'} color={qOk && (d.blocked_count ?? 0) > 0 ? '#ef4444' : qOk ? '#22c55e' : '#64748b'} Icon={Ban} />
+            <KPI label="Near Limit (≥80%)" value={qOk ? (d.near_limit_count ?? 0) : '—'} sub={qOk ? 'will throttle scaling' : 'not collected'} color={qOk && (d.near_limit_count ?? 0) > 0 ? '#eab308' : qOk ? '#22c55e' : '#64748b'} Icon={AlertTriangle} />
+            <KPI label="vCPU Headroom" value={qOk ? (d.vcpu_headroom ?? 0) : '—'} sub={qOk ? `${d.total_vcpu_used ?? 0} used / ${d.total_vcpu_limit ?? 0} limit` : 'not collected'} color="#a78bfa" />
           </div>
 
-          {d.note && (d.items || []).length === 0 && (
+          {d.note && (d.items || []).length === 0 && d.collection_ok !== false && (
             <div style={{ ...card, color: 'var(--c-94a3b8)', fontSize: 13 }}>{d.note}</div>
           )}
 

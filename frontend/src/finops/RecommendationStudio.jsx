@@ -254,7 +254,7 @@ export default function RecommendationStudio() {
             return (
               <button key={g.id} onClick={() => toggleGoal(g.id)} style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 20, padding: '6px 13px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                background: on ? 'rgba(79,70,229,0.18)' : 'var(--c-0b1220)', border: `1px solid ${on ? '#4f46e5' : 'var(--c-334155)'}`, color: on ? '#c7d2fe' : 'var(--c-94a3b8)',
+                background: on ? 'rgba(79,70,229,0.18)' : 'var(--c-0b1220)', border: `1px solid ${on ? '#4f46e5' : 'var(--c-334155)'}`, color: on ? 'var(--c-c7d2fe)' : 'var(--c-94a3b8)',
               }}>
                 <Icon size={13} /> {g.label}
               </button>

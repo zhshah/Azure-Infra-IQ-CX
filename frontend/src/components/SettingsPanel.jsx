@@ -88,6 +88,8 @@ export default function SettingsPanel({ open, onClose, onSaved, subscriptions = 
     cache_ttl_seconds: 1800, demo_mode: false,
     credential_timeout_hours: 0,
     auto_refresh_interval_hours: 6,
+    ai_cache_ttl_hours: 12,
+    AI_REASONING_EFFORT: 'high',
     // On-premises LDAP
     onprem_dc_host: '', onprem_dc_port: 389,
     onprem_use_ssl: false, onprem_use_starttls: false,
@@ -123,6 +125,8 @@ export default function SettingsPanel({ open, onClose, onSaved, subscriptions = 
         demo_mode:                   s.demo_mode                    ?? false,
         credential_timeout_hours:    s.credential_timeout_hours     ?? 0,
         auto_refresh_interval_hours: s.auto_refresh_interval_hours  ?? 6,
+        ai_cache_ttl_hours:          s.ai_cache_ttl_hours           ?? 12,
+      AI_REASONING_EFFORT:         s.AI_REASONING_EFFORT          || 'high',
         // masked secrets — leave blank
         azure_client_secret: '',
         azure_openai_key:    '',
@@ -177,6 +181,8 @@ export default function SettingsPanel({ open, onClose, onSaved, subscriptions = 
       body.AZURE_OPENAI_DEPLOYMENT = body.azure_openai_deployment
       body.AZURE_AI_ENDPOINT       = body.azure_ai_endpoint || ''
       body.credential_timeout_hours = body.credential_timeout_hours ?? 0
+      body.ai_cache_ttl_hours = body.ai_cache_ttl_hours ?? 12
+    body.AI_REASONING_EFFORT = body.AI_REASONING_EFFORT || 'high'
       // On-Premises LDAP settings
       body.ONPREM_DC_HOST = body.onprem_dc_host || ''
       body.ONPREM_DC_PORT = body.onprem_dc_port || 389
@@ -567,6 +573,51 @@ export default function SettingsPanel({ open, onClose, onSaved, subscriptions = 
               </div>
               <NumberField label="Cache TTL (seconds)" value={form.cache_ttl_seconds} onChange={set('cache_ttl_seconds')} min={60} max={86400} step={60}
                 hint="How long scan results are kept before a forced re-fetch. Default 1800s (30 min). Lower = fresher data but more Azure API calls." />
+              <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 p-4 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Info size={13} className="text-emerald-400 shrink-0" />
+                  <p className="text-xs font-semibold text-emerald-300">AI answer cache — token &amp; cost optimisation</p>
+                </div>
+                <p className="text-xs text-gray-400">
+                  Every AI analysis is cached against a fingerprint of the exact data, filters, scope and
+                  question behind it. Re-opening a view or reloading the page returns the stored answer for
+                  free — no tokens are spent. If any underlying number changes the fingerprint changes too,
+                  so a stale answer can never be shown. &ldquo;Refresh analysis&rdquo; always forces a fresh,
+                  billed run. Set to <strong className="text-gray-500">0</strong> to disable caching and
+                  spend tokens on every load.
+                </p>
+              </div>
+              <NumberField
+                label="AI answer cache lifetime (hours, 0 = always re-run)"
+                value={form.ai_cache_ttl_hours}
+                onChange={set('ai_cache_ttl_hours')}
+                min={0} max={168} step={1}
+                hint={form.ai_cache_ttl_hours > 0
+                  ? `Identical questions over unchanged data reuse the stored answer for ${form.ai_cache_ttl_hours}h — 0 tokens.`
+                  : 'Caching disabled — every view load and refresh spends tokens.'}
+              />
+              <div className="space-y-1">
+                <label className="block text-xs font-medium text-gray-300">AI reasoning depth</label>
+                <select
+                  value={form.AI_REASONING_EFFORT}
+                  onChange={e => set('AI_REASONING_EFFORT')(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-sm text-gray-200 focus:outline-none focus:border-blue-500/60"
+                >
+                  <option value="low">Low — fastest, shallow analysis</option>
+                  <option value="medium">Medium — balanced</option>
+                  <option value="high">High — deepest interactive analysis (default)</option>
+                  <option value="xhigh">Extra high — offline/report depth only</option>
+                </select>
+                <p className="text-xs text-gray-500">
+                  {form.AI_REASONING_EFFORT === 'xhigh'
+                    ? 'Roughly 4.6x the wall time of High — a single module analysis can exceed 15 minutes. Use for scheduled reports, not interactive pages.'
+                    : form.AI_REASONING_EFFORT === 'high'
+                      ? 'A cold module analysis measures ~70–300s on gpt-5.6-sol. This is the dominant latency lever — the hidden reasoning tokens, not your question, drive the wait.'
+                      : form.AI_REASONING_EFFORT === 'medium'
+                        ? 'Noticeably faster than High with modestly less depth. Good default if analyses feel slow.'
+                        : 'Fastest option — expect brief findings and less cross-referencing between resources.'}
+                </p>
+              </div>
               <div className="space-y-1">
                 <label className="block text-xs font-medium text-gray-300">Auto-refresh interval</label>
                 <select

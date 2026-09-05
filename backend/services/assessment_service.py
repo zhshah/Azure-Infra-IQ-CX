@@ -41,6 +41,15 @@ STALE_WORKFLOW_MINUTES = 30
 
 from services.azure_icon_service import AzureIconService
 
+
+def _reasoning_effort() -> str:
+    """Reasoning depth for gpt-5.x / o-series. Single source of truth in settings."""
+    try:
+        import services.settings_service as _s
+        return _s.get_reasoning_effort()
+    except Exception:
+        return os.getenv("AI_REASONING_EFFORT", "high")
+
 class AssessmentService:
     
     # Supported Azure service types for service-based assessments
@@ -254,7 +263,7 @@ class AssessmentService:
         # Try Azure OpenAI
         azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
         azure_key = os.getenv("AZURE_OPENAI_KEY")
-        azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+        azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-sol")
         if azure_endpoint:
             try:
                 self.azure_openai_client = AzureOpenAI(
@@ -287,6 +296,11 @@ class AssessmentService:
             print("   ANTHROPIC_API_KEY, AZURE_OPENAI_ENDPOINT, or GITHUB_TOKEN")
 
     def _load_agent_system_prompt(self, agent_name: str) -> str:
+        """Agent instructions plus the shared money rules (agent .md files are external)."""
+        from services.ai_service import _MONEY_DISCIPLINE
+        return self._load_agent_system_prompt_raw(agent_name) + _MONEY_DISCIPLINE
+
+    def _load_agent_system_prompt_raw(self, agent_name: str) -> str:
         """Load the markdown instruction body from the local .agent.md file.
         
         The .agent.md files have structure:
@@ -952,7 +966,7 @@ Return a JSON object with this EXACT structure:
     def _analyze_with_azure_openai(self, prompt: str) -> Dict[str, Any]:
         """Analyze using Azure OpenAI"""
         try:
-            _m = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+            _m = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-sol")
             _kw = dict(
                 model=_m,
                 messages=[
@@ -965,8 +979,8 @@ Return a JSON object with this EXACT structure:
             # gpt-5.x / o-series are reasoning models: no custom temperature, and they need
             # token headroom (reasoning is drawn from the budget) or they return empty text.
             if any(k in _m.lower() for k in ("gpt-5", "gpt5", "o1", "o3", "o4")):
-                _kw["max_completion_tokens"] = 14000
-                _kw["reasoning_effort"] = "low"
+                _kw["max_completion_tokens"] = 32000
+                _kw["reasoning_effort"] = _reasoning_effort()
             else:
                 _kw["max_completion_tokens"] = 6000
                 _kw["temperature"] = 0.3
@@ -1657,7 +1671,7 @@ Top Recommendations: {json.dumps(recs_list[:10], default=str)}
                 "production-quality infrastructure assessments. Base ALL analysis on actual resource configurations. "
                 "Output strict JSON only. Reference specific resource names in every recommendation."
             )
-            _m = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+            _m = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-sol")
             _kw = dict(
                 model=_m,
                 messages=[
@@ -1668,8 +1682,8 @@ Top Recommendations: {json.dumps(recs_list[:10], default=str)}
             # Reasoning models (gpt-5.x / o-series): no temperature + token headroom + low
             # effort, else they spend the budget on reasoning and return empty content.
             if any(k in _m.lower() for k in ("gpt-5", "gpt5", "o1", "o3", "o4")):
-                _kw["max_completion_tokens"] = max(int(max_tokens) + 8000, 16000)
-                _kw["reasoning_effort"] = "low"
+                _kw["max_completion_tokens"] = max(int(max_tokens) + 16000, 32000)
+                _kw["reasoning_effort"] = _reasoning_effort()
             else:
                 _kw["max_completion_tokens"] = int(max_tokens)
                 _kw["temperature"] = 0.3

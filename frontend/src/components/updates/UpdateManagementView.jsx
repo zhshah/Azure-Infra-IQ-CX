@@ -422,6 +422,10 @@ export default function UpdateManagementView() {
     )
   }
 
+  // A failed query must read as "unknown", never as a confident zero.
+  const collectionOk = summary?.collection_ok !== false
+  const dash = (v) => (collectionOk ? (v ?? 0) : '—')
+
   const tabs = [
     { key: 'all', label: 'All Machines' },
     { key: 'patched', label: `Patched (${summary?.patched_last_30d || 0})` },
@@ -475,20 +479,34 @@ export default function UpdateManagementView() {
         </div>
       )}
 
+      {/* A failed Resource Graph query used to render as "0 machines / 0% compliant". */}
+      {summary && summary.collection_ok === false && (
+        <div className="flex items-start gap-3 rounded-xl border border-red-800/60 bg-red-900/20 p-3">
+          <AlertTriangle size={18} className="flex-shrink-0 text-red-300 mt-0.5" />
+          <div className="text-xs text-red-100">
+            <div className="font-semibold mb-1">Update Manager could not be queried — the figures below are unknown, not zero.</div>
+            <div className="text-red-200/80 break-words">{summary.collection_error || 'The Azure Resource Graph query failed.'}</div>
+            <div className="text-red-200/60 mt-1">Sign in again (<code>az login</code>) or check that the identity has Reader on these subscriptions, then Refresh.</div>
+          </div>
+        </div>
+      )}
+
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <KPICard label="Total Machines" value={summary?.total_machines || 0} subtitle={`${summary?.azure_vms || 0} VMs · ${summary?.arc_machines || 0} Arc`} color="blue" icon={Monitor} />
-        <KPICard label="Patched (30d)" value={summary?.patched_last_30d || 0} subtitle={`${summary?.compliance_pct || 0}% compliant`} color="green" icon={CheckCircle} />
-        <KPICard label="Not Patched (30d)" value={summary?.not_patched_30d || 0} subtitle={`Avg ${summary?.avg_days_since_patch || 0} days`} color="red" icon={AlertTriangle} />
-        <KPICard label="Pending Reboot" value={summary?.pending_reboot || 0} subtitle="After patch install" color="amber" icon={RotateCw} />
-        <KPICard label="Critical Pending" value={summary?.critical_pending || 0} subtitle={`+ ${summary?.security_pending || 0} security`} color="red" icon={Shield} />
-        <KPICard label="Compliance" value={`${summary?.compliance_pct || 0}%`} subtitle={`${summary?.windows_machines || 0} Win · ${summary?.linux_machines || 0} Linux`} color="cyan" icon={Server} />
+        <KPICard label="Total Machines" value={dash(summary?.total_machines)} subtitle={collectionOk ? `${summary?.azure_vms || 0} VMs · ${summary?.arc_machines || 0} Arc` : 'not collected'} color="blue" icon={Monitor} />
+        <KPICard label="Patched (30d)" value={dash(summary?.patched_last_30d)} subtitle={collectionOk ? `${summary?.compliance_pct || 0}% compliant` : 'not collected'} color="green" icon={CheckCircle} />
+        <KPICard label="Not Patched (30d)" value={dash(summary?.not_patched_30d)} subtitle={collectionOk ? `Avg ${summary?.avg_days_since_patch || 0} days` : 'not collected'} color="red" icon={AlertTriangle} />
+        <KPICard label="Pending Reboot" value={dash(summary?.pending_reboot)} subtitle={collectionOk ? 'After patch install' : 'not collected'} color="amber" icon={RotateCw} />
+        <KPICard label="Critical Pending" value={dash(summary?.critical_pending)} subtitle={collectionOk ? `+ ${summary?.security_pending || 0} security` : 'not collected'} color="red" icon={Shield} />
+        <KPICard label="Compliance" value={collectionOk ? `${summary?.compliance_pct || 0}%` : '—'} subtitle={collectionOk ? `${summary?.windows_machines || 0} Win · ${summary?.linux_machines || 0} Linux` : 'not collected'} color="cyan" icon={Server} />
       </div>
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="flex items-center justify-center rounded-xl border border-gray-800 bg-gray-900/40 p-4">
-          <ComplianceDonut compliance={summary?.compliance_pct || 0} />
+          {collectionOk
+            ? <ComplianceDonut compliance={summary?.compliance_pct || 0} />
+            : <div className="text-center text-xs text-gray-400 py-8">Compliance unknown<div className="text-gray-500 mt-1">Update Manager could not be queried</div></div>}
         </div>
         <HorizontalBarChart data={byOS} title="Updates by OS" />
         <ClassificationBreakdown data={byClass} />
@@ -554,7 +572,9 @@ export default function UpdateManagementView() {
       <MachineTable
         machines={machines}
         title={tabs.find(t => t.key === activeTab)?.label || 'All Machines'}
-        emptyMsg={summary?.total_machines === 0 ? 'No machines found. Ensure Azure Update Manager is configured for your VMs and Arc machines.' : 'No machines match current filters.'}
+            emptyMsg={!collectionOk
+              ? 'Update Manager could not be queried — this is an absence of data, not an empty estate.'
+              : summary?.total_machines === 0 ? 'No machines found. Ensure Azure Update Manager is configured for your VMs and Arc machines.' : 'No machines match current filters.'}
         onSelectResource={m => setSelectedResource(m)}
       />
 

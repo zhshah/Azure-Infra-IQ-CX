@@ -57,10 +57,22 @@ def get_tag_analytics(
     coverage_map   = _get_tag_coverage_resourcegraph(subscription_ids)
     total_resources = coverage_map.get("__total__", 0)
 
+    # Tag keys come back in whatever case Azure stored them, while required tags are
+    # typed by the user ("Environment" vs "environment"). Match case-insensitively or
+    # a correctly-tagged estate scores 0%.
+    _cov_ci = {}
+    for _k, _v in coverage_map.items():
+        if str(_k).startswith("__"):
+            continue
+        _cov_ci[str(_k).lower()] = _cov_ci.get(str(_k).lower(), 0) + int(_v or 0)
+
+    def _covered_for(key: str) -> int:
+        return _cov_ci.get(str(key).lower(), 0)
+
     tag_key_stats: List[FinOpsTagKeyStats] = []
     for tag_key in required_tags:
         matrix = get_tag_cost_matrix(tag_key, time_range=time_range, subscription_ids=subscription_ids)
-        covered = coverage_map.get(tag_key, 0)
+        covered = _covered_for(tag_key)
         coverage_pct = (covered / total_resources * 100) if total_resources else 0.0
         tag_key_stats.append(FinOpsTagKeyStats(
             tag_key=tag_key,
@@ -73,12 +85,39 @@ def get_tag_analytics(
             is_required=True,
         ))
 
+    # Coverage for EVERY discovered key (no cost lookup — that is one API call per key).
+    # Folded case-insensitively so this table matches the tag chips, which also fold:
+    # "Environment" (120) and "environment" (16) are one key at 136, not two rows.
+    _req_ci = {str(t).lower() for t in required_tags}
+    _display: Dict[str, str] = {}
+    for key, covered in ((k, v) for k, v in coverage_map.items() if not str(k).startswith("__")):
+        low = str(key).lower()
+        # Prefer the casing carried by the most resources.
+        if low not in _display or int(covered or 0) > int(coverage_map.get(_display[low], 0) or 0):
+            _display[low] = key
+    tag_stats = [
+        FinOpsTagKeyStats(
+            tag_key=_display[low],
+            covered_resources=covered,
+            total_resources=total_resources,
+            coverage_pct=round((covered / total_resources * 100) if total_resources else 0.0, 1),
+            total_cost_usd=0.0,
+            distinct_values=0,
+            top_values=[],
+            is_required=low in _req_ci,
+        )
+        for low, covered in sorted(_cov_ci.items(), key=lambda kv: -int(kv[1] or 0))
+    ]
+
     # Untagged cost — query cost without any tag grouping, then subtract tagged
     untagged_cost = _get_untagged_cost(subscription_ids, from_date, to_date)
     untagged_count = coverage_map.get("__untagged__", 0)
 
     # Compliance = % resources that have ALL required tags
     compliance_pct = _compute_compliance(coverage_map, required_tags, total_resources)
+    compliant = min((_covered_for(k) for k in required_tags), default=total_resources) if required_tags else total_resources
+    compliant = max(0, min(int(compliant), int(total_resources)))
+    missing_required = [k for k in required_tags if _covered_for(k) == 0]
 
     return FinOpsTagAnalyticsResult(
         tag_keys=tag_key_stats,
@@ -86,6 +125,12 @@ def get_tag_analytics(
         untagged_resource_count=untagged_count,
         compliance_score_pct=round(compliance_pct, 1),
         required_tags=required_tags,
+        total_resources=int(total_resources),
+        compliant_resources=compliant,
+        non_compliant_resources=max(int(total_resources) - compliant, 0),
+        untagged_spend_usd=round(untagged_cost, 2),
+        tag_stats=tag_stats,
+        missing_required_tags=missing_required,
         generated_at=datetime.now(tz=timezone.utc).isoformat(),
         data_source="azure_cost_management",
     )
@@ -217,6 +262,12 @@ def _get_tag_coverage_resourcegraph(subscription_ids: List[str]) -> Dict[str, in
 def _compute_compliance(coverage_map: Dict[str, int], required_tags: List[str], total: int) -> float:
     if not total or not required_tags:
         return 100.0
+    # Azure preserves whatever case a tag was written in, so fold before matching.
+    ci: Dict[str, int] = {}
+    for k, v in coverage_map.items():
+        if str(k).startswith("__"):
+            continue
+        ci[str(k).lower()] = ci.get(str(k).lower(), 0) + int(v or 0)
     # Approximate: resource has all required tags ≈ min coverage across required keys
-    min_covered = min(coverage_map.get(k, 0) for k in required_tags)
-    return min_covered / total * 100
+    min_covered = min(ci.get(str(k).lower(), 0) for k in required_tags)
+    return min(min_covered / total * 100, 100.0)

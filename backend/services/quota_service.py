@@ -81,12 +81,18 @@ def get_quota_usage(subscription_ids: Optional[List[str]] = None,
         "total_vcpu_used": 0, "total_vcpu_limit": 0, "vcpu_headroom": 0,
         "strategic_regions": sorted(_strategic_regions()),
         "generated_at": datetime.now(timezone.utc).isoformat(), "note": "",
+        # "0 blocked families" reads as good news, so a failed query must not look like one.
+        "collection_ok": True, "collection_error": "",
     }
+    query_errors: List[str] = []
     try:
         region_rows = query_resource_graph(_REGIONS_KQL, subscription_ids, max_results=20000)
+        if not getattr(region_rows, "ok", True):
+            query_errors.append(f"region discovery: {getattr(region_rows, 'error', 'query failed')}")
     except Exception as exc:
         logger.warning("quota: region discovery failed: %s", exc)
         region_rows = []
+        query_errors.append(f"region discovery: {exc}")
 
     # Build {sub -> set(regions)} = estate regions ∪ strategic regions (per sub)
     sub_regions: Dict[str, set] = {}
@@ -100,6 +106,8 @@ def get_quota_usage(subscription_ids: Optional[List[str]] = None,
         sub_regions.setdefault(sub, set()).update(strategic)
     if not sub_regions:
         result["note"] = "No subscriptions/regions in scope to query quota for."
+        result["collection_ok"] = False
+        result["collection_error"] = "; ".join(query_errors) or "no subscriptions or regions in scope"
         return result
 
     try:
@@ -107,6 +115,8 @@ def get_quota_usage(subscription_ids: Optional[List[str]] = None,
     except Exception as exc:
         logger.warning("quota: azure-mgmt-compute unavailable: %s", exc)
         result["note"] = "azure-mgmt-compute not available."
+        result["collection_ok"] = False
+        result["collection_error"] = f"azure-mgmt-compute not available: {exc}"
         return result
 
     # Families actually in use in the estate (for an "in use" flag)
@@ -132,6 +142,7 @@ def get_quota_usage(subscription_ids: Optional[List[str]] = None,
                 usages = list(client.usage.list(loc))
             except Exception as exc:
                 logger.debug("quota: usage.list failed for %s/%s: %s", sub, loc, exc)
+                query_errors.append(f"{sub[:8]}/{loc}: {exc}")
                 continue
             queried_regions.add(loc)
             for u in usages:
@@ -208,6 +219,16 @@ def get_quota_usage(subscription_ids: Optional[List[str]] = None,
     result["vcpu_headroom"] = result["total_vcpu_limit"] - result["total_vcpu_used"]
 
     if not result["items"]:
-        result["note"] = ("No compute quota data returned. The subscriptions may not be registered for "
-                          "Microsoft.Compute in the in-scope regions, or the credential lacks reader access.")
+        result["collection_ok"] = not query_errors
+        result["collection_error"] = "; ".join(query_errors[:3])
+        result["note"] = (
+            f"Quota could not be read — every region query failed ({len(query_errors)} error(s)). "
+            "This is an absence of data, not zero usage."
+            if query_errors else
+            "No compute quota data returned. The subscriptions may not be registered for "
+            "Microsoft.Compute in the in-scope regions, or the credential lacks reader access."
+        )
+    elif query_errors:
+        result["note"] = (f"Partial: {len(query_errors)} region quota query(s) failed; "
+                          f"{len(queried_regions)} region(s) returned data.")
     return result

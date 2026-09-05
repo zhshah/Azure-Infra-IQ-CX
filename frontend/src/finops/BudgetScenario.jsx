@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from 'recharts'
 import { Wallet, RefreshCw, AlertCircle, TrendingUp, Download } from 'lucide-react'
 import { finopsApi, fmtUsd } from './finopsApi'
+import FinOpsScopeBar, { scopeExportRows } from './FinOpsScopeBar'
 
 const card      = { background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }
 const miniLabel = { color: 'var(--c-64748b)', fontSize: 9, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 3 }
@@ -39,6 +40,7 @@ export default function BudgetScenario() {
       title: 'Budget Scenario',
       sheets: [
         { name: 'Summary', columns: ['Metric', 'Value'], rows: [
+          ...scopeExportRows(data.scope),
           ['Monthly budget (USD)', budget], ['Growth assumption %', growth],
           ['Spent so far MTD (USD)', data.mtd_spend_usd], ['Burn %', data.burn_pct],
           ['Projected EOM (USD)', data.projected_eom_usd], ['Projected %', data.projected_pct],
@@ -72,6 +74,15 @@ export default function BudgetScenario() {
         <div style={{ ...card, borderColor: 'var(--c-7f1d1d)', color: 'var(--c-fca5a5)', display: 'flex', gap: 10, alignItems: 'center' }}>
           <AlertCircle size={16} /> <span style={{ fontSize: 12 }}>{error}</span>
         </div>
+      )}
+
+      {data?.scope && (
+        <FinOpsScopeBar
+          scope={data.scope}
+          extra={[
+            { label: 'Monthly target', value: fmtUsd(budget) },
+            { label: 'Growth assumption', value: `${growth > 0 ? '+' : ''}${growth}%` },
+          ]} />
       )}
 
       <div style={{ ...card, display: 'flex', gap: 22, flexWrap: 'wrap', alignItems: 'center' }}>

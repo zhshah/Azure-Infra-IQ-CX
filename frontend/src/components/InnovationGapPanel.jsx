@@ -80,7 +80,7 @@ function GapCard({ gap }) {
             </span>
             {gap.status === "partially_adopted" && (
               <span style={{
-                background: "var(--c-1c1a05)", color: "#fde68a",
+                background: "var(--c-1c1a05)", color: "var(--c-fde68a)",
                 fontSize: 9, fontWeight: 700, padding: "2px 7px",
                 borderRadius: 20, border: "1px solid #ca8a0440",
               }}>

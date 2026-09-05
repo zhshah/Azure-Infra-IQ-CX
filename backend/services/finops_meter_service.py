@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import time
 from contextlib import contextmanager
@@ -47,7 +48,17 @@ except Exception as e:  # pragma: no cover
     logger.warning("FinOps Meter: finops_data_service unavailable: %s", e)
 
 
-METER_HISTORY_DAYS = 90
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, "") or default))
+    except (TypeError, ValueError):
+        return default
+
+
+# Meter grain is the only source of usage QUANTITY (storage tiers, egress GB, $/GB
+# ingested), so a short window silently disables those panels. One range query per
+# subscription regardless of width.
+METER_HISTORY_DAYS = _env_int("FINOPS_METER_HISTORY_DAYS", 395)
 METER_HISTORY_DAYS_INITIAL = 14
 
 # Cost Management grouping used for the meter grain. ServiceName is included so a

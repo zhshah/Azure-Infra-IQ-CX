@@ -31,7 +31,32 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-_CACHE_TTL = 1800  # 30 min warm cache per (view, fingerprint)
+_CACHE_TTL = 1800  # fallback only — the live value comes from ai_cache_ttl_hours
+
+
+def ai_cache_ttl_seconds() -> int:
+    """Global AI answer-cache lifetime. 0 disables caching (every run spends tokens).
+
+    Safe to set generously: the cache key embeds a fingerprint of the view's data,
+    filters, scope, context and question, so a cached answer is only ever returned
+    for an identical question over identical numbers.
+    """
+    try:
+        import services.settings_service as _s
+        hours = float(_s.get_value("ai_cache_ttl_hours", 12.0))
+    except Exception:
+        hours = 12.0
+    return max(0, int(hours * 3600))
+
+
+def _reasoning_effort() -> str:
+    """Reasoning depth for gpt-5.x / o-series. Single source of truth in settings."""
+    try:
+        import services.settings_service as _s
+        return _s.get_reasoning_effort()
+    except Exception:
+        import os as _os
+        return _os.getenv("AI_REASONING_EFFORT", "high")
 
 _SYSTEM_PROMPT = (
     "You are a senior Microsoft Azure FinOps analyst. You receive a JSON summary "
@@ -40,6 +65,7 @@ _SYSTEM_PROMPT = (
     "Quantify Business Value, Optimize, Manage). "
     "Respond with STRICT JSON only, no markdown, with this exact schema:\n"
     "{\n"
+    '  "answer": "direct answer to the user question, or \\"\\" when none was asked",\n'
     '  "summary": "2-3 sentence executive read of the numbers",\n'
     '  "key_findings": ["short factual finding", ...],\n'
     '  "recommendations": [{"title":"", "detail":"", "impact":"high|medium|low", "est_monthly_savings": 0}],\n'
@@ -48,16 +74,42 @@ _SYSTEM_PROMPT = (
     "}\n"
     "Be specific to the data. Quantify savings when possible. Max 5 findings, 5 "
     "recommendations, 4 risk flags. "
-    "IMPORTANT: the data may include a `_grounding` object with AUTHORITATIVE, real "
-    "resource-level facts from the customer's live Azure estate - estate totals, the "
-    "top resources by cost (name/type/resource group/region/sku/utilisation/tags), cost "
-    "breakdowns by service/resource group/subscription/region/TAG (cost_by_tag) plus tag "
-    "coverage (tagged_pct), and concrete waste "
-    "candidates (orphaned / oversized resources with current + recommended SKU). "
-    "Treat `_grounding` as ground truth: cite specific resource names, resource groups, "
-    "tag key=values and dollar figures from it, base recommendations on those real "
-    "resources rather than generic advice, and use cost_by_tag + tagged_pct to assess "
-    "cost allocation / showback and untagged spend at risk."
+    "\n\nWHAT THE PAYLOAD CONTAINS:\n"
+    "The top-level JSON is THE VIEW THE USER IS LOOKING AT — it is the subject of your "
+    "analysis. A `_grounding` object may also be present carrying estate-wide context: "
+    "`cost_basis` (the authoritative warehouse spend total, its window and scope), "
+    "warehouse breakdowns (`cost_by_service` / `cost_by_resource_group` / "
+    "`cost_by_subscription` / `cost_by_region`), `resource_inventory` (complete counts and "
+    "tag coverage) and `resource_level_costs` (real resource names, SKUs, utilisation, tags "
+    "and waste candidates).\n"
+    "\nMONEY DISCIPLINE — these rules override everything else. Violating them makes the "
+    "output worthless:\n"
+    "1. NEVER invent, estimate, extrapolate or 'reasonably assume' a dollar figure. Every $ "
+    "you write must appear verbatim in the payload or be a simple sum/difference of figures "
+    "that share the SAME window, scope and cost basis. If a number you want is not supplied, "
+    "write that it is not available — do not guess.\n"
+    "2. The VIEW's own figures describe the user's current selection (its period, filter and "
+    "grouping). `_grounding.cost_basis` is estate-wide over its own stated window. They are "
+    "DIFFERENT scopes. Never blend, add or reconcile them into one number, and never use one "
+    "to contradict the other. When you cite a figure, say which it is (e.g. 'in the selected "
+    "30-day window' vs 'estate-wide, last 30 days').\n"
+    "3. `resource_level_costs` is DELIBERATELY INCOMPLETE (Cost Management throttles "
+    "per-resource queries; its `coverage_pct` states how little it covers). Use it ONLY to "
+    "name and rank resources. NEVER sum it, never call it estate spend, and never present a "
+    "saving as validated when it rests on those partial costs — say the saving needs "
+    "resource-level billing reconciliation first.\n"
+    "4. Do NOT annualise by multiplying an hourly figure by 8760, and do NOT project a short "
+    "window (a few days) onto a month or year. If the window is short, say it is "
+    "unrepresentative instead of scaling it.\n"
+    "5. `projected_savings_usd` and every `est_monthly_savings` must be a REALISTIC MONTHLY "
+    "figure traceable to supplied savings/waste data. If the payload contains no savings "
+    "figures, return 0 — never a placeholder or an aspirational percentage of spend.\n"
+    "6. Percentages must be computed from supplied numbers and stated with their base "
+    "(e.g. '63% of the $3,297 30-day total'). Never state a percentage you cannot derive.\n"
+    "\nUse `_grounding` to make the analysis concrete: cite real resource names, resource "
+    "groups, regions, tag key=values and SKUs from it rather than giving generic advice. "
+    "If the view's data is empty or insufficient, say so plainly instead of filling the gap "
+    "with plausible-sounding numbers."
 )
 
 # Per-view focus directives so each FinOps tab produces DISTINCT, purpose-built
@@ -80,10 +132,12 @@ _VIEW_FOCUS = {
     "executive-report": "FOCUS: A CFO-ready narrative — spend, trajectory, top risks and the prioritized savings roadmap with dollar figures.\n",
     "allocation": "FOCUS: Assess how cleanly cost is allocated across this dimension — concentration, the unallocated/unattributed spend, and the accountability gaps to close.\n",
     "cost-explorer": "FOCUS: Interpret this explorer slice (group-by + range + actual/amortized) — the dominant contributors, the trend across the points, and the next dimension to pivot into.\n",
+    "cost-pulse": "FOCUS: Interpret the window the user has scrubbed to. Say what the selected period and grouping reveal that a default 30-day view would hide — concentration (does a handful of groups carry the spend?), the shape of the daily curve (steady burn vs spikes; name the peak date and how many times the daily average it was), and the direction of travel between the first and second half of the window. Name the top contributors and their share. If the window is short, warn that a few days can be unrepresentative; if long, note which contributors only dominate at that horizon. Close with the single dimension or period the user should pivot to next, and why.\n",
     "studio": "FOCUS: A narrative over the assembled dashboard widgets — connect spend, savings, commitments and anomalies into one story with the top 3 prioritized moves.\n",
     "alerts": "FOCUS: Triage the active budget & cost alerts — which are most urgent by dollars/threshold, likely cause, and the immediate response for each.\n",
     "compliance": "FOCUS: Assess FinOps maturity/governance posture — the biggest gaps, their spend-at-risk, and a prioritized remediation roadmap.\n",
     "warehouse": "FOCUS: Interpret the warehouse-backed estate view — top services/subscriptions/resources, anomalies present, and where the concentrated spend & waste sit.\n",
+    "log-analytics-tables": "FOCUS: Interpret Log Analytics / Sentinel ingestion cost — which workspaces and which TABLES drive the bill, GB ingested vs retention, and whether the commitment tier matches actual ingestion. Recommend concrete levers: table-level basic/auxiliary plans for noisy low-value tables, retention trims, collection-rule filtering, and the right commitment tier. Only quantify a saving when the payload supplies the GB and rate to derive it.\n",
 }
 
 
@@ -97,10 +151,21 @@ def _chat_completion(system: str, user: str, max_tokens: int = 1400) -> Optional
     import services.settings_service as svc
     provider = svc.get_value("ai_provider", "none")
 
+    # This path does not go through ai_infra_service._call_ai, so it needs its own copy
+    # of the data-availability map or the FinOps narratives would be the only ones
+    # unable to tell "not collected" from zero.
+    try:
+        from services.data_availability_service import ai_grounding_block as _avail
+        _block = _avail()
+        if _block:
+            system = f"{system}\n\n{_block}"
+    except Exception:
+        pass
+
     if provider == "azure_openai":
         endpoint = svc.get_value("AZURE_OPENAI_ENDPOINT", "")
         api_key = svc.get_value("AZURE_OPENAI_KEY", "")
-        deployment = svc.get_value("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+        deployment = svc.get_value("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-sol")
         if not endpoint or not api_key:
             return None
         from openai import AzureOpenAI
@@ -122,8 +187,8 @@ def _chat_completion(system: str, user: str, max_tokens: int = 1400) -> Optional
             # Reasoning models (gpt-5.x / o-series) spend part of the budget on hidden
             # reasoning — a small cap returns an EMPTY answer — and reject a custom
             # temperature. Give headroom + low effort, send no temperature.
-            kwargs["max_completion_tokens"] = max(int(max_tokens) + 6000, 8000)
-            kwargs["reasoning_effort"] = "low"
+            kwargs["max_completion_tokens"] = max(int(max_tokens) + 16000, 24000)
+            kwargs["reasoning_effort"] = _reasoning_effort()
         else:
             kwargs["max_completion_tokens"] = int(max_tokens)
         try:
@@ -146,8 +211,8 @@ def _chat_completion(system: str, user: str, max_tokens: int = 1400) -> Optional
         text = (getattr(resp.choices[0].message, "content", None) or "").strip()
         # Reasoning model starved its visible output → retry once with a bigger budget.
         if not text and is_reasoning:
-            kwargs["max_completion_tokens"] = max(int(max_tokens) * 3, 16000)
-            kwargs["reasoning_effort"] = "low"
+            kwargs["max_completion_tokens"] = max(int(max_tokens) * 4, 32000)
+            kwargs["reasoning_effort"] = _reasoning_effort()
             try:
                 resp = client.chat.completions.create(**kwargs)
             except Exception:
@@ -201,8 +266,10 @@ def _parse_json(raw: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _fingerprint(view: str, data: Any, filters: Any, scope: str = "", context: Any = None) -> str:
-    blob = json.dumps({"v": view, "d": data, "f": filters, "s": scope, "c": context or {}}, sort_keys=True, default=str)
+def _fingerprint(view: str, data: Any, filters: Any, scope: str = "", context: Any = None,
+                 question: str = "") -> str:
+    blob = json.dumps({"v": view, "d": data, "f": filters, "s": scope, "c": context or {},
+                       "q": question}, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
 
 
@@ -226,6 +293,7 @@ def get_finops_insights(
     force_refresh: bool = False,
     scope: Optional[str] = None,
     context: Optional[Dict[str, Any]] = None,
+    question: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Generate (or return cached) AI insights for a FinOps view.
 
@@ -241,12 +309,13 @@ def get_finops_insights(
         return _empty("AI provider not configured. Set an Azure OpenAI or Claude key in Settings to enable AI cost analysis.")
 
     scope = (scope or "").strip()[:300]
+    question = (question or "").strip()[:600]
     context = context if isinstance(context, dict) else {}
-    fp = _fingerprint(view, data, filters or {}, scope, context)
+    fp = _fingerprint(view, data, filters or {}, scope, context, question)
     cache_key = f"finops:ai:{view}:{fp}"
 
     # Warm cache
-    if not force_refresh:
+    if not force_refresh and ai_cache_ttl_seconds() > 0:
         try:
             import services.cache_service as cache
             cached = cache.get_json(cache_key)
@@ -280,13 +349,37 @@ def get_finops_insights(
             f"{ctx_lines}\n"
         )
 
+    question_block = ""
+    if question:
+        question_block = (
+            f"\nUSER QUESTION — The user asked: \"{question}\"\n"
+            "Answer it directly and specifically in the `answer` field, in 2-6 sentences, using ONLY "
+            "the supplied data. Cite concrete resource names, services and dollar figures. If the data "
+            "cannot answer it, say exactly what is missing instead of guessing. Still populate the other "
+            "fields, but bias every one of them toward the question.\n"
+        )
+
+    # Serialise the view payload and the grounding SEPARATELY so a large grounding block can
+    # never truncate the view's own numbers (they are the subject of the analysis).
+    _view_data = {k: v for k, v in (data or {}).items() if k != "_grounding"} if isinstance(data, dict) else data
+    _grounding = (data or {}).get("_grounding") if isinstance(data, dict) else None
+    grounding_block = ""
+    if _grounding:
+        grounding_block = (
+            "\nESTATE GROUNDING (_grounding) — authoritative context, a DIFFERENT scope from the "
+            "view above. Obey the MONEY DISCIPLINE rules when using it:\n"
+            f"{json.dumps(_grounding, default=str)[:9000]}\n"
+        )
+
     user = (
         f"FinOps view: {view}\n"
         f"{_VIEW_FOCUS.get(view, '')}"
         f"Active filters: {json.dumps(filters or {}, default=str)}\n"
         f"{scope_block}"
         f"{context_block}"
-        f"\nData summary (JSON):\n{json.dumps(data, default=str)[:14000]}"
+        f"{question_block}"
+        f"\nTHE VIEW THE USER IS LOOKING AT (analyse THIS):\n{json.dumps(_view_data, default=str)[:9000]}\n"
+        f"{grounding_block}"
     )
 
     try:
@@ -303,18 +396,22 @@ def get_finops_insights(
     grounded_on = None
     try:
         _g = (data or {}).get("_grounding") if isinstance(data, dict) else None
-        _e = (_g or {}).get("estate") if isinstance(_g, dict) else None
-        if isinstance(_e, dict):
+        if isinstance(_g, dict):
+            _basis = _g.get("cost_basis") or {}
+            _inv = _g.get("resource_inventory") or {}
             grounded_on = {
-                "resources": _e.get("resource_count"),
-                "spend_usd": _e.get("spend_this_month_usd"),
-                "tagged_pct": _e.get("tagged_pct"),
+                "resources": _inv.get("resource_count"),
+                "spend_usd": _basis.get("authoritative_spend_usd"),
+                "tagged_pct": _inv.get("tagged_pct"),
+                "cost_window": _basis.get("window"),
+                "cost_source": _basis.get("source"),
             }
     except Exception:
         grounded_on = None
 
     result = {
         "summary": str(parsed.get("summary", ""))[:1200],
+        "answer": str(parsed.get("answer", ""))[:1600] or None,
         "key_findings": [str(x)[:300] for x in (parsed.get("key_findings") or [])][:6],
         "recommendations": [
             {
@@ -330,15 +427,16 @@ def get_finops_insights(
         "projected_savings_usd": _safe_float(parsed.get("projected_savings_usd")),
         "provider": provider,
         "grounded_on": grounded_on,
-        "scope": scope or None,
-        "context": {k: v for k, v in context.items() if v not in (None, "", "—")} or None,
+        "scope": scope or None,        "question": question or None,        "context": {k: v for k, v in context.items() if v not in (None, "", "—")} or None,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "cached": False,
     }
 
     try:
         import services.cache_service as cache
-        cache.set_json(cache_key, result, ttl_seconds=_CACHE_TTL)
+        _ttl = ai_cache_ttl_seconds()
+        if _ttl > 0:
+            cache.set_json(cache_key, result, ttl_seconds=_ttl)
     except Exception:
         pass
 

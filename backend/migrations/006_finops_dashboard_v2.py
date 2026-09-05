@@ -16,6 +16,9 @@ Adds the storage that the management cost & usage dashboard reads:
   5. finops_savings_ledger         — realized-savings ledger: baseline vs post-action cost
                                      per implemented recommendation (enables ROI %)
   6. finops_mgmt_group_costs       — management-group cost rollup (incl. nested descendants)
+  7. finops_la_table_costs         — per-TABLE Log Analytics / Sentinel billable GB and
+                                     allocated cost (answers "which table costs the most",
+                                     which Cost Management cannot)
 
 Usage:
     cd backend
@@ -180,6 +183,29 @@ TABLES = [
         etl_run_id          TEXT NOT NULL DEFAULT ''
     )
     """,
+
+    # 7. finops_la_table_costs — per-table ingestion volume and allocated cost for
+    #    Log Analytics / Sentinel workspaces. Volume comes from each workspace's own
+    #    Usage table; cost is the workspace's real spend apportioned by billable-GB
+    #    share, with cost_basis recording how it was derived. Hashed PK keeps the key
+    #    narrow (workspace_id is a full ARM resource id).
+    """
+    CREATE TABLE IF NOT EXISTS finops_la_table_costs (
+        id                  TEXT PRIMARY KEY,
+        snapshot_date       TEXT NOT NULL,
+        subscription_id     TEXT NOT NULL DEFAULT '',
+        workspace_id        TEXT NOT NULL DEFAULT '',
+        workspace_name      TEXT NOT NULL DEFAULT '',
+        resource_group      TEXT NOT NULL DEFAULT '',
+        table_name          TEXT NOT NULL DEFAULT '',
+        billable_gb         REAL NOT NULL DEFAULT 0,
+        non_billable_gb     REAL NOT NULL DEFAULT 0,
+        allocated_cost_usd  REAL NOT NULL DEFAULT 0,
+        cost_basis          TEXT NOT NULL DEFAULT '',
+        is_sentinel         INTEGER NOT NULL DEFAULT 0,
+        etl_run_id          TEXT NOT NULL DEFAULT ''
+    )
+    """,
 ]
 
 INDEXES_SQLITE = [
@@ -196,6 +222,8 @@ INDEXES_SQLITE = [
     "CREATE INDEX IF NOT EXISTS idx_fm_ledger_fp ON finops_savings_ledger (fingerprint, billing_month)",
     "CREATE INDEX IF NOT EXISTS idx_fm_ledger_month ON finops_savings_ledger (billing_month)",
     "CREATE INDEX IF NOT EXISTS idx_fm_mg_month ON finops_mgmt_group_costs (billing_month)",
+    "CREATE INDEX IF NOT EXISTS idx_fm_la_date ON finops_la_table_costs (snapshot_date)",
+    "CREATE INDEX IF NOT EXISTS idx_fm_la_sub ON finops_la_table_costs (subscription_id, snapshot_date)",
 ]
 
 INDEXES_AZURESQL = [
@@ -213,6 +241,8 @@ INDEXES_AZURESQL = [
         ("idx_fm_reco_res", "CREATE INDEX idx_fm_reco_res ON finops_recommendations (resource_id)"),
         ("idx_fm_ledger_fp", "CREATE INDEX idx_fm_ledger_fp ON finops_savings_ledger (fingerprint, billing_month)"),
         ("idx_fm_ledger_month", "CREATE INDEX idx_fm_ledger_month ON finops_savings_ledger (billing_month)"),
+        ("idx_fm_la_date", "CREATE INDEX idx_fm_la_date ON finops_la_table_costs (snapshot_date)"),
+        ("idx_fm_la_sub", "CREATE INDEX idx_fm_la_sub ON finops_la_table_costs (subscription_id, snapshot_date)"),
         ("idx_fm_mg_month", "CREATE INDEX idx_fm_mg_month ON finops_mgmt_group_costs (billing_month)"),
     ]
 ]
@@ -221,26 +251,97 @@ INDEXES_AZURESQL = [
 def normalize_legacy_dates(cursor):
     """Rewrite YYYYMMDD snapshot_date values to dashed ISO.
 
-    The resource-cost collector stored Azure's integer UsageDate verbatim. SQL
-    Server's default collation ignores the hyphen so range queries appeared to
-    work, but SQLite compares byte-wise and would miss every row. Normalising
-    makes the grain consistent and portable."""
+    The resource-cost collector stored Azure's integer UsageDate verbatim. Range
+    queries compare strings, and '20260804' sorts ABOVE any dashed date, so every
+    such row silently disappears from date-filtered results — the table looks
+    partly empty while the rows are still there.
+
+    A plain UPDATE cannot fix this: where the same day was also collected in the
+    dashed format, normalising collides with the existing primary key, the whole
+    statement rolls back, and nothing gets repaired. So drop the superseded
+    YYYYMMDD duplicates first, then normalise what remains.
+    """
     fixed = 0
+    azure = is_azure_sql()
+    dashed = (
+        "SUBSTRING(a.snapshot_date,1,4) + '-' + SUBSTRING(a.snapshot_date,5,2) + '-' "
+        "+ SUBSTRING(a.snapshot_date,7,2)"
+        if azure else
+        "substr(a.snapshot_date,1,4) || '-' || substr(a.snapshot_date,5,2) || '-' "
+        "|| substr(a.snapshot_date,7,2)"
+    )
+    length_fn = "LEN" if azure else "length"
+    malformed = f"{length_fn}(a.snapshot_date) = 8 AND a.snapshot_date NOT LIKE '%-%'"
+
+    # 1. Where both formats exist for the same day+subscription+resource, keep the
+    #    LARGER observation on the surviving ISO row. Cost Management restates a day
+    #    as late usage lands, and a partial collection can be lower; taking the max
+    #    means the repair can never discard spend that was actually observed.
+    merge_sql = (
+        f"UPDATE b SET cost_usd = a.cost_usd "
+        f"FROM finops_daily_resource_costs b "
+        f"JOIN finops_daily_resource_costs a "
+        f"  ON b.snapshot_date = {dashed} "
+        f" AND b.subscription_id = a.subscription_id "
+        f" AND b.resource_id = a.resource_id "
+        f"WHERE {malformed} AND a.cost_usd > b.cost_usd"
+        if azure else
+        f"UPDATE finops_daily_resource_costs AS b SET cost_usd = ("
+        f"  SELECT MAX(a.cost_usd) FROM finops_daily_resource_costs a"
+        f"  WHERE {malformed} AND {dashed} = b.snapshot_date"
+        f"    AND a.subscription_id = b.subscription_id AND a.resource_id = b.resource_id) "
+        f"WHERE EXISTS ("
+        f"  SELECT 1 FROM finops_daily_resource_costs a"
+        f"  WHERE {malformed} AND {dashed} = b.snapshot_date"
+        f"    AND a.subscription_id = b.subscription_id AND a.resource_id = b.resource_id"
+        f"    AND a.cost_usd > b.cost_usd)"
+    )
     try:
-        cursor.execute(
-            "UPDATE finops_daily_resource_costs "
-            "SET snapshot_date = SUBSTRING(snapshot_date,1,4) || '-' || "
-            "                    SUBSTRING(snapshot_date,5,2) || '-' || "
-            "                    SUBSTRING(snapshot_date,7,2) "
-            "WHERE LEN(snapshot_date) = 8 AND snapshot_date NOT LIKE '%-%'"
-            if is_azure_sql() else
-            "UPDATE finops_daily_resource_costs "
-            "SET snapshot_date = substr(snapshot_date,1,4) || '-' || "
-            "                    substr(snapshot_date,5,2) || '-' || "
-            "                    substr(snapshot_date,7,2) "
-            "WHERE length(snapshot_date) = 8 AND snapshot_date NOT LIKE '%-%'"
-        )
+        cursor.execute(merge_sql)
+        merged = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        if merged:
+            print(f"  merged {merged} row(s) where the legacy copy held more spend")
+    except Exception as e:
+        print(f"  duplicate merge skipped: {e}")
+
+    # 2. Remove the now-redundant legacy duplicates.
+    delete_sql = (
+        f"DELETE a FROM finops_daily_resource_costs a WHERE {malformed} AND EXISTS ("
+        f"  SELECT 1 FROM finops_daily_resource_costs b"
+        f"  WHERE b.snapshot_date = {dashed}"
+        f"    AND b.subscription_id = a.subscription_id"
+        f"    AND b.resource_id = a.resource_id)"
+        if azure else
+        f"DELETE FROM finops_daily_resource_costs WHERE rowid IN ("
+        f"  SELECT a.rowid FROM finops_daily_resource_costs a WHERE {malformed} AND EXISTS ("
+        f"    SELECT 1 FROM finops_daily_resource_costs b"
+        f"    WHERE b.snapshot_date = {dashed}"
+        f"      AND b.subscription_id = a.subscription_id"
+        f"      AND b.resource_id = a.resource_id))"
+    )
+    try:
+        cursor.execute(delete_sql)
+        removed = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        if removed:
+            print(f"  removed {removed} superseded YYYYMMDD duplicate row(s)")
+    except Exception as e:
+        print(f"  duplicate cleanup skipped: {e}")
+
+    # 3. Normalise the survivors.
+    update_sql = (
+        f"UPDATE a SET snapshot_date = {dashed} "
+        f"FROM finops_daily_resource_costs a WHERE {malformed}"
+        if azure else
+        f"UPDATE finops_daily_resource_costs SET snapshot_date = "
+        f"substr(snapshot_date,1,4) || '-' || substr(snapshot_date,5,2) || '-' "
+        f"|| substr(snapshot_date,7,2) "
+        f"WHERE length(snapshot_date) = 8 AND snapshot_date NOT LIKE '%-%'"
+    )
+    try:
+        cursor.execute(update_sql)
         fixed = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        if fixed:
+            print(f"  normalised {fixed} legacy YYYYMMDD date(s)")
     except Exception as e:
         print(f"  date normalization skipped: {e}")
     return fixed

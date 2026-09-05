@@ -168,6 +168,87 @@ async def auth_config():
     return auth_svc.public_config()
 
 
+# ── User-directed AI scope / context / resource filter ────────────────────────
+# Applied centrally so EVERY /api/ai/* module analysis honours the same controls
+# without each endpoint re-implementing them.
+import contextvars as _contextvars
+
+_AI_RESOURCE_FILTER: "_contextvars.ContextVar" = _contextvars.ContextVar("ai_resource_filter", default=None)
+
+
+def _apply_ai_resource_filter(rows: List[dict]) -> List[dict]:
+    """Narrow a resource list to the caller's AI scope (no-op outside /api/ai/*)."""
+    f = _AI_RESOURCE_FILTER.get()
+    if not f or not rows:
+        return rows
+    sub, rg, rtype = f.get("sub"), f.get("rg"), f.get("rtype")
+    res = f.get("res")
+    out = rows
+    if sub:
+        out = [r for r in out if str(r.get("subscription_id", "")).lower() == sub]
+    if rg:
+        out = [r for r in out if str(r.get("resource_group", "")).lower() == rg]
+    if rtype:
+        out = [r for r in out if str(r.get("resource_type", "")).lower() == rtype]
+    if res:
+        out = [r for r in out
+               if str(r.get("resource_id", "")).lower() == res
+               or str(r.get("id", "")).lower() == res
+               or str(r.get("resource_name", "")).lower() == res
+               or str(r.get("name", "")).lower() == res]
+    # An over-narrow filter that matches nothing would make the AI analyse an empty
+    # estate and invent findings; fall back to the full set instead.
+    return out or rows
+
+
+@app.middleware("http")
+async def _ai_scope_gate(request: Request, call_next):
+    """Read scope/context/filter query params for AI routes and publish them.
+
+    `sub`/`rg`/`rtype`/`res` narrow the resources every analysis sees; `scope` and
+    `context` are injected into the prompt by ai_module_analysis_service.
+    """
+    if not request.url.path.startswith("/api/ai/"):
+        return await call_next(request)
+    q = request.query_params
+    sub, rg, rtype = q.get("sub"), q.get("rg"), q.get("rtype")
+    res, res_name = q.get("res"), q.get("res_name")
+    scope, ctx_raw = q.get("scope"), q.get("context")
+    if not any([sub, rg, rtype, res, scope, ctx_raw]):
+        return await call_next(request)
+
+    labels = []
+    if sub:
+        labels.append(f"Subscription: {_sub_name_map().get(sub, sub)}")
+    if rg:
+        labels.append(f"Resource group: {rg}")
+    if rtype:
+        labels.append(f"Resource type: {rtype}")
+    if res:
+        labels.append(f"Single resource: {res_name or res}")
+    _AI_RESOURCE_FILTER.set({
+        "sub": sub.lower() if sub else None,
+        "rg": rg.lower() if rg else None,
+        "rtype": rtype.lower() if rtype else None,
+        "res": res.lower() if res else None,
+    })
+    ctx = None
+    if ctx_raw:
+        try:
+            ctx = json.loads(ctx_raw)
+            if not isinstance(ctx, dict):
+                ctx = None
+        except Exception:
+            ctx = None
+    try:
+        from services import ai_module_analysis_service as _aims
+        _aims.set_user_directive(scope=scope or "", context=ctx,
+                                 filter_label="; ".join(labels))
+    except Exception as exc:
+        logger.debug("AI scope gate: directive not set (%s)", exc)
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def _entra_auth_gate(request: Request, call_next):
     if not auth_svc.is_enabled() or request.method == "OPTIONS":
@@ -1751,6 +1832,7 @@ async def _build_dashboard(
         [SavingsRecommendation(
             resource_id=r.resource_id, resource_name=r.resource_name,
             resource_type=r.resource_type, resource_group=r.resource_group,
+            subscription_id=getattr(r, "subscription_id", "") or "",
             current_monthly_cost=r.cost_current_month,
             estimated_monthly_savings=r.estimated_monthly_savings,
             savings_pct=round(r.estimated_monthly_savings/r.cost_current_month*100 if r.cost_current_month>0 else 0, 1),
@@ -2663,8 +2745,10 @@ async def get_settings_endpoint():
         anthropic_api_key        = s.get("ANTHROPIC_API_KEY",""),
         azure_openai_endpoint    = s.get("AZURE_OPENAI_ENDPOINT",""),
         azure_openai_key         = s.get("AZURE_OPENAI_KEY",""),
-        azure_openai_deployment  = s.get("AZURE_OPENAI_DEPLOYMENT","gpt-4o-mini"),
+        azure_openai_deployment  = s.get("AZURE_OPENAI_DEPLOYMENT","gpt-5.6-sol"),
         has_azure_openai_key     = bool(settings_svc.get_value("AZURE_OPENAI_KEY","")),
+        ai_cache_ttl_hours       = s.get("ai_cache_ttl_hours", 12),
+        AI_REASONING_EFFORT      = settings_svc.get_reasoning_effort(),
         azure_ai_endpoint        = s.get("AZURE_AI_ENDPOINT",""),
         has_azure_ai_key         = bool(settings_svc.get_value("AZURE_AI_KEY","")),
         idle_threshold_pct       = s.get("idle_threshold_pct", 3.0),
@@ -2811,7 +2895,7 @@ async def test_ai(body: dict):
     elif provider == "azure_openai":
         endpoint   = body.get("AZURE_OPENAI_ENDPOINT")   or settings_svc.get_value("AZURE_OPENAI_ENDPOINT", "")
         api_key    = body.get("AZURE_OPENAI_KEY")        or settings_svc.get_value("AZURE_OPENAI_KEY", "")
-        deployment = body.get("AZURE_OPENAI_DEPLOYMENT") or settings_svc.get_value("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+        deployment = body.get("AZURE_OPENAI_DEPLOYMENT") or settings_svc.get_value("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-sol")
         if not endpoint or not api_key:
             raise HTTPException(status_code=400, detail="Azure OpenAI endpoint and key are required.")
         # Normalise endpoint — strip /openai/... paths, the SDK adds them
@@ -3477,6 +3561,7 @@ async def _finops_warehouse_scheduler() -> None:
     After that, calculates seconds until next midnight UTC and sleeps until then.
     """
     await asyncio.sleep(30)  # let the app finish starting up
+    _warehouse_tick = 0
 
     # First-run: if the warehouse has no cost ROWS, collect now. The first ETL after
     # a fresh deploy can come back empty (Cost Management 429, or the managed identity's
@@ -3505,6 +3590,15 @@ async def _finops_warehouse_scheduler() -> None:
                     await _run_warehouse_etl_async("startup_backfill", initial=False)
                 except Exception as _bfx:
                     logger.warning("FinOps Warehouse: backfill pass failed: %s", _bfx)
+        elif _FINOPS_WAREHOUSE_AVAILABLE:
+            # Cost rows can already exist while budgets, Sentinel/LA table costs and the
+            # utilisation history are still empty — those only fill from an ETL pass, so a
+            # deploy onto an existing database would otherwise leave them blank until the
+            # first 12h tick.
+            _gaps = finops_warehouse_svc.missing_datasets()
+            if _gaps:
+                logger.info("FinOps Warehouse: empty datasets %s — running gap-fill ETL", _gaps)
+                await _run_warehouse_etl_async("startup_gapfill", initial=True)
     except Exception as exc:
         logger.warning("FinOps Warehouse: startup initial collection failed: %s", exc)
 
@@ -3513,8 +3607,14 @@ async def _finops_warehouse_scheduler() -> None:
         logger.info("FinOps Warehouse scheduler: next run in %.0f seconds (12h interval)", sleep_secs)
         await asyncio.sleep(sleep_secs)
         try:
-            logger.info("FinOps Warehouse: 12h ETL starting")
-            await _run_warehouse_etl_async("scheduler")
+            # Every other tick (~daily) reaches all the way back over the full window
+            # instead of only topping up recent days. Without this a deployment that
+            # started on a short window never deepens its history, so year-on-year and
+            # long-range trends stay permanently empty.
+            _deep = (_warehouse_tick % 2) == 1
+            _warehouse_tick += 1
+            logger.info("FinOps Warehouse: 12h ETL starting (%s window)", "FULL back-fill" if _deep else "incremental")
+            await _run_warehouse_etl_async("scheduler_deep" if _deep else "scheduler", initial=False)
         except Exception as exc:
             logger.error("FinOps Warehouse scheduler error: %s", exc)
 
@@ -4629,6 +4729,8 @@ def _warehouse_tag_analytics(required_tags: Optional[List[str]] = None) -> Optio
         total_res = rstats["total_resources"]
         stats: List[FinOpsTagKeyStats] = []
         worst_coverage = 100.0
+        worst_covered = total_res       # resources carrying EVERY required tag (approx)
+        missing_required: List[str] = []
         any_data = False
         for tag_key in req:
             lk = str(tag_key).lower()
@@ -4652,6 +4754,9 @@ def _warehouse_tag_analytics(required_tags: Optional[List[str]] = None) -> Optio
             else:
                 cov = round(tagged / (tag_total or 1) * 100, 1) if tag_total else 0.0
             worst_coverage = min(worst_coverage, cov)
+            worst_covered = min(worst_covered, covered)
+            if not covered:
+                missing_required.append(tag_key)
             stats.append(FinOpsTagKeyStats(
                 tag_key=rstats["casing"].get(lk, tag_key),
                 covered_resources=covered, total_resources=total_res,
@@ -4673,6 +4778,26 @@ def _warehouse_tag_analytics(required_tags: Optional[List[str]] = None) -> Optio
             untagged_resource_count=rstats["untagged_resource_count"],
             compliance_score_pct=round(worst_coverage if any_data else 0.0, 1),
             required_tags=req,
+            total_resources=int(total_res),
+            compliant_resources=max(0, min(int(worst_covered), int(total_res))),
+            non_compliant_resources=max(int(total_res) - max(0, int(worst_covered)), 0),
+            untagged_spend_usd=round(untagged_cost, 2),
+            # EVERY discovered key, not just the required ones, so the coverage table
+            # matches the tag chips above it instead of rendering empty.
+            tag_stats=[
+                FinOpsTagKeyStats(
+                    tag_key=rstats["casing"].get(lk, lk),
+                    covered_resources=cov_n,
+                    total_resources=int(total_res),
+                    coverage_pct=round(cov_n / total_res * 100, 1) if total_res else 0.0,
+                    total_cost_usd=round(rstats["cost_by_key"].get(lk, 0.0), 2),
+                    distinct_values=len(rstats["values"].get(lk, set())),
+                    top_values=[],
+                    is_required=lk in {str(t).lower() for t in req},
+                )
+                for lk, cov_n in sorted(rstats["covered"].items(), key=lambda kv: -int(kv[1] or 0))
+            ],
+            missing_required_tags=missing_required,
             generated_at=datetime.now(timezone.utc).isoformat(),
             data_source="finops_warehouse+scan",
         )
@@ -5049,13 +5174,21 @@ async def finops_top_movers(
     """
     _require_finops()
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        _pool,
-        lambda: finops_svc.get_top_movers(
-            dimension=dimension,
-            limit=max(1, min(limit, 100))
+    # Two live Cost Management queries; bounded so 429 retry storms cannot hang the request.
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(
+                _pool,
+                lambda: finops_svc.get_top_movers(
+                    dimension=dimension,
+                    limit=max(1, min(limit, 100))
+                )
+            ),
+            timeout=45,
         )
-    )
+    except Exception as exc:
+        logger.warning("finops_top_movers live failed/slow: %s", exc)
+        raise HTTPException(status_code=503, detail="Top movers temporarily unavailable — retry shortly")
 
 
 # ── Budget Management ─────────────────────────────────────────────────────────
@@ -5401,6 +5534,13 @@ class FinOpsAIRequest(BaseModel):
     force_refresh: bool = False
     scope: Optional[str] = None
     context: Optional[Dict[str, Any]] = None
+    question: Optional[str] = None
+
+
+# A deep reasoning pass (AI_REASONING_EFFORT=high) measures 70-300s on gpt-5.6-sol.
+# The previous 60s cap 503'd every uncached generation, so Refresh / Scope / Context /
+# Ask never returned anything.
+_FINOPS_AI_TIMEOUT_SECS = 300
 
 
 def _finops_ai_grounding(filters: Optional[dict]) -> Optional[dict]:
@@ -5448,17 +5588,11 @@ def _finops_ai_grounding(filters: Optional[dict]) -> Optional[dict]:
 
     sel = [r for r in resources if _match(r)] or resources
     _c = lambda r: float(getattr(r, "cost_current_month", 0) or 0)
-    cur = sum(_c(r) for r in sel)
-    prev = sum(float(getattr(r, "cost_previous_month", 0) or 0) for r in sel)
-    by_svc, by_rg, by_sub, by_reg = defaultdict(float), defaultdict(float), defaultdict(float), defaultdict(float)
+    attributed = sum(_c(r) for r in sel)
     by_tag = defaultdict(float)
     tagged_count = 0
     for r in sel:
         c = _c(r)
-        by_svc[(getattr(r, "resource_type", "") or "other").split("/")[-1]] += c
-        by_rg[getattr(r, "resource_group", "") or "(none)"] += c
-        by_sub[subs.get(getattr(r, "subscription_id", "") or "", (getattr(r, "subscription_id", "") or "")[:8])] += c
-        by_reg[getattr(r, "location", "") or "(none)"] += c
         _tags = getattr(r, "tags", None) or {}
         if _tags:
             tagged_count += 1
@@ -5490,21 +5624,81 @@ def _finops_ai_grounding(filters: Optional[dict]) -> Optional[dict]:
         "issue": "orphaned" if getattr(r, "is_orphan", False) else "oversized",
         "current_sku": getattr(r, "sku", None), "recommended_sku": getattr(r, "rightsize_sku", None),
     } for r in sorted(waste_src, key=_c, reverse=True)[:10]]
+    # ---- Authoritative COST basis: the warehouse, never per-resource costs. -------------
+    # Per-resource `cost_current_month` is Cost-Management-throttled and attributes only a
+    # fraction of real spend (often ~2-20%), so using it for totals/breakdowns made the AI
+    # quote figures that contradicted the very view it was analysing. The warehouse
+    # (finops_daily_dimension_costs) is a complete, throttle-immune partition of spend.
+    from services import cost_analytics_service as _ca
+    wh_subs = sub_f or None
+    other_filters = bool(rg_f or reg_f or type_f or tag_f)
+    try:
+        d_from, d_to = _ca.resolve_period("last_30d", None, None)
+        span = (datetime.fromisoformat(d_to) - datetime.fromisoformat(d_from)).days + 1
+        p_to = datetime.fromisoformat(d_from) - timedelta(days=1)
+        p_from = p_to - timedelta(days=span - 1)
+        cur = _ca.estate_total(date_from=d_from, date_to=d_to, subscription_ids=wh_subs)
+        prev = _ca.estate_total(date_from=p_from.strftime("%Y-%m-%d"),
+                                date_to=p_to.strftime("%Y-%m-%d"), subscription_ids=wh_subs)
+
+        def _wh(group_by: str, n: int = 8):
+            r = _ca.analyze(subscription_ids=wh_subs, group_by=group_by,
+                            date_from=d_from, date_to=d_to, top=n) or {}
+            return [{"name": b.get("key"), "cost": round(float(b.get("cost") or 0), 2)}
+                    for b in (r.get("breakdown") or [])][:n]
+
+        by_svc, by_rg, by_sub, by_reg = (_wh("service_family"), _wh("resource_group"),
+                                         _wh("subscription"), _wh("location"))
+        wh_ok = cur > 0
+    except Exception as _we:
+        logger.warning("FinOps AI grounding: warehouse cost basis unavailable (%s)", _we)
+        d_from = d_to = ""
+        cur = prev = 0.0
+        by_svc = by_rg = by_sub = by_reg = []
+        wh_ok = False
+
+    coverage_pct = round(attributed / cur * 100, 1) if cur > 0 else 0.0
     return {
-        "estate": {
-            "resource_count": len(sel), "spend_this_month_usd": round(cur, 2),
-            "spend_last_month_usd": round(prev, 2),
-            "mom_pct": round((cur - prev) / prev * 100, 1) if prev > 0 else 0.0,
+        "cost_basis": {
+            "source": ("Azure cost warehouse (finops_daily_dimension_costs) — complete, "
+                       "throttle-immune daily actuals"
+                       if wh_ok else "UNAVAILABLE — no authoritative cost figures for this request"),
+            "window": f"{d_from} → {d_to} (last 30 days)" if wh_ok else "n/a",
+            "currency": "USD",
+            "authoritative_spend_usd": round(cur, 2),
+            "prior_equal_window_spend_usd": round(prev, 2),
+            "change_pct": round((cur - prev) / prev * 100, 1) if prev > 0 else None,
+            "scoped_to_subscriptions": wh_subs or "all configured subscriptions",
+            "filters_applied_to_these_totals": (
+                "subscription only — resource group / region / type / tag filters are NOT applied "
+                "to these authoritative totals, so do not present them as the filtered total"
+                if other_filters else "subscription scope only (no other filters active)"),
+        },
+        # Warehouse-derived: these SUM to authoritative_spend_usd (top-N + remainder).
+        "cost_by_service": by_svc, "cost_by_resource_group": by_rg,
+        "cost_by_subscription": by_sub, "cost_by_region": by_reg,
+        # Inventory facts are COMPLETE (they come from Resource Graph, not Cost Management).
+        "resource_inventory": {
+            "resource_count": len(sel),
             "untagged_resources": sum(1 for r in sel if not (getattr(r, "tags", None) or {})),
             "tagged_resources": tagged_count,
             "tagged_pct": round(tagged_count / len(sel) * 100, 1) if sel else 0.0,
         },
-        "top_resources_by_cost": top_resources,
-        "cost_by_service": _top(by_svc), "cost_by_resource_group": _top(by_rg),
-        "cost_by_subscription": _top(by_sub), "cost_by_region": _top(by_reg),
-        "cost_by_tag": _top(by_tag, 10),
-        "waste_candidates": waste,
-        "waste_summary": {"orphaned_count": len(orphans), "oversized_count": len(oversized)},
+        # Everything below is PARTIAL. It exists to name real resources, not to total spend.
+        "resource_level_costs": {
+            "warning": (
+                f"INCOMPLETE — per-resource costs account for only {coverage_pct}% of "
+                f"authoritative spend (${attributed:,.2f} of ${cur:,.2f}) because Azure Cost "
+                "Management per-resource queries are rate-limited. Use these ONLY to rank and "
+                "name resources. NEVER sum them into a total, never present them as estate "
+                "spend, and never contradict authoritative_spend_usd with them."),
+            "coverage_pct": coverage_pct,
+            "attributed_usd": round(attributed, 2),
+            "top_resources_by_cost": top_resources,
+            "cost_by_tag": _top(by_tag, 10),
+            "waste_candidates": waste,
+            "waste_summary": {"orphaned_count": len(orphans), "oversized_count": len(oversized)},
+        },
     }
 
 
@@ -5530,9 +5724,9 @@ async def finops_ai_insights(req: FinOpsAIRequest):
         result = await asyncio.wait_for(
             loop.run_in_executor(
                 _ai_pool,
-                lambda: _ai.get_finops_insights(req.view, data_for_ai, req.filters, req.force_refresh, req.scope, req.context),
+                lambda: _ai.get_finops_insights(req.view, data_for_ai, req.filters, req.force_refresh, req.scope, req.context, req.question),
             ),
-            timeout=60,
+            timeout=_FINOPS_AI_TIMEOUT_SECS,
         )
     except Exception as exc:
         logger.warning("FinOps AI insights failed/slow: %s", exc)
@@ -5824,11 +6018,42 @@ async def finops_analyze(req: FinOpsAnalyzeRequest):
     _require_finops()
     from services import cost_analytics_service as _ca
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(_pool, lambda: _ca.analyze(
+    result = await loop.run_in_executor(_pool, lambda: _ca.analyze(
         subscription_ids=req.subscription_ids, group_by=req.group_by, period=req.period,
         date_from=req.date_from, date_to=req.date_to, cost_type=req.cost_type,
         resource_group=req.resource_group, top=req.top,
         compare=req.compare, compare_from=req.compare_from, compare_to=req.compare_to))
+
+    # Attach provenance. Without it a chart is just numbers — the reader cannot tell
+    # which subscriptions, window or cost basis produced them, and an export is useless.
+    if isinstance(result, dict):
+        d_from, d_to = result.get("date_from"), result.get("date_to")
+        span = ""
+        if d_from and d_to:
+            try:
+                span = f" ({(datetime.fromisoformat(d_to) - datetime.fromisoformat(d_from)).days + 1} days)"
+            except Exception:
+                span = ""
+        scope = _finops_scope_block(
+            period_label=f"{d_from} → {d_to}{span}" if d_from and d_to else "",
+            source=f"Cost warehouse (finops_daily_dimension_costs) · "
+                   f"{result.get('cost_type', 'actual')} cost · grouped by {result.get('group_by', '')}",
+        )
+        if req.subscription_ids:
+            requested = set(req.subscription_ids)
+            narrowed = [s for s in scope["subscriptions"] if s["id"] in requested]
+            if narrowed:
+                scope["subscriptions"] = narrowed
+                scope["subscription_count"] = len(narrowed)
+        if req.resource_group:
+            scope["resource_groups"] = req.resource_group
+        scope["currency"] = result.get("currency") or scope.get("currency") or "USD"
+        result["scope"] = scope
+        # Echo the effective subscription set so downstream consumers never see an
+        # empty list that implies "no scope" when the query actually covered them all.
+        if not result.get("subscription_ids"):
+            result["subscription_ids"] = [s["id"] for s in scope["subscriptions"]]
+    return result
 
 
 @app.get("/api/finops/analyze/meta", tags=["FinOps"])
@@ -5856,7 +6081,7 @@ async def finops_cost_insights():
     _require_finops()
     from services import finops_insights_service as _ci
 
-    data = _cache.get("data:*") or _cache.get("data")
+    data = _ensure_dashboard_in_cache()
     if not data:
         return {"generated_at": None, "data_source": "no cached estate", "summary": {"total_resources": 0}, "rows": []}
 
@@ -5881,13 +6106,18 @@ async def finops_cost_insights():
 
     # Modernization opportunities (real target + grounded $ = monthly_cost × savings%).
     modern_by_id: dict = {}
+    # The opportunity's own monthly_cost was captured during the scan, when per-resource
+    # cost was throttled to 0 — fall back to the hydrated cost so savings aren't all $0.
+    cost_by_id = {str(r.get("resource_id") or "").lower(): float(r.get("cost_current_month") or 0)
+                  for r in resources}
     try:
         for mo in (data.modernization_opportunities or []):
             d = mo.model_dump() if hasattr(mo, "model_dump") else dict(mo)
             rid = (d.get("resource_id") or "").lower()
             if not rid:
                 continue
-            sav = round((d.get("monthly_cost", 0) or 0) * (d.get("estimated_savings_pct", 0) or 0) / 100.0, 2)
+            monthly = float(d.get("monthly_cost", 0) or 0) or cost_by_id.get(rid, 0.0)
+            sav = round(monthly * (d.get("estimated_savings_pct", 0) or 0) / 100.0, 2)
             current = d.get("current_config") or ""
             target = d.get("target_service") or ""
             modern_by_id[rid] = {
@@ -5978,7 +6208,7 @@ async def finops_anomalies(days: int = 60, window: int = 7, z: float = 2.5,
                 loop.run_in_executor(_ai_pool, lambda: _ai.get_finops_insights(
                     "anomalies", data_for_ai, None, False,
                     "Explain each cost anomaly and its most likely root cause; cite the resource groups / services and dollar changes driving the spike or drop.", None)),
-                timeout=60,
+                timeout=_FINOPS_AI_TIMEOUT_SECS,
             )
             result["ai"] = ai
         except Exception as exc:
@@ -6022,6 +6252,41 @@ async def finops_commitment_simulate(model: Dict[str, Any] = Body(default={})):
     return await loop.run_in_executor(_pool, lambda: _plan.simulate(dash, term=term, coverage_target_pct=cov, payment=pay))
 
 
+def _finops_scope_block(period_label: str = "", source: str = "") -> Dict[str, Any]:
+    """Provenance for a FinOps figure: which estate slice, which window, which currency.
+
+    Charts and exports are meaningless without it — a burndown of "$382" tells a reader
+    nothing unless it also says whose subscriptions and which month it covers.
+    """
+    subs: List[Dict[str, str]] = []
+    try:
+        configured = list(settings_svc.get_subscription_ids() or [])
+    except Exception:
+        configured = []
+    names: Dict[str, str] = {}
+    for resolver in (_sub_name_map, _resolve_all_subscription_names):
+        try:
+            for sid, nm in (resolver() or {}).items():
+                if sid and nm and sid not in names:
+                    names[sid] = nm
+        except Exception:
+            continue
+    subs = [{"id": sid, "name": names.get(sid) or sid} for sid in configured]
+
+    now = datetime.now(tz=timezone.utc)
+    if not period_label:
+        period_label = f"Month to date — {now:%B %Y} (1–{now.day} {now:%b})"
+    return {
+        "subscriptions": subs,
+        "subscription_count": len(subs),
+        "resource_groups": "All resource groups (no filter applied)",
+        "period": period_label,
+        "currency": "USD",
+        "source": source or "Azure Cost Management daily actuals",
+        "generated_at": now.isoformat(),
+    }
+
+
 @app.post("/api/finops/budget-scenario", tags=["FinOps"])
 async def finops_budget_scenario(model: Dict[str, Any] = Body(default={})):
     """Budget burndown / scenario for the current month: linear budget line vs the
@@ -6041,7 +6306,11 @@ async def finops_budget_scenario(model: Dict[str, Any] = Body(default={})):
     budget = float(model.get("monthly_budget", 0) or 0)
     growth = float(model.get("growth_pct", 0) or 0)
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(_pool, lambda: _bs.build_burndown(cm, budget, growth))
+    result = await loop.run_in_executor(_pool, lambda: _bs.build_burndown(cm, budget, growth))
+    if isinstance(result, dict):
+        result["scope"] = _finops_scope_block(
+            source="Azure Cost Management daily actuals (all configured subscriptions)")
+    return result
 
 
 @app.post("/api/finops/chargeback/compute", tags=["FinOps"])
@@ -6145,7 +6414,7 @@ async def finops_recommendations(req: FinOpsRecoRequest):
                         "recommendation-studio", data_for_ai, req.filters,
                         req.force_refresh, scope_text, ctx),
                 ),
-                timeout=60,
+                timeout=_FINOPS_AI_TIMEOUT_SECS,
             )
             result["ai"] = ai
         except Exception as exc:
@@ -6549,6 +6818,19 @@ class FinOpsReportBody(BaseModel):
     scope: Optional[List[str]] = None    # subscription ids; defaults to all scanned
     customer: str = ""
     use_ai: bool = True
+    # Custom report builder — which sections to include and what to scope it to.
+    sections: Optional[List[str]] = None
+    resource_groups: Optional[List[str]] = None
+    regions: Optional[List[str]] = None
+    resource_types: Optional[List[str]] = None
+    tag_key: Optional[str] = None
+    tag_value: Optional[str] = None
+    tagged: Optional[bool] = None        # True = tagged only, False = untagged only
+    # Author's brief — free text from the wizard. Steers emphasis and what the
+    # narrative must answer; it is never treated as data (see _guidance_block).
+    audience: Optional[str] = None
+    context: Optional[str] = None
+    questions: Optional[str] = None
 
 
 class FinOpsReportExportBody(BaseModel):
@@ -6615,6 +6897,52 @@ async def finops_exec_report_generate(body: FinOpsReportBody):
         logger.warning("exec-report: metrics unavailable: %s", exc)
         metrics = {}
 
+    # Scope filters for the custom report builder. Tag key/value is not on the
+    # insights rows (they only carry has_tags), so resolve it against the scan
+    # cache and hand the service an explicit allow-list of resource ids.
+    filters: Dict[str, Any] = {
+        "resource_groups": body.resource_groups or [],
+        "regions": body.regions or [],
+        "resource_types": body.resource_types or [],
+        "tagged": body.tagged,
+        "subscription_labels": [sub_names.get(s, s) for s in (body.scope or []) if s],
+    }
+    if body.tag_key:
+        want_k = body.tag_key.strip().lower()
+        want_v = (body.tag_value or "").strip().lower()
+        allow: List[str] = []
+        try:
+            for r in _get_resources_list():
+                tags = r.get("tags") or {}
+                for k, v in tags.items():
+                    if str(k).lower() != want_k:
+                        continue
+                    if want_v and str(v or "").lower() != want_v:
+                        continue
+                    rid = str(r.get("resource_id") or r.get("id") or "")
+                    if rid:
+                        allow.append(rid)
+                    break
+        except Exception as exc:
+            logger.warning("exec-report: tag filter could not be resolved: %s", exc)
+        filters["resource_ids"] = allow
+        filters["tag_label"] = f"{body.tag_key}={body.tag_value}" if want_v else body.tag_key
+
+    # Module report types (security, resilience, modernization, inventory, advisor,
+    # well-architected) are grounded in the estate scan rather than the cost warehouse.
+    estate: Dict[str, Any] = {}
+    if (_frs.REPORT_TYPES.get(body.report_type) or {}).get("module"):
+        try:
+            # Synchronous accessor — it rehydrates from the durable snapshot in-process.
+            _dash = await loop.run_in_executor(_pool, _ensure_dashboard_in_cache)
+            if _dash is not None:
+                estate = _dash.model_dump() if hasattr(_dash, "model_dump") else dict(_dash)
+            if not (estate.get("resources") or []):
+                logger.warning("exec-report: estate scan has no resources — module blocks will report not-collected")
+        except Exception as exc:
+            logger.warning("exec-report: estate scan unavailable: %s", exc)
+            estate = {}
+
     try:
         report = await loop.run_in_executor(_pool, lambda: _frs.generate_finops_report(
             report_type=body.report_type,
@@ -6625,6 +6953,14 @@ async def finops_exec_report_generate(body: FinOpsReportBody):
             customer=body.customer,
             use_ai=body.use_ai,
             sub_mg=sub_mg,
+            sections=body.sections,
+            filters=filters,
+            guidance={
+                "audience": body.audience,
+                "context": body.context,
+                "questions": body.questions,
+            },
+            estate=estate,
         ))
     except Exception as exc:
         logger.error("FinOps report generation failed: %s", exc)
@@ -7290,6 +7626,16 @@ def _fw_cache_key(name: str, *parts) -> str:
     return f"fw:{name}:{_fw_cache_version()}:{safe}"
 
 
+@app.get("/api/data/availability", tags=["Data"])
+async def data_availability():
+    """What has actually been collected, per dataset: rows, coverage window, freshness,
+    which modules read it, and whether it comes from the Azure SQL warehouse, the scan
+    cache, live Azure calls or user input. Lets a panel say WHY it is empty."""
+    from services import data_availability_service as _av
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, _av.get_availability)
+
+
 @app.get("/api/finops/warehouse/status", tags=["FinOps Warehouse"])
 async def warehouse_status():
     """Return metadata about the most recent ETL run and data freshness."""
@@ -7615,6 +7961,41 @@ async def mgmt_monitoring(days: int = 30, subscription_id: Optional[str] = None)
     security = await loop.run_in_executor(_pool, lambda: _fm.get_security_costs(days, subs))
     ingestion = await loop.run_in_executor(_pool, lambda: _fm.get_ingestion_costs(days, subs))
     return {"security": security, "ingestion": ingestion}
+
+
+@app.get("/api/finops/log-analytics/workspaces", tags=["FinOps Management"])
+async def la_workspaces(days: int = 30, subscription_id: Optional[str] = None):
+    """Log Analytics / Sentinel workspaces with billable GB, allocated cost and $/GB."""
+    from services import log_analytics_cost_service as _la
+    loop = asyncio.get_event_loop()
+    subs = _mgmt_subs(subscription_id)
+    return await loop.run_in_executor(
+        _pool, lambda: _la.get_workspace_summary(days, subs))
+
+
+@app.get("/api/finops/log-analytics/tables", tags=["FinOps Management"])
+async def la_tables(workspace_id: Optional[str] = None, days: int = 30,
+                    top: int = 50, subscription_id: Optional[str] = None):
+    """Per-TABLE ingestion volume and allocated cost inside a workspace.
+
+    Cost is apportioned by billable-GB share — Azure does not bill per table — so the
+    response carries cost_basis for the UI to label."""
+    from services import log_analytics_cost_service as _la
+    loop = asyncio.get_event_loop()
+    subs = _mgmt_subs(subscription_id)
+    return await loop.run_in_executor(
+        _pool, lambda: _la.get_table_costs(workspace_id, days, top, subs))
+
+
+@app.post("/api/finops/log-analytics/collect", tags=["FinOps Management"])
+async def la_collect(days: int = 30, subscription_id: Optional[str] = None):
+    """Query every in-scope workspace's Usage table and persist per-table cost."""
+    from services import log_analytics_cost_service as _la
+    loop = asyncio.get_event_loop()
+    subs = _mgmt_subs(subscription_id)
+    run_id = f"la-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    return await loop.run_in_executor(
+        _pool, lambda: _la.collect_all(subs, run_id=run_id, days=days))
 
 
 @app.get("/api/finops/mgmt/environments", tags=["FinOps Management"])
@@ -8428,6 +8809,8 @@ async def get_cached_dashboard_instant():
     # Also check the legacy REST-endpoint cache slot
     if "data" in _cache and _cache.get("cached_at", 0) > best_ts:
         best_data = _cache["data"]
+    if best_data is not None:
+        _hydrate_resource_costs(best_data)
 
     def _stamp(payload):
         # The frontend rejects any cached payload whose _snapshot_schema doesn't
@@ -8457,6 +8840,7 @@ async def get_cached_dashboard_instant():
         # don't re-read the large payload from Azure SQL a second time.
         snap = cache_svc.get_json("dash:latest") or persistence_svc.load_latest_dashboard()
         if snap:
+            _hydrate_resource_costs(snap)
             return snap
         return _Response(status_code=204)
 
@@ -11729,6 +12113,7 @@ def _ensure_dashboard_in_cache() -> Optional[DashboardData]:
     # assessments, health score) 404 "No resource data" even though the durable snapshot holds the
     # full resource list. When resources are missing, fall through and rehydrate from the snapshot.
     if data and (getattr(data, "resources", None) or []):
+        _hydrate_resource_costs(data)
         # Keep the legacy in-memory slot in sync so endpoints that read
         # _cache["data"] directly (get_dashboard fast path, /api/resources,
         # resource detail) see the same populated dashboard the unified
@@ -11791,6 +12176,7 @@ def _ensure_dashboard_in_cache() -> Optional[DashboardData]:
         _cache["data:*:ts"] = ts
         _cache["data"] = restored
         _cache["cached_at"] = ts
+        _hydrate_resource_costs(restored)
         logger.info(
             "Rehydrated dashboard from snapshot into cache (%d resources)",
             len(restored.resources or []),
@@ -11801,12 +12187,208 @@ def _ensure_dashboard_in_cache() -> Optional[DashboardData]:
         return data
 
 
+def _hydrate_resource_costs(data) -> None:
+    """Fill per-resource cost from the cost warehouse when the scan stored 0.
+
+    Azure Cost Management rate-limits the per-resource grain (sustained 429s), so a
+    scan typically persists cost_current_month=0 for EVERY resource. That made the
+    waste/quadrant/savings home-page charts filter down to zero rows and render an
+    endless loading skeleton, and every cost column read $0. Accepts either a
+    DashboardData model or a raw snapshot dict; mutates in place so every cache
+    reader sees the same corrected resources. Idempotent and cheap.
+    """
+    if data is None:
+        return
+    rows = data.get("resources") if isinstance(data, dict) else (getattr(data, "resources", None) or [])
+    rows = rows or []
+    if not rows:
+        return
+
+    is_dict = isinstance(rows[0], dict)
+    _get = (lambda r, k: r.get(k)) if is_dict else (lambda r, k: getattr(r, k, None))
+
+    try:
+        from services.finops_dashboard_service import _warehouse_resource_costs
+        wh = _warehouse_resource_costs() or {}
+    except Exception as exc:
+        logger.debug("Resource cost hydration unavailable: %s", exc)
+        return
+    if not wh:
+        return
+
+    filled = 0
+    for r in rows:
+        # Per-resource rather than an all-or-nothing guard: a background refresh that
+        # lands a few live costs must not stop the rest being filled.
+        if float(_get(r, "cost_current_month") or 0):
+            continue
+        cost = wh.get(str(_get(r, "resource_id") or "").lower())
+        if not cost:
+            continue
+        try:
+            cost = round(float(cost), 2)
+            if is_dict:
+                r["cost_current_month"] = cost
+            else:
+                r.cost_current_month = cost
+            filled += 1
+            # Savings were derived from the $0 cost at scan time, so recompute them
+            # with the SAME estimator rather than leaving the waste/savings charts empty.
+            if not float(_get(r, "estimated_monthly_savings") or 0):
+                sav, rec = estimate_savings(
+                    cost,
+                    float(_get(r, "final_score") or 0),
+                    bool(_get(r, "is_orphan")),
+                    0.0,
+                    has_metrics=_get(r, "primary_utilization_pct") is not None,
+                )
+                if sav > 0:
+                    if is_dict:
+                        r["estimated_monthly_savings"] = sav
+                        if not r.get("recommendation"):
+                            r["recommendation"] = rec
+                    else:
+                        r.estimated_monthly_savings = sav
+                        if not getattr(r, "recommendation", None):
+                            r.recommendation = rec
+        except Exception:
+            continue
+    if filled:
+        logger.info("Hydrated per-resource cost for %d/%d resources from the cost warehouse",
+                    filled, len(rows))
+        _refresh_cost_kpis(data, rows, _get)
+        _rebuild_savings_recommendations(data, rows, _get)
+        _refresh_orphan_panel(data, rows, _get)
+
+
+def _refresh_orphan_panel(data, rows, _get) -> None:
+    """Re-point the orphan panel's costs at the hydrated resources.
+
+    Built during the scan like the savings list, so it kept showing "Wasted: $0/mo"
+    for orphans that do have a warehouse cost.
+    """
+    panel = (data.get("orphans") if isinstance(data, dict)
+             else getattr(data, "orphans", None)) or []
+    if not panel:
+        return
+    by_id = {}
+    for r in rows:
+        rid = str(_get(r, "resource_id") or "").lower()
+        if rid:
+            by_id[rid] = r
+    for o in panel:
+        o_is_dict = isinstance(o, dict)
+        rid = str((o.get("resource_id") if o_is_dict else getattr(o, "resource_id", "")) or "").lower()
+        src = by_id.get(rid)
+        if not src:
+            continue
+        cost = float(_get(src, "cost_current_month") or 0)
+        sav = float(_get(src, "estimated_monthly_savings") or 0)
+        try:
+            if o_is_dict:
+                o["monthly_cost"] = round(cost, 2)
+                o["estimated_savings"] = round(sav, 2)
+            else:
+                o.monthly_cost = round(cost, 2)
+                o.estimated_savings = round(sav, 2)
+        except Exception:
+            continue
+
+
+def _rebuild_savings_recommendations(data, rows, _get) -> None:
+    """Re-derive savings_recommendations from the hydrated resources.
+
+    The list is built during the scan from resources whose savings were computed
+    against the throttled $0 costs, so it kept only the handful that had a live
+    cost and left the home-page Savings panel reading "none found" while FinOps
+    listed dozens. Rebuilding here keeps the panel consistent with the resources.
+    """
+    def _num(r, key):
+        return float(_get(r, key) or 0)
+
+    recs = []
+    for r in rows:
+        sav = _num(r, "estimated_monthly_savings")
+        if sav <= 0:
+            continue
+        cost = _num(r, "cost_current_month")
+        score = _num(r, "final_score")
+        recs.append({
+            "resource_id": _get(r, "resource_id") or "",
+            "resource_name": _get(r, "resource_name") or "",
+            "resource_type": _get(r, "resource_type") or "",
+            "resource_group": _get(r, "resource_group") or "",
+            "subscription_id": _get(r, "subscription_id") or "",
+            "current_monthly_cost": round(cost, 2),
+            "estimated_monthly_savings": round(sav, 2),
+            "savings_pct": round(sav / cost * 100, 1) if cost > 0 else 0.0,
+            "recommendation": _get(r, "recommendation") or "",
+            "ai_explanation": _get(r, "ai_explanation"),
+            "ai_action": _get(r, "ai_action"),
+            "priority": "High" if score <= 25 else "Medium" if score <= 50 else "Low",
+            "score": score,
+            "advisor_count": len(_get(r, "advisor_recommendations") or []),
+        })
+    if not recs:
+        return
+    recs.sort(key=lambda x: -x["estimated_monthly_savings"])
+    recs = recs[:50]
+
+    existing = (data.get("savings_recommendations") if isinstance(data, dict)
+                else getattr(data, "savings_recommendations", None)) or []
+    if len(existing) >= len(recs):
+        return          # the scan already produced at least as much — leave it alone
+    try:
+        if isinstance(data, dict):
+            data["savings_recommendations"] = recs
+        else:
+            from models.schemas import SavingsRecommendation
+            data.savings_recommendations = [SavingsRecommendation(**x) for x in recs]
+        logger.info("Rebuilt savings_recommendations from hydrated costs: %d → %d",
+                    len(existing), len(recs))
+    except Exception as exc:
+        logger.debug("Could not rebuild savings_recommendations: %s", exc)
+
+
+def _refresh_cost_kpis(data, rows, _get) -> None:
+    """Re-derive the cost/savings KPI aggregates after per-resource costs were hydrated.
+
+    The KPI block is computed during the scan, so it inherited the same $0 costs and
+    left the headline savings cards reading $0 next to a non-zero resource count.
+    """
+    kpi = data.get("kpi") if isinstance(data, dict) else getattr(data, "kpi", None)
+    if kpi is None:
+        return
+    k_is_dict = isinstance(kpi, dict)
+
+    def _num(r, key):
+        return float(_get(r, key) or 0)
+
+    totals = {
+        "total_cost_current_month": sum(_num(r, "cost_current_month") for r in rows),
+        "total_potential_savings": sum(_num(r, "estimated_monthly_savings") for r in rows),
+        "orphan_cost": sum(_num(r, "cost_current_month") for r in rows if _get(r, "is_orphan")),
+        "not_used_cost": sum(_num(r, "cost_current_month") for r in rows
+                             if str(_get(r, "score_label") or "") == "Not Used"),
+    }
+    for key, val in totals.items():
+        # Always realign these to the hydrated resources. Leaving the scan's throttled
+        # total in place made savings read as ~2500% of the bill.
+        try:
+            if k_is_dict:
+                kpi[key] = round(val, 2)
+            else:
+                setattr(kpi, key, round(val, 2))
+        except Exception:
+            continue
+
+
 def _get_resources_list() -> List[dict]:
     """Extract resource dicts from cache (rehydrating from snapshot if needed)."""
     data = _ensure_dashboard_in_cache()
     if not data:
         return []
-    return [r.model_dump() for r in (data.resources or [])]
+    return _apply_ai_resource_filter([r.model_dump() for r in (data.resources or [])])
 
 
 def _get_resources_objects():
@@ -12188,11 +12770,14 @@ async def ai_networking_analysis(refresh: bool = False):
     if net_summary.get("empty"):
         return {"error": "No networking resources found in the estate.", "available": False}
     
-    # Get subscription IDs for deep topology query
-    sub_ids = None
-    data = _cache.get("latest")
-    if data and data.resources:
-        sub_ids = list(set(r.subscription_id for r in data.resources if r.subscription_id))
+    # Scope the topology to the SAME resources the model is told it is analysing — reading
+    # the cache here would pull in subscriptions the user filtered out.
+    sub_ids = sorted({
+        s for s in (
+            (r.get("subscription_id") if isinstance(r, dict) else getattr(r, "subscription_id", None))
+            for r in resources
+        ) if s
+    }) or None
 
     # Build advanced topology via Azure Resource Graph
     topology = None
@@ -12212,7 +12797,8 @@ async def ai_networking_analysis(refresh: bool = False):
 @app.get("/api/licensing/reservation-analysis")
 async def licensing_reservation_analysis():
     """Comprehensive reservation coverage analysis with purchase planning."""
-    resources = _get_resources_list()
+    # build_reservation_analysis() takes ResourceMetrics objects, not dicts.
+    resources = _get_resources_objects()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data. Run a scan first.")
     return await asyncio.get_event_loop().run_in_executor(

@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 CLAUDE_MODEL_PRIMARY   = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250514")
 CLAUDE_MODEL_FAST      = os.getenv("CLAUDE_MODEL_FAST", "claude-haiku-4-5-20251001")
-MAX_TOKENS_ANALYSIS    = int(os.getenv("AI_MAX_TOKENS_ANALYSIS", "8192"))
+MAX_TOKENS_ANALYSIS    = int(os.getenv("AI_MAX_TOKENS_ANALYSIS", "16384"))
 # Sized by the deploy script from the model deployment's real TPM capacity: a small
 # pay-as-you-go quota needs far more patience than dedicated (PTU) throughput.
 AI_MAX_RETRIES         = int(os.getenv("AI_MAX_RETRIES", "3"))
@@ -42,9 +42,19 @@ AI_RETRY_BACKOFF_SECS  = int(os.getenv("AI_RETRY_BACKOFF_SECONDS", "15"))
 # Azure OpenAI TPM windows refill every 60s, so backing off longer than one window only
 # stalls the request without improving the odds.
 AI_RETRY_MAX_WAIT_SECS = int(os.getenv("AI_RETRY_MAX_WAIT_SECONDS", "60"))
-MAX_TOKENS_NETWORKING  = 16000
+
+
+def _reasoning_effort() -> str:
+    """Reasoning depth for gpt-5.x / o-series. Single source of truth in settings."""
+    try:
+        import services.settings_service as _s
+        return _s.get_reasoning_effort()
+    except Exception:
+        return os.getenv("AI_REASONING_EFFORT", "high")
+
+MAX_TOKENS_NETWORKING  = 24000
 MAX_TOKENS_SUMMARY     = 4096
-MAX_RESOURCES_FULL_CTX = int(os.getenv("AI_MAX_RESOURCES_CONTEXT", "150"))   # full detail for up to N resources; summarize above this
+MAX_RESOURCES_FULL_CTX = int(os.getenv("AI_MAX_RESOURCES_CONTEXT", "400"))   # full detail for up to N resources; summarize above this
 # This is the dominant term in prompt size. On a small TPM quota a 150-resource prompt can
 # exceed the whole per-minute window on its own, in which case no amount of retrying helps.
 
@@ -92,7 +102,7 @@ def _get_ai_client_for_analysis():
         import services.settings_service as _settings_svc
         endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "") or _settings_svc.get_value("AZURE_OPENAI_ENDPOINT", "")
         key = os.getenv("AZURE_OPENAI_KEY", "") or _settings_svc.get_value("AZURE_OPENAI_KEY", "")
-        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "") or _settings_svc.get_value("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
+        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "") or _settings_svc.get_value("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-sol")
         
         if endpoint and key:
             client = AzureOpenAI(
@@ -209,6 +219,17 @@ def _call_ai(system_prompt: str, user_prompt: str, max_tokens: int = MAX_TOKENS_
     if not client:
         raise RuntimeError("No AI provider configured. Set AZURE_OPENAI_ENDPOINT + AZURE_OPENAI_KEY or ANTHROPIC_API_KEY.")
 
+    # Every module analysis and report service funnels through here, so appending the
+    # data-availability map once tells them all which datasets actually exist, over what
+    # window, and which are live-only — the difference between "not collected" and zero.
+    try:
+        from services.data_availability_service import ai_grounding_block as _avail
+        _block = _avail()
+        if _block:
+            system_prompt = f"{system_prompt}\n\n{_block}"
+    except Exception:
+        pass
+
     _MAX_RETRIES = AI_MAX_RETRIES
     _BACKOFF_BASE = AI_RETRY_BACKOFF_SECS
 
@@ -255,8 +276,8 @@ def _call_ai(system_prompt: str, user_prompt: str, max_tokens: int = MAX_TOKENS_
                 # token budget on hidden reasoning — so a normal cap starves the visible
                 # answer and returns an EMPTY string (the "Empty AI response" error), with
                 # high latency. For those models: send NO temperature, give generous
-                # max_completion_tokens headroom, and request low reasoning effort (keeps
-                # latency sane and leaves budget for the actual answer). Older models keep
+                # max_completion_tokens headroom, and take the reasoning depth from settings
+                # (it is the dominant latency lever). Older models keep
                 # max_completion_tokens + temperature.
                 is_reasoning = any(k in low_name for k in ("gpt-5", "gpt5", "o1", "o3", "o4"))
                 kwargs = dict(
@@ -268,8 +289,8 @@ def _call_ai(system_prompt: str, user_prompt: str, max_tokens: int = MAX_TOKENS_
                     response_format={"type": "json_object"},
                 )
                 if is_reasoning:
-                    kwargs["max_completion_tokens"] = max(int(max_tokens) + 8000, 16000)
-                    kwargs["reasoning_effort"] = "low"
+                    kwargs["max_completion_tokens"] = max(int(max_tokens) + 16000, 32000)
+                    kwargs["reasoning_effort"] = _reasoning_effort()
                 else:
                     kwargs["max_completion_tokens"] = int(max_tokens)
                     kwargs["temperature"] = 0.3
@@ -294,8 +315,8 @@ def _call_ai(system_prompt: str, user_prompt: str, max_tokens: int = MAX_TOKENS_
                 # Reasoning model spent the whole budget on reasoning → empty answer.
                 # Retry once with a much bigger budget so it can actually emit the JSON.
                 if not text and is_reasoning:
-                    kwargs["max_completion_tokens"] = max(int(max_tokens) * 3, 32000)
-                    kwargs["reasoning_effort"] = "low"
+                    kwargs["max_completion_tokens"] = max(int(max_tokens) * 4, 48000)
+                    kwargs["reasoning_effort"] = _reasoning_effort()
                     try:
                         response = client.chat.completions.create(**kwargs)
                     except Exception:
@@ -417,8 +438,51 @@ def _serialize_for_ai(compressed: List[dict], indent: int = 2) -> str:
 
 # ── Resource context builders ─────────────────────────────────────────────────
 
+_WH_COST_TTL_SECS = 300.0
+_wh_cost_cache: Dict[str, Any] = {"at": 0.0, "map": {}}
+
+
+def _warehouse_cost_map() -> Dict[str, float]:
+    """Per-resource monthly run-rate from the cost warehouse, keyed by lowercase resource id.
+
+    A scan's own `cost_current_month` is almost always 0 because Azure Cost Management
+    rate-limits per-resource queries — which meant every AI prompt was grounded on $0 for
+    every resource. The warehouse keeps the stored per-resource grain, so use it instead.
+    Cached briefly because _compress_resource runs in loops of hundreds."""
+    import time
+    now = time.time()
+    if _wh_cost_cache["map"] and (now - float(_wh_cost_cache["at"])) < _WH_COST_TTL_SECS:
+        return _wh_cost_cache["map"]
+    m: Dict[str, float] = {}
+    try:
+        from services.finops_dashboard_service import _warehouse_resource_costs
+        m = _warehouse_resource_costs() or {}
+    except Exception as exc:
+        logger.debug("AI grounding: warehouse cost map unavailable (%s)", exc)
+    _wh_cost_cache.update({"at": now, "map": m})
+    return m
+
+
+def _res_monthly_cost(r: dict) -> float:
+    """Monthly cost for one resource, falling back to the warehouse when the scan says 0."""
+    c = float(r.get("cost_current_month") or 0)
+    if c:
+        return c
+    return float(_warehouse_cost_map().get(str(r.get("resource_id", "") or "").lower()) or 0.0)
+
+
 def _compress_resource(r: dict) -> dict:
     """Build a compact but rich resource context dict for AI prompts."""
+    # Prefer the scan's own figure; fall back to the warehouse run-rate when it is 0 so
+    # the AI never reasons about a real resource as if it were free.
+    _cost = float(r.get("cost_current_month") or 0)
+    _cost_basis = "month-to-date (scan)"
+    if not _cost:
+        _wh = _warehouse_cost_map().get(str(r.get("resource_id", "") or "").lower())
+        if _wh:
+            _cost, _cost_basis = float(_wh), "30-day run rate (cost warehouse)"
+        else:
+            _cost_basis = "unattributed — no cost data for this resource"
     ctx = {
         "_full_id":    r.get("resource_id", ""),        # kept for tag matching, stripped before AI
         "id":          r.get("resource_id", "")[-40:],   # trim long ARM IDs
@@ -429,7 +493,8 @@ def _compress_resource(r: dict) -> dict:
         "location":    r.get("location", ""),
         "sub":         r.get("subscription_id", "")[-8:],
         "sku":         r.get("sku"),
-        "cost_mtd":    round(r.get("cost_current_month", 0), 2),
+        "cost_mtd":    round(_cost, 2),
+        "cost_basis":  _cost_basis,
         "cost_prev":   round(r.get("cost_previous_month", 0), 2),
         "score":       round(r.get("final_score", 50), 1),
         "score_label": r.get("score_label", "Unknown"),
@@ -1175,7 +1240,7 @@ def analyze_environment_bcdr(
             if backup:          return "backup"
             return "none"
 
-        annual_run_rate    = round(sum((r.get("cost_current_month") or 0) for r in resources) * 12.0, 2)
+        annual_run_rate    = round(sum(_res_monthly_cost(r) for r in resources) * 12.0, 2)
         total_hourly_loss  = 0.0
         total_stated_hr    = 0.0
         stated_count       = 0
@@ -1187,7 +1252,7 @@ def analyze_environment_bcdr(
         posture_counts = {"backup+zone": 0, "backup": 0, "none": 0}
 
         for r in resources:
-            monthly = float(r.get("cost_current_month") or 0)
+            monthly = _res_monthly_cost(r)
             hourly_az = monthly / 730.0
             um = r.get("user_bcdr_metadata") or {}
             crit = (um.get("criticality") or "").strip() if um else ""
@@ -1264,8 +1329,22 @@ def analyze_environment_bcdr(
             "floor_derived_pct": round(exposure_by_source["floor_derived"] / total_for_conf * 100, 1),
         }
 
+        # Only a fraction of spend is attributable to individual resources (Cost Management
+        # throttles the per-resource grain), so publish the authoritative estate figure next
+        # to it — otherwise the run-rate reads as the whole bill when it is a subset.
+        _estate_annual = 0.0
+        try:
+            from services import cost_analytics_service as _ca_bcdr
+            _estate_30d = float(_ca_bcdr.estate_total(period="last_30d") or 0.0)
+            _estate_annual = round(_estate_30d * 12.0, 2)
+        except Exception as _ee:
+            logger.debug("BCDR grounding: estate total unavailable (%s)", _ee)
+
         financial_ground_truth = {
             "annual_azure_run_rate_usd":         annual_run_rate,
+            "authoritative_estate_annual_usd":   _estate_annual,
+            "cost_attribution_pct":              (round(annual_run_rate / _estate_annual * 100, 1)
+                                                  if _estate_annual > 0 else None),
             "total_hourly_loss_usd":             total_hourly_loss,
             "total_stated_hourly_loss_usd":      round(total_stated_hr, 2),
             "stated_loss_resources":             stated_count,
@@ -1310,7 +1389,12 @@ GROUNDED FINANCIAL CONTEXT (fully data-driven from THIS customer's estate — AU
 
 ESTATE FACTS:
 - Resources analysed: {_gt['total_resources_in_calc']}
-- Annual Azure run-rate (12 × current monthly cost across estate): ${_gt['annual_azure_run_rate_usd']:,.2f}
+- Attributable annual Azure run-rate (12 × per-resource monthly cost): ${_gt['annual_azure_run_rate_usd']:,.2f}
+- AUTHORITATIVE total annual Azure spend (cost warehouse): ${_gt['authoritative_estate_annual_usd']:,.2f}
+  Only {_gt['cost_attribution_pct']}% of spend can be tied to an individual resource — Azure Cost Management
+  rate-limits the per-resource grain. Quote the AUTHORITATIVE figure for anything describing total spend,
+  and use the attributable figure ONLY when discussing named resources. Never present the attributable
+  figure as the customer's total bill, and never add the two together.
 - Resources with Phase-1 BCDR tags: {_gt['tagged_resources']} of {_gt['total_resources_in_calc']}
 - Resources with stated financial_loss_per_hour: {_gt['stated_loss_resources']}
 - Actual posture: backup+zone={_gt['posture_counts']['backup+zone']}, backup-only={_gt['posture_counts']['backup']}, neither={_gt['posture_counts']['none']}
@@ -1525,8 +1609,8 @@ Focus on:
                 response_format={"type": "json_object"},
             )
             if _bcdr_reasoning:
-                _bcdr_kw["max_completion_tokens"] = max(int(MAX_TOKENS_ANALYSIS) + 8000, 16000)
-                _bcdr_kw["reasoning_effort"] = "low"
+                _bcdr_kw["max_completion_tokens"] = max(int(MAX_TOKENS_ANALYSIS) + 16000, 32000)
+                _bcdr_kw["reasoning_effort"] = _reasoning_effort()
             else:
                 _bcdr_kw["max_completion_tokens"] = MAX_TOKENS_ANALYSIS
                 _bcdr_kw["temperature"] = 0.3
@@ -1567,6 +1651,8 @@ Focus on:
             "tagged_resources":          int((financial_ground_truth or {}).get("tagged_resources") or 0),
             "stated_loss_resources":     int((financial_ground_truth or {}).get("stated_loss_resources") or 0),
             "annual_run_rate_usd":       (financial_ground_truth or {}).get("annual_azure_run_rate_usd"),
+            "authoritative_estate_annual_usd": (financial_ground_truth or {}).get("authoritative_estate_annual_usd"),
+            "cost_attribution_pct":      (financial_ground_truth or {}).get("cost_attribution_pct"),
             "annual_risk_exposure_usd":  (financial_ground_truth or {}).get("annual_risk_exposure_expected_usd"),
             "data_confidence":           (financial_ground_truth or {}).get("data_confidence"),
             "posture_counts":            (financial_ground_truth or {}).get("posture_counts"),
@@ -2454,6 +2540,36 @@ segmentation recommendations by application boundary.
 Output strict JSON only. No markdown fences. No prose outside JSON values."""
 
 
+# ── Money discipline ──────────────────────────────────────────────────────────
+# Appended to EVERY system prompt in this module. These prompts ask the model for
+# savings, monthly costs and annual exposure, and the per-resource cost they are
+# grounded on is frequently unattributed (Cost Management throttles that grain),
+# so without this the model fills the gap with invented figures.
+MONEY_DISCIPLINE = """
+
+MONEY DISCIPLINE (MANDATORY — a wrong dollar figure invalidates the whole analysis):
+- Every dollar you output must come from a cost field supplied in the data (cost_mtd / cost_usd /
+  an explicitly supplied price or savings figure), or be a simple sum of such fields. NEVER
+  invent, infer from SKU knowledge, or "reasonably estimate" a price.
+- Each resource carries a `cost_basis` field stating what its `cost_mtd` measures
+  ("month-to-date (scan)", "30-day run rate (cost warehouse)", or "unattributed — no cost data").
+  Quote the basis whenever you quote money, and never add figures with different bases.
+- A $0 cost means NOT ATTRIBUTED, not free and not idle. Never present $0 as evidence of no spend
+  or of a saving; say the cost is unattributed instead.
+- Do NOT annualise by multiplying by 8760 hours, and do NOT extrapolate a month-to-date figure to
+  a month, quarter or year.
+- For any target state (different SKU, tier, region or platform) give a target cost or saving ONLY
+  when the data supplies it; otherwise return null and say pricing confirmation is required.
+- Percentages must be derived from supplied numbers and stated with their base.
+- Prefer counts, configuration facts and risk statements over money when cost data is missing. An
+  analysis with no dollar figures beats one with invented dollar figures.
+"""
+
+for _n in ("_SYS_WORKLOAD", "_SYS_BCDR", "_SYS_DEPENDENCY", "_SYS_OPTIMIZATION",
+           "_SYS_RESOURCE_DEEPDIVE", "_SYS_CLOUD_ADOPTION", "_SYS_LICENSING", "_SYS_NETWORKING"):
+    globals()[_n] = globals()[_n] + MONEY_DISCIPLINE
+
+
 def analyze_networking_ai(
     networking_summary: dict,
     resources: Optional[List[dict]] = None,
@@ -2789,8 +2905,8 @@ CRITICAL INSTRUCTIONS FOR HIGH-QUALITY OUTPUT:
                 response_format={"type": "json_object"},
             )
             if _net_reasoning:
-                _net_kw["max_completion_tokens"] = max(int(MAX_TOKENS_NETWORKING) + 8000, 16000)
-                _net_kw["reasoning_effort"] = "low"
+                _net_kw["max_completion_tokens"] = max(int(MAX_TOKENS_NETWORKING) + 16000, 32000)
+                _net_kw["reasoning_effort"] = _reasoning_effort()
             else:
                 _net_kw["max_completion_tokens"] = MAX_TOKENS_NETWORKING
                 _net_kw["temperature"] = 0.2

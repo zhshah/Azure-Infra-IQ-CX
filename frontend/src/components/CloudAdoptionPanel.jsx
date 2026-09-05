@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback } from "react";
+import AIControlsBar, { EMPTY_AI_CONTROLS, aiControlsQuery } from "./ai/AIAnalysisTools";
 import { ResourceIconImg } from "../utils/resourceIcons";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -874,6 +875,7 @@ export default function CloudAdoptionPanel({ acrOpportunities }) {
   const [filterImpact,  setFilterImpact] = useState("all");
   const [aiData,        setAiData]       = useState(null);
   const [aiLoading,     setAiLoading]    = useState(false);
+  const [aiControls,    setAiControls]   = useState(EMPTY_AI_CONTROLS);
   const [aiError,       setAiError]      = useState(null);
 
   const opps     = acrOpportunities;
@@ -889,11 +891,11 @@ export default function CloudAdoptionPanel({ acrOpportunities }) {
     });
   }, [allGaps, filterSev, filterCat, filterImpact]);
 
-  const runAiAnalysis = useCallback(async (refresh = false) => {
+  const runAiAnalysis = useCallback(async (refresh = false, ctl = aiControls) => {
     setAiLoading(true);
     setAiError(null);
     try {
-      const res = await fetch(`/api/ai/cloud-adoption?refresh=${refresh}`);
+      const res = await fetch(`/api/ai/cloud-adoption?refresh=${refresh}${aiControlsQuery(ctl)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (json.error) throw new Error(json.error);
@@ -903,7 +905,7 @@ export default function CloudAdoptionPanel({ acrOpportunities }) {
     } finally {
       setAiLoading(false);
     }
-  }, []);
+  }, [aiControls]);
 
   if (!opps) {
     return (
@@ -992,7 +994,16 @@ export default function CloudAdoptionPanel({ acrOpportunities }) {
 
       {/* ── AI Deep Analysis Tab ─────────────────────────────────────────── */}
       {activeTab === "ai" && (
-        <AIAdoptionAnalysis data={aiData} loading={aiLoading} error={aiError} onRun={runAiAnalysis} />
+        <>
+          <AIControlsBar
+            title="Cloud Adoption AI Analysis"
+            report={aiData}
+            value={aiControls}
+            busy={aiLoading}
+            onApply={next => { setAiControls(next); runAiAnalysis(true, next); }}
+          />
+          <AIAdoptionAnalysis data={aiData} loading={aiLoading} error={aiError} onRun={runAiAnalysis} />
+        </>
       )}
 
       {/* ── Findings Tab ──────────────────────────────────────────────────── */}

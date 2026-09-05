@@ -17,6 +17,7 @@ import {
   Lightbulb, HeartPulse, ShieldCheck, Wand2, ClipboardList,
 } from 'lucide-react';
 import { getJSON } from './mgmt/MgmtWidgets';
+import AIControlsBar, { EMPTY_AI_CONTROLS, aiControlsQuery } from './ai/AIAnalysisTools';
 
 // Per-category presentation metadata (icon + accent). Keyed by backend `key`.
 const MODULE_META = {
@@ -145,7 +146,7 @@ function ExecutiveBriefing({ briefing, loading, error, canGenerate, analyzedCoun
     <div style={{ ...panel, padding: 16, background: 'linear-gradient(135deg,var(--c-0f172a),var(--c-131c33))', borderColor: 'var(--c-312e81)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <div style={{ width: 30, height: 30, borderRadius: 8, background: '#6366f133', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Sparkles size={16} style={{ color: '#a5b4fc' }} />
+          <Sparkles size={16} style={{ color: 'var(--c-a5b4fc)' }} />
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ color: 'var(--c-f1f5f9)', fontWeight: 700, fontSize: 14 }}>AI Executive Briefing</div>
@@ -172,7 +173,7 @@ function ExecutiveBriefing({ briefing, loading, error, canGenerate, analyzedCoun
       )}
 
       {loading && !briefing && (
-        <div style={{ color: '#a5b4fc', fontSize: 12.5, padding: '6px 2px' }}>Reasoning across all analyzed categories… this can take up to ~2 minutes.</div>
+        <div style={{ color: 'var(--c-a5b4fc)', fontSize: 12.5, padding: '6px 2px' }}>Reasoning across all analyzed categories… this can take up to ~2 minutes.</div>
       )}
 
       {briefing && (
@@ -261,6 +262,7 @@ export default function AIInsightsDashboard({ onNavigate }) {
   const [briefing, setBriefing] = useState(null);
   const [briefingLoading, setBriefingLoading] = useState(false);
   const [briefingError, setBriefingError] = useState(null);
+  const [aiControls, setAiControls] = useState(EMPTY_AI_CONTROLS);
 
   const load = useCallback(async () => {
     try {
@@ -298,7 +300,8 @@ export default function AIInsightsDashboard({ onNavigate }) {
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 240000);
-      const res = await fetch(m.endpoint, { signal: ctrl.signal });
+      const sep = m.endpoint.includes('?') ? '' : '?_=1';
+      const res = await fetch(`${m.endpoint}${sep}${aiControlsQuery(aiControls)}`, { signal: ctrl.signal });
       clearTimeout(t);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await res.json();
@@ -308,7 +311,7 @@ export default function AIInsightsDashboard({ onNavigate }) {
     } finally {
       setBusyKeys((p) => { const n = { ...p }; delete n[m.key]; return n; });
     }
-  }, [load]);
+  }, [load, aiControls]);
 
   const generateAll = useCallback(async () => {
     const missing = (data?.modules || []).filter((m) => !m.available);
@@ -329,7 +332,7 @@ export default function AIInsightsDashboard({ onNavigate }) {
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 240000);
-      const res = await fetch('/api/ai/executive-briefing?refresh=true', { signal: ctrl.signal });
+      const res = await fetch(`/api/ai/executive-briefing?refresh=true${aiControlsQuery(aiControls)}`, { signal: ctrl.signal });
       clearTimeout(t);
       const b = await res.json();
       if (b.error) setBriefingError(b.error);
@@ -339,7 +342,7 @@ export default function AIInsightsDashboard({ onNavigate }) {
     } finally {
       setBriefingLoading(false);
     }
-  }, []);
+  }, [aiControls]);
 
   const openModule = useCallback((m) => {
     onNavigate?.(m.view);
@@ -398,6 +401,15 @@ export default function AIInsightsDashboard({ onNavigate }) {
           Couldn't load AI insights: {error}
         </div>
       )}
+
+      {/* Focus applies to the briefing AND to every category card generated below. */}
+      <AIControlsBar
+        title="AI Insights"
+        report={briefing}
+        value={aiControls}
+        busy={briefingLoading}
+        onApply={next => setAiControls(next)}
+      />
 
       {/* Executive briefing */}
       <div style={{ marginBottom: 14 }}>

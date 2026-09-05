@@ -34,6 +34,20 @@ function buildWaterfallData(recommendations = [], resources = []) {
     buckets['Reserved Instances'] = (buckets['Reserved Instances'] ?? 0) + riSavings
   }
 
+  // Scans often persist no top-level recommendations list. Fall back to the
+  // per-resource savings so real opportunities aren't hidden behind an empty chart.
+  if (!Object.values(buckets).some(v => v > 0)) {
+    for (const r of resources) {
+      const sav = r.estimated_monthly_savings ?? 0
+      if (sav <= 0) continue
+      const cat = r.is_orphan ? 'Orphaned Resources'
+        : r.score_label === 'Not Used' ? 'Idle Resources'
+        : r.score_label === 'Rarely Used' ? 'Right-Sizing'
+        : 'Other'
+      buckets[cat] = (buckets[cat] ?? 0) + sav
+    }
+  }
+
   return Object.entries(buckets)
     .filter(([, v]) => v > 0)
     .sort(([, a], [, b]) => b - a)

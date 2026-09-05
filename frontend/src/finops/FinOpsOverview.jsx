@@ -86,6 +86,10 @@ export default function FinOpsOverview() {
   const [error,        setError]        = useState(null)
   const [accumulated,  setAccumulated]  = useState(false)
   const [optimTab,     setOptimTab]     = useState('oversized')   // oversized | underutilized | orphaned
+  const [optimQuery,   setOptimQuery]   = useState('')
+  const [optimSort,    setOptimSort]    = useState({ key: 'cost', dir: 'desc' })
+  const [savingsQuery, setSavingsQuery] = useState('')
+  const [savingsSort,  setSavingsSort]  = useState({ key: 'potential_savings_usd', dir: 'desc' })
   const [downloading,  setDownloading]  = useState(false)
   const [downloadErr,  setDownloadErr]  = useState(null)
   const [liveRefreshing, setLiveRefreshing] = useState(false)
@@ -279,6 +283,89 @@ export default function FinOpsOverview() {
   const activeOptimTab = optimCounts[optimTab] > 0
     ? optimTab
     : (['oversized', 'underutilized', 'orphaned'].find(k => optimCounts[k] > 0) || optimTab)
+
+  // The three tabs come back with different shapes (rightsizing / utilisation / orphan).
+  // Flatten them onto ONE schema so the columns, search, sort and export stay identical
+  // whichever tab is open, instead of three bespoke layouts.
+  // Plain computation, not useMemo: this sits after an early return, and the row counts
+  // here are small enough that memoising is not worth breaking the Rules of Hooks for.
+  const optimRows = (() => {
+    const src = activeOptimTab === 'oversized' ? optimOversized
+      : activeOptimTab === 'underutilized' ? optimUnderutilized
+      : optimOrphaned
+    const mapped = (src || []).map(r => {
+      const cost = Number(r.cost_current_month || 0)
+      return {
+        resource_id:    r.resource_id || '',
+        name:           r.resource_name || '',
+        type:           (r.resource_type || '').split('/').pop() || '',
+        resource_group: r.resource_group || '',
+        subscription:   r.subscription_name || '',
+        location:       r.location || '',
+        state:          r.power_state || '',
+        utilization:    r.utilization_pct != null ? Number(r.utilization_pct)
+                        : (r.avg_cpu_pct != null ? Number(r.avg_cpu_pct) : null),
+        days_inactive:  r.days_since_active != null ? Number(r.days_since_active) : null,
+        current_sku:    r.sku || r.current_sku || '',
+        target_sku:     r.rightsize_sku || '',
+        cost,
+        savings:        r.estimated_monthly_savings != null ? Number(r.estimated_monthly_savings)
+                        : (r.savings_pct != null ? cost * Number(r.savings_pct) / 100 : 0),
+        savings_pct:    r.savings_pct != null ? Number(r.savings_pct) : null,
+        recommendation: r.recommendation || r.orphan_reason || '',
+      }
+    })
+    const q = optimQuery.trim().toLowerCase()
+    const filtered = q
+      ? mapped.filter(r => [r.name, r.type, r.resource_group, r.subscription, r.location, r.recommendation]
+          .some(v => String(v || '').toLowerCase().includes(q)))
+      : mapped
+    const { key, dir } = optimSort
+    const mul = dir === 'asc' ? 1 : -1
+    return [...filtered].sort((a, b) => {
+      const av = a[key], bv = b[key]
+      if (av == null && bv == null) return 0
+      if (av == null) return 1          // blanks always sort last
+      if (bv == null) return -1
+      return (typeof av === 'number' && typeof bv === 'number')
+        ? (av - bv) * mul
+        : String(av).localeCompare(String(bv)) * mul
+    })
+  })()
+
+  const OPTIM_COLUMNS = [
+    { key: 'name',           label: 'Resource' },
+    { key: 'type',           label: 'Type' },
+    { key: 'resource_group', label: 'Resource Group' },
+    { key: 'subscription',   label: 'Subscription' },
+    { key: 'location',       label: 'Location' },
+    { key: 'utilization',    label: 'Utilisation' },
+    { key: 'days_inactive',  label: 'Days Inactive' },
+    { key: 'current_sku',    label: 'Current \u2192 Target SKU' },
+    { key: 'cost',           label: 'Monthly Cost' },
+    { key: 'savings',        label: 'Est. Savings' },
+    { key: 'recommendation', label: 'Recommendation' },
+  ]
+
+  const optimCsv = () => {
+    const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`
+    const body = optimRows.map(r => [
+      r.name, r.type, r.resource_group, r.subscription, r.location,
+      r.utilization != null ? r.utilization.toFixed(2) : '',
+      r.days_inactive ?? '', r.current_sku, r.target_sku,
+      r.cost.toFixed(2), r.savings.toFixed(2), r.recommendation,
+    ])
+    const head = ['Resource', 'Type', 'Resource Group', 'Subscription', 'Location', 'Utilisation %',
+                  'Days Inactive', 'Current SKU', 'Target SKU', 'Monthly Cost USD', 'Est. Savings USD', 'Recommendation']
+    const text = [head, ...body].map(row => row.map(esc).join(',')).join('\n')
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8;' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `resource-optimization-${activeOptimTab}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   const topSavings = (savings?.opportunities || []).slice(0, 5)
   const budgetAlerts = alerts?.alerts || []
 
@@ -728,38 +815,155 @@ export default function FinOpsOverview() {
 
       {/* ══ SECTION 5: TOP SAVINGS ══ */}
       <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 16 }}>
-        <SectionHeader title="Top Savings Opportunities"
-          sub={topSavings.length > 0 ? `Showing top ${topSavings.length} of ${savings?.opportunities?.length || 0}` : ''} />
-        {topSavings.length === 0 ? (
-          <div style={{ color: 'var(--c-475569)', fontSize: 12 }}>No savings opportunities found.</div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
-            {topSavings.map((op, i) => (
-              <div key={i} onClick={() => op.resource_id && openResourceDetail(op)}
-                title={op.resource_id ? 'View resource details' : undefined}
-                style={{ background: 'var(--c-0f172a)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6, cursor: op.resource_id ? 'pointer' : 'default' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <span style={{ color: 'var(--c-e2e8f0)', fontSize: 11, fontWeight: 600, flex: 1, paddingRight: 8 }}>{op.resource_name || op.title || '—'}</span>
-                  <span style={{ color: 'var(--c-4ade80)', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtUsd(op.potential_savings_usd ?? op.savings_usd ?? op.monthly_savings ?? 0)}/mo</span>
+        {(() => {
+          const all = savings?.opportunities || []
+          const q = savingsQuery.trim().toLowerCase()
+          const filtered = q
+            ? all.filter(o => [o.resource_name, o.resource_type, o.resource_group, o.category_label, o.action, o.confidence, o.effort]
+                .some(v => String(v || '').toLowerCase().includes(q)))
+            : all
+          const mul = savingsSort.dir === 'asc' ? 1 : -1
+          const rows = [...filtered].sort((a, b) => {
+            const av = a[savingsSort.key], bv = b[savingsSort.key]
+            if (av == null && bv == null) return 0
+            if (av == null) return 1
+            if (bv == null) return -1
+            return (typeof av === 'number' && typeof bv === 'number')
+              ? (av - bv) * mul
+              : String(av).localeCompare(String(bv)) * mul
+          })
+          const cols = [
+            { key: 'resource_name',        label: 'Resource' },
+            { key: 'resource_type',        label: 'Type' },
+            { key: 'resource_group',       label: 'Resource Group' },
+            { key: 'category_label',       label: 'Category' },
+            { key: 'current_monthly_cost', label: 'Monthly Cost' },
+            { key: 'potential_savings_usd', label: 'Potential Savings' },
+            { key: 'savings_pct',          label: 'Savings %' },
+            { key: 'confidence',           label: 'Confidence' },
+            { key: 'effort',               label: 'Effort' },
+            { key: 'priority_score',       label: 'Priority' },
+            { key: 'action',               label: 'Recommended Action' },
+          ]
+          const totalSave = rows.reduce((s, o) => s + Number(o.potential_savings_usd || 0), 0)
+          const totalCost = rows.reduce((s, o) => s + Number(o.current_monthly_cost || 0), 0)
+          const csv = () => {
+            const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`
+            const body = rows.map(o => [
+              o.resource_name, o.resource_type, o.resource_group, o.category_label,
+              Number(o.current_monthly_cost || 0).toFixed(2), Number(o.potential_savings_usd || 0).toFixed(2),
+              o.savings_pct != null ? Number(o.savings_pct).toFixed(1) : '',
+              o.confidence, o.effort, o.priority_score, o.action, o.resource_id,
+            ])
+            const head = [...cols.map(c => c.label), 'Resource ID']
+            const text = [head, ...body].map(r => r.map(esc).join(',')).join('\n')
+            const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8;' }))
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `savings-opportunities-${rows.length}.csv`
+            a.click()
+            URL.revokeObjectURL(url)
+          }
+          const sortBy = k => setSavingsSort(s => ({ key: k, dir: s.key === k && s.dir === 'desc' ? 'asc' : 'desc' }))
+          const cell = { padding: '6px 8px', color: 'var(--c-64748b)', whiteSpace: 'nowrap' }
+          return (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
+                <SectionHeader title="Top Savings Opportunities"
+                  sub={all.length > 0 ? `${rows.length} of ${all.length} opportunities · ${fmtUsd(totalSave)}/mo identified` : ''} />
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input
+                    value={savingsQuery}
+                    onChange={e => setSavingsQuery(e.target.value)}
+                    placeholder="Filter resource, category, action…"
+                    style={{
+                      background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 6,
+                      padding: '4px 8px', color: 'var(--c-e2e8f0)', fontSize: 11, width: 220,
+                    }} />
+                  <FinOpsExportMenu
+                    view="savings-opportunities"
+                    onCsv={csv}
+                    report={{
+                      title: 'Savings Opportunities',
+                      kpis: [
+                        { label: 'Opportunities', value: String(rows.length) },
+                        { label: 'Current cost', value: fmtUsd(totalCost) },
+                        { label: 'Potential savings', value: fmtUsd(totalSave) },
+                      ],
+                      tables: [{
+                        title: 'Savings opportunities',
+                        columns: cols.map(c => c.label),
+                        rows: rows.slice(0, 200).map(o => [
+                          o.resource_name || '—', (o.resource_type || '').split('/').pop() || '—',
+                          o.resource_group || '—', o.category_label || '—',
+                          fmtUsd(o.current_monthly_cost || 0), fmtUsd(o.potential_savings_usd || 0),
+                          o.savings_pct != null ? Number(o.savings_pct).toFixed(0) + '%' : '—',
+                          o.confidence || '—', o.effort || '—',
+                          o.priority_score != null ? Number(o.priority_score).toFixed(0) : '—',
+                          o.action || '—',
+                        ]),
+                      }],
+                    }} />
                 </div>
-                <div style={{ color: 'var(--c-64748b)', fontSize: 10 }}>{op.action || op.recommendation || '—'}</div>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                  {op.category_label && (
-                    <span style={{ fontSize: 9, color: 'var(--c-94a3b8)', background: 'var(--c-1e293b)', borderRadius: 4, padding: '1px 5px' }}>{op.category_label}</span>
-                  )}
-                  {op.current_monthly_cost > 0 && (
-                    <span style={{ fontSize: 9, color: 'var(--c-475569)' }}>costs {fmtUsd(op.current_monthly_cost)}/mo</span>
-                  )}
-                </div>
-                {op.current_sku && op.rightsize_sku && (
-                  <div style={{ color: 'var(--c-475569)', fontSize: 10 }}>
-                    {op.current_sku} <ChevronRight size={10} style={{ display: 'inline' }} /> {op.rightsize_sku}
-                  </div>
-                )}
               </div>
-            ))}
-          </div>
-        )}
+
+              {rows.length === 0 ? (
+                <div style={{ color: 'var(--c-475569)', fontSize: 12 }}>
+                  {q ? `No opportunities match “${savingsQuery}”.` : 'No savings opportunities found.'}
+                </div>
+              ) : (
+                <>
+                  <div style={{ maxHeight: 420, overflow: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                      <thead style={{ position: 'sticky', top: 0, background: 'var(--c-111827)', zIndex: 1 }}>
+                        <tr>
+                          {cols.map(c => (
+                            <th key={c.key} onClick={() => sortBy(c.key)} title="Sort"
+                              style={{
+                                textAlign: 'left', color: savingsSort.key === c.key ? 'var(--c-94a3b8)' : 'var(--c-475569)',
+                                padding: '5px 8px', borderBottom: '1px solid var(--c-1e293b)',
+                                whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none',
+                              }}>
+                              {c.label}{savingsSort.key === c.key ? (savingsSort.dir === 'desc' ? ' ↓' : ' ↑') : ''}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((o, i) => (
+                          <tr key={o.id || i}
+                            onClick={() => o.resource_id && openResourceDetail(o)}
+                            title={o.resource_id ? 'View resource details' : undefined}
+                            style={{ borderBottom: '1px solid var(--c-0f172a)', cursor: o.resource_id ? 'pointer' : 'default' }}>
+                            <td style={{ ...cell, color: 'var(--c-e2e8f0)', maxWidth: 190, overflow: 'hidden', textOverflow: 'ellipsis' }} title={o.resource_name}>{o.resource_name || '—'}</td>
+                            <td style={cell}>{(o.resource_type || '').split('/').pop() || '—'}</td>
+                            <td style={cell}>{o.resource_group || '—'}</td>
+                            <td style={cell}>
+                              {o.category_label
+                                ? <span style={{ fontSize: 9, color: 'var(--c-94a3b8)', background: 'var(--c-1e293b)', borderRadius: 4, padding: '1px 5px' }}>{o.category_label}</span>
+                                : '—'}
+                            </td>
+                            <td style={{ ...cell, color: 'var(--c-e2e8f0)' }}>{fmtUsd(o.current_monthly_cost || 0)}</td>
+                            <td style={{ ...cell, color: 'var(--c-4ade80)', fontWeight: 700 }}>{fmtUsd(o.potential_savings_usd || 0)}</td>
+                            <td style={cell}>{o.savings_pct != null ? Number(o.savings_pct).toFixed(0) + '%' : '—'}</td>
+                            <td style={cell}>{o.confidence || '—'}</td>
+                            <td style={cell}>{o.effort || '—'}</td>
+                            <td style={cell}>{o.priority_score != null ? Number(o.priority_score).toFixed(0) : '—'}</td>
+                            <td style={{ padding: '6px 8px', color: 'var(--c-94a3b8)', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                              title={o.action}>{o.action || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ color: 'var(--c-475569)', fontSize: 11, marginTop: 8 }}>
+                    {rows.length} opportunit{rows.length === 1 ? 'y' : 'ies'} · {fmtUsd(totalCost)}/mo current · {fmtUsd(totalSave)}/mo potential savings
+                  </div>
+                </>
+              )}
+            </>
+          )
+        })()}
       </div>
 
       {/* ══ SECTION 6: RESOURCE OPTIMIZATION ══ */}
@@ -767,83 +971,129 @@ export default function FinOpsOverview() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <SectionHeader title="Resource Optimization"
             sub={optim ? `${optim.oversized_count ?? 0} oversized · ${optim.underutilized_count ?? 0} underutilized · ${optim.orphaned_count ?? 0} orphaned` : ''} />
-          <div style={{ display: 'flex', gap: 4 }}>
-            {[
-              { key: 'oversized', label: `Oversized (${optim?.oversized_count ?? 0})`, color: '#ef4444' },
-              { key: 'underutilized', label: `Low Util (${optim?.underutilized_count ?? 0})`, color: '#f59e0b' },
-              { key: 'orphaned', label: `Orphaned (${optim?.orphaned_count ?? 0})`, color: 'var(--c-64748b)' },
-            ].map(tab => (
-              <button key={tab.key} onClick={() => setOptimTab(tab.key)} style={{
-                background: activeOptimTab === tab.key ? 'var(--c-0f172a)' : 'none',
-                border: `1px solid ${activeOptimTab === tab.key ? tab.color + '55' : 'var(--c-1e293b)'}`,
-                borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
-                color: activeOptimTab === tab.key ? tab.color : 'var(--c-475569)', fontSize: 11,
-              }}>{tab.label}</button>
-            ))}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input
+              value={optimQuery}
+              onChange={e => setOptimQuery(e.target.value)}
+              placeholder="Filter resource, group, subscription…"
+              style={{
+                background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 6,
+                padding: '4px 8px', color: 'var(--c-e2e8f0)', fontSize: 11, width: 220,
+              }} />
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[
+                { key: 'oversized', label: `Oversized (${optim?.oversized_count ?? 0})`, color: '#ef4444' },
+                { key: 'underutilized', label: `Low Util (${optim?.underutilized_count ?? 0})`, color: '#f59e0b' },
+                { key: 'orphaned', label: `Orphaned (${optim?.orphaned_count ?? 0})`, color: 'var(--c-64748b)' },
+              ].map(tab => (
+                <button key={tab.key} onClick={() => setOptimTab(tab.key)} style={{
+                  background: activeOptimTab === tab.key ? 'var(--c-0f172a)' : 'none',
+                  border: `1px solid ${activeOptimTab === tab.key ? tab.color + '55' : 'var(--c-1e293b)'}`,
+                  borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
+                  color: activeOptimTab === tab.key ? tab.color : 'var(--c-475569)', fontSize: 11,
+                }}>{tab.label}</button>
+              ))}
+            </div>
+            <FinOpsExportMenu
+              view={`resource-optimization-${activeOptimTab}`}
+              onCsv={optimCsv}
+              report={{
+                title: `Resource Optimization — ${activeOptimTab}`,
+                kpis: [
+                  { label: 'Rows', value: String(optimRows.length) },
+                  { label: 'Monthly cost', value: fmtUsd(optimRows.reduce((s, r) => s + r.cost, 0)) },
+                  { label: 'Est. savings', value: fmtUsd(optimRows.reduce((s, r) => s + r.savings, 0)) },
+                ],
+                tables: [{
+                  title: 'Optimization candidates',
+                  columns: OPTIM_COLUMNS.map(c => c.label),
+                  rows: optimRows.slice(0, 200).map(r => [
+                    r.name, r.type, r.resource_group, r.subscription, r.location,
+                    r.utilization != null ? r.utilization.toFixed(2) + '%' : '—',
+                    r.days_inactive ?? '—',
+                    r.current_sku ? `${r.current_sku}${r.target_sku ? ' → ' + r.target_sku : ''}` : '—',
+                    fmtUsd(r.cost), fmtUsd(r.savings), r.recommendation,
+                  ]),
+                }],
+              }} />
           </div>
         </div>
 
         {/* Tab content */}
         {(() => {
-          const rows = activeOptimTab === 'oversized' ? optimOversized
-            : activeOptimTab === 'underutilized' ? optimUnderutilized
-            : optimOrphaned
-          if (!rows || rows.length === 0) return (
+          if (!optimRows || optimRows.length === 0) return (
             <div style={{ color: 'var(--c-475569)', fontSize: 12, padding: '8px 0', lineHeight: 1.6 }}>
-              {activeOptimTab === 'oversized'
-                ? 'No rightsizing candidates. Azure only proposes a smaller SKU for a VM that has been running long enough to produce CPU and memory history — a powered-off or newly-created VM produces none.'
-                : activeOptimTab === 'underutilized'
-                  ? 'Nothing is running below the utilisation threshold with meaningful spend.'
-                  : 'No unattached disks, NICs or public IPs were found.'}
+              {optimQuery.trim()
+                ? `No rows match “${optimQuery}”.`
+                : activeOptimTab === 'oversized'
+                  ? 'No rightsizing candidates. Azure only proposes a smaller SKU for a VM that has been running long enough to produce CPU and memory history — a powered-off or newly-created VM produces none.'
+                  : activeOptimTab === 'underutilized'
+                    ? 'Nothing is running below the utilisation threshold with meaningful spend.'
+                    : 'No unattached disks, NICs or public IPs were found.'}
             </div>
           )
+          const totalCost = optimRows.reduce((s, r) => s + r.cost, 0)
+          const totalSave = optimRows.reduce((s, r) => s + r.savings, 0)
+          const sortBy = key => setOptimSort(s => ({ key, dir: s.key === key && s.dir === 'desc' ? 'asc' : 'desc' }))
+          const cell = { padding: '6px 8px', color: 'var(--c-64748b)', whiteSpace: 'nowrap' }
           return (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-                <thead>
-                  <tr>
-                    {['Resource', 'Type', 'Resource Group',
-                      activeOptimTab === 'oversized' ? 'Current SKU → Recommended' : activeOptimTab === 'underutilized' ? 'Utilisation' : 'Days Inactive',
-                      'Monthly Cost', activeOptimTab === 'oversized' ? 'Savings %' : 'Recommendation',
-                    ].map(h => (
-                      <th key={h} style={{ textAlign: 'left', color: 'var(--c-475569)', padding: '5px 8px', borderBottom: '1px solid var(--c-1e293b)', whiteSpace: 'nowrap' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.slice(0, 10).map((r, i) => (
-                    <tr key={i}
-                      onClick={() => drillToExplorer({ groupBy: ['ResourceType'], timeRange: 'last_30d', advFilters: r.resource_group ? { resource_groups: [r.resource_group] } : null })}
-                      title="Open in Cost Explorer"
-                      style={{ borderBottom: '1px solid var(--c-0f172a)', cursor: 'pointer' }}>
-                      <td style={{ padding: '6px 8px', color: 'var(--c-e2e8f0)', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                        title={r.resource_name}>{r.resource_name}</td>
-                      <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{(r.resource_type || '').split('/').pop()}</td>
-                      <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{r.resource_group}</td>
-                      <td style={{ padding: '6px 8px', color: 'var(--c-94a3b8)' }}>
-                        {activeOptimTab === 'oversized'
-                          ? <span>{r.sku || r.current_sku || '—'} <ChevronRight size={10} style={{ display: 'inline' }} /> <span style={{ color: 'var(--c-4ade80)' }}>{r.rightsize_sku || '—'}</span></span>
-                          : activeOptimTab === 'underutilized'
-                            ? (r.power_state === 'deallocated' || r.power_state === 'stopped'
-                              ? <span style={{ color: '#f59e0b' }} title="Powered off — it emits no live CPU, so any percentage would be stale">Stopped</span>
-                              : r.utilization_pct != null
-                                ? <span style={{ color: r.utilization_pct < 5 ? '#ef4444' : '#f59e0b' }}>{r.utilization_pct.toFixed(2)}%</span>
-                                : r.avg_cpu_pct != null
-                                  ? <span style={{ color: r.avg_cpu_pct < 10 ? '#ef4444' : '#f59e0b' }}>{r.avg_cpu_pct.toFixed(1)}%</span>
-                                  : <span style={{ color: 'var(--c-64748b)' }}>{r.days_since_active ? `idle ${r.days_since_active}d` : '—'}</span>)
-                            : r.days_since_active != null ? `${r.days_since_active}d` : '—'}
-                      </td>
-                      <td style={{ padding: '6px 8px', color: 'var(--c-e2e8f0)' }}>{fmtUsd(r.cost_current_month)}</td>
-                      <td style={{ padding: '6px 8px' }}>
-                        {activeOptimTab === 'oversized'
-                          ? <span style={{ color: 'var(--c-4ade80)', fontWeight: 600 }}>{r.savings_pct != null ? r.savings_pct.toFixed(0) + '%' : '—'}</span>
-                          : <span style={{ color: 'var(--c-94a3b8)' }} title={r.recommendation || ''}>{r.recommendation || (activeOptimTab === 'orphaned' ? 'Review & remove' : '—')}</span>}
-                      </td>
+            <>
+              <div style={{ maxHeight: 420, overflow: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                  <thead style={{ position: 'sticky', top: 0, background: 'var(--c-111827)', zIndex: 1 }}>
+                    <tr>
+                      {OPTIM_COLUMNS.map(c => (
+                        <th key={c.key} onClick={() => sortBy(c.key)} title="Sort"
+                          style={{
+                            textAlign: 'left', color: optimSort.key === c.key ? 'var(--c-94a3b8)' : 'var(--c-475569)',
+                            padding: '5px 8px', borderBottom: '1px solid var(--c-1e293b)',
+                            whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none',
+                          }}>
+                          {c.label}{optimSort.key === c.key ? (optimSort.dir === 'desc' ? ' ↓' : ' ↑') : ''}
+                        </th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {optimRows.map((r, i) => (
+                      <tr key={r.resource_id || i}
+                        onClick={() => drillToExplorer({ groupBy: ['ResourceType'], timeRange: 'last_30d', advFilters: r.resource_group ? { resource_groups: [r.resource_group] } : null })}
+                        title="Open in Cost Explorer"
+                        style={{ borderBottom: '1px solid var(--c-0f172a)', cursor: 'pointer' }}>
+                        <td style={{ ...cell, color: 'var(--c-e2e8f0)', maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.name}>{r.name || '—'}</td>
+                        <td style={cell}>{r.type || '—'}</td>
+                        <td style={cell}>{r.resource_group || '—'}</td>
+                        <td style={{ ...cell, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.subscription}>{r.subscription || '—'}</td>
+                        <td style={cell}>{r.location || '—'}</td>
+                        <td style={{ ...cell, color: 'var(--c-94a3b8)' }}>
+                          {(r.state === 'deallocated' || r.state === 'stopped')
+                            ? <span style={{ color: '#f59e0b' }} title="Powered off — it emits no live CPU, so any percentage would be stale">Stopped</span>
+                            : r.utilization != null
+                              ? <span style={{ color: r.utilization < 5 ? '#ef4444' : '#f59e0b' }}>{r.utilization.toFixed(2)}%</span>
+                              : '—'}
+                        </td>
+                        <td style={cell}>{r.days_inactive != null ? `${r.days_inactive}d` : '—'}</td>
+                        <td style={{ ...cell, color: 'var(--c-94a3b8)' }}>
+                          {r.current_sku
+                            ? <span>{r.current_sku}{r.target_sku ? <> <ChevronRight size={10} style={{ display: 'inline' }} /> <span style={{ color: 'var(--c-4ade80)' }}>{r.target_sku}</span></> : null}</span>
+                            : '—'}
+                        </td>
+                        <td style={{ ...cell, color: 'var(--c-e2e8f0)' }}>{fmtUsd(r.cost)}</td>
+                        <td style={{ ...cell, color: r.savings > 0 ? 'var(--c-4ade80)' : 'var(--c-64748b)', fontWeight: r.savings > 0 ? 600 : 400 }}>
+                          {r.savings > 0 ? fmtUsd(r.savings) : '—'}
+                          {r.savings_pct != null ? <span style={{ color: 'var(--c-475569)' }}> ({r.savings_pct.toFixed(0)}%)</span> : null}
+                        </td>
+                        <td style={{ padding: '6px 8px', color: 'var(--c-94a3b8)', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                          title={r.recommendation}>{r.recommendation || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ color: 'var(--c-475569)', fontSize: 11, marginTop: 8 }}>
+                {optimRows.length} resource{optimRows.length === 1 ? '' : 's'} · {fmtUsd(totalCost)}/mo current · {fmtUsd(totalSave)}/mo estimated savings
+              </div>
+            </>
           )
         })()}
       </div>

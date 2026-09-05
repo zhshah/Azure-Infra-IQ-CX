@@ -276,10 +276,14 @@ def get_secure_score(subscription_ids: Optional[List[str]] = None) -> Dict[str, 
                 "percentage": round(avg_pct, 1),
                 "subscription_scores": results,
             }
-        return {"current_score": 0, "max_score": 0, "percentage": 0, "subscription_scores": []}
+        # A 0% secure score is a serious claim — only make it when Defender actually answered.
+        err = "" if getattr(results, "ok", True) else getattr(results, "error", "Resource Graph query failed")
+        return {"current_score": 0, "max_score": 0, "percentage": 0, "subscription_scores": [],
+                "collection_error": err}
     except Exception as e:
         logger.warning("Failed to fetch secure score: %s", e)
-        return {"current_score": 0, "max_score": 0, "percentage": 0, "subscription_scores": []}
+        return {"current_score": 0, "max_score": 0, "percentage": 0, "subscription_scores": [],
+                "collection_error": str(e)}
 
 
 def get_score_controls(subscription_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
@@ -594,14 +598,23 @@ def get_full_security_posture(subscription_ids: Optional[List[str]] = None) -> D
         "advisor_recs": lambda: get_advisor_security_recommendations(sub_ids),
     }
     results: Dict[str, Any] = {}
+    # Which sources actually answered. "0 findings" because Defender could not be reached is
+    # the most dangerous reading on a security page, so it must never look like a clean estate.
+    source_errors: Dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=10) as exe:
         futures = {exe.submit(fn): name for name, fn in tasks.items()}
         for future in as_completed(futures):
             name = futures[future]
             try:
                 results[name] = future.result()
+                rows = results[name]
+                if not getattr(rows, "ok", True):
+                    source_errors[name] = getattr(rows, "error", "Resource Graph query failed")
+                elif name == "secure_score" and isinstance(rows, dict) and rows.get("collection_error"):
+                    source_errors[name] = rows["collection_error"]
             except Exception as exc:
                 logger.warning("security posture: task %s failed: %s", name, exc)
+                source_errors[name] = str(exc)
                 results[name] = [] if name != "secure_score" else {"current_score": 0, "max_score": 0, "percentage": 0, "subscription_scores": []}
 
     assessments    = results["assessments"]
@@ -763,6 +776,12 @@ def get_full_security_posture(subscription_ids: Optional[List[str]] = None) -> D
 
         # Chart data
         "charts": charts,
+
+        # Provenance: which of the 10 sources answered, and why any did not.
+        "collection_ok": not source_errors,
+        "failed_sources": sorted(source_errors.keys()),
+        "collection_errors": source_errors,
+        "secure_score_available": "secure_score" not in source_errors,
     }
 
     # ── Store in TTL cache ────────────────────────────────────────────────────

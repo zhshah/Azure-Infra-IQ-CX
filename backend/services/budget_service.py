@@ -113,7 +113,9 @@ def sync_azure_budgets(subscription_ids: Optional[List[str]] = None) -> int:
     cache as source='azure_native'.  Returns count synced.
     """
     try:
-        from azure.mgmt.costmanagement import CostManagementClient
+        # Budgets live on the Consumption resource provider; CostManagementClient
+        # exposes no `.budgets` operation group.
+        from azure.mgmt.consumption import ConsumptionManagementClient
     except ImportError:
         return 0
 
@@ -125,17 +127,17 @@ def sync_azure_budgets(subscription_ids: Optional[List[str]] = None) -> int:
     except Exception:
         return 0
 
-    client = CostManagementClient(credential)
     synced = 0
 
     for sub_id in subscription_ids:
         scope = f"/subscriptions/{sub_id}"
         try:
-            for budget in client.budgets.list(scope):
+            client = ConsumptionManagementClient(credential, sub_id)
+            for budget in client.budgets.list(scope=scope):
                 _upsert_azure_budget(budget, sub_id)
                 synced += 1
         except Exception as e:
-            logger.debug("sync_azure_budgets: could not list budgets for %s: %s", sub_id, e)
+            logger.warning("sync_azure_budgets: could not list budgets for %s: %s", sub_id[:8], e)
 
     logger.info("sync_azure_budgets: synced %d Azure native budgets", synced)
     return synced

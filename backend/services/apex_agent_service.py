@@ -15,7 +15,9 @@ from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from services.database import get_raw_connection
 
-# Agent model assignments based on APEX best practices
+# Agent model assignments based on APEX best practices.
+# Values are PROVIDER routing hints, not deployment names — the Azure OpenAI path
+# always uses AZURE_OPENAI_DEPLOYMENT so one model serves the whole app.
 AGENT_MODELS = {
     "01-orchestrator": "claude-opus",
     "02-requirements": "claude-opus",
@@ -25,9 +27,9 @@ AGENT_MODELS = {
     "05-iac-planner": "claude-opus",
     "06b-bicep-codegen": "claude-sonnet",
     "06t-terraform-codegen": "claude-sonnet",
-    "07b-bicep-deploy": "gpt-4o",
-    "07t-terraform-deploy": "gpt-4o",
-    "08-as-built": "gpt-4o",
+    "07b-bicep-deploy": "azure-openai",
+    "07t-terraform-deploy": "azure-openai",
+    "08-as-built": "azure-openai",
     "09-diagnose": "claude-opus",
     "10-challenger": "claude-sonnet",
     "11-context-optimizer": "claude-opus"
@@ -260,17 +262,30 @@ If you're creating diagrams, describe them in detail or provide mermaid/drawio s
         return message.content[0].text
     
     async def _execute_with_azure_openai(self, prompt: str) -> str:
-        """Execute with Azure OpenAI GPT-4o"""
+        """Execute with the configured Azure OpenAI deployment"""
         if not self.azure_openai_client:
             raise Exception("Azure OpenAI not configured")
-        
-        response = self.azure_openai_client.chat.completions.create(
-            model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini"),
+
+        model = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-sol")
+        kwargs = dict(
+            model=model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=4096,
-            temperature=0.7
+            max_completion_tokens=4096,
         )
-        
+        # Reasoning models reject max_tokens and any temperature other than the default.
+        if not any(k in model.lower() for k in ("gpt-5", "gpt5", "o1", "o3", "o4")):
+            kwargs["temperature"] = 0.7
+
+        try:
+            response = self.azure_openai_client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            es = str(exc)
+            if "max_completion_tokens" in es or "unsupported_parameter" in es:
+                kwargs["max_tokens"] = kwargs.pop("max_completion_tokens")
+                response = self.azure_openai_client.chat.completions.create(**kwargs)
+            else:
+                raise
+
         return response.choices[0].message.content
     
     def _extract_artifacts(self, output: str, agent_name: str) -> List[Dict]:

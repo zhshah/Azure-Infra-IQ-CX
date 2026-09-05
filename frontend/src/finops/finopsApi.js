@@ -17,11 +17,22 @@ let _filterOptionsTTL   = 0
 const FILTER_CACHE_MS   = 5 * 60 * 1000
 
 async function request(path, opts = {}, signal) {
-  const res = await fetch(BASE + path, {
-    headers: { 'Content-Type': 'application/json' },
-    signal,
-    ...opts,
-  })
+  let res
+  try {
+    res = await fetch(BASE + path, {
+      headers: { 'Content-Type': 'application/json' },
+      signal,
+      ...opts,
+    })
+  } catch (e) {
+    if (e.name === 'AbortError') throw e
+    // fetch only rejects like this on a network-level failure (server restarted,
+    // connection reset, machine slept). An AI call runs for minutes, so this is a
+    // realistic outcome and "Failed to fetch" on its own tells the user nothing.
+    const err = new Error('Lost connection to the server. If the analysis had already finished it is cached — retry to pick it up.')
+    err.networkError = true
+    throw err
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText)
     throw new Error(`FinOps API error ${res.status}: ${text}`)
@@ -214,10 +225,10 @@ export const finopsApi = {
 
   // AI insights for a FinOps view (cached server-side per data fingerprint).
   // `scope` is an optional free-text focus area that narrows the analysis.
-  aiInsights: (view, data, filters, forceRefresh, signal, scope, context) =>
+  aiInsights: (view, data, filters, forceRefresh, signal, scope, context, question) =>
     request('/ai/insights', {
       method: 'POST',
-      body: JSON.stringify({ view, data, filters: filters || null, force_refresh: !!forceRefresh, scope: scope || null, context: context || null }),
+      body: JSON.stringify({ view, data, filters: filters || null, force_refresh: !!forceRefresh, scope: scope || null, context: context || null, question: question || null }),
     }, signal),
 
   // XLSX exports (blob downloads — no AbortController needed, short-lived)

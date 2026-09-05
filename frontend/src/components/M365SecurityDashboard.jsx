@@ -71,15 +71,29 @@ function ScoreRing({ pct = 0, size = 96 }) {
   )
 }
 
-function Kpi({ label, value, sub, icon: Icon, color = '#38bdf8' }) {
+function Kpi({ label, value, sub, icon: Icon, color = '#38bdf8', source }) {
+  // A metric Graph refused to answer is NOT zero. Showing "0 risky users" when the
+  // call 403'd is a dangerous lie on a security dashboard, so render it as unknown.
+  const unavailable = source && source !== 'live'
   return (
-    <div className="bg-gray-900/60 border border-gray-800/60 rounded-xl p-3.5" style={{ borderTop: `2px solid ${color}` }}>
+    <div className="bg-gray-900/60 border border-gray-800/60 rounded-xl p-3.5"
+         style={{ borderTop: `2px solid ${unavailable ? 'var(--c-4b5563, #4b5563)' : color}` }}
+         title={unavailable ? `${label}: Microsoft Graph denied this query — the sign-in lacks the permission for it.` : undefined}>
       <div className="flex items-center gap-1.5 mb-1.5">
-        {Icon && <Icon size={13} style={{ color }} />}
+        {Icon && <Icon size={13} style={{ color: unavailable ? '#6b7280' : color }} />}
         <span className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">{label}</span>
       </div>
-      <div className="text-2xl font-bold text-white leading-none tabular-nums">{value}</div>
-      {sub && <div className="text-[10px] text-gray-500 mt-1">{sub}</div>}
+      {unavailable ? (
+        <>
+          <div className="text-2xl font-bold text-gray-600 leading-none">&mdash;</div>
+          <div className="text-[10px] text-amber-500/90 mt-1">No permission</div>
+        </>
+      ) : (
+        <>
+          <div className="text-2xl font-bold text-white leading-none tabular-nums">{value}</div>
+          {sub && <div className="text-[10px] text-gray-500 mt-1">{sub}</div>}
+        </>
+      )}
     </div>
   )
 }
@@ -143,6 +157,19 @@ export default function M365SecurityDashboard({ compact = false, onOpen }) {
   const inc = d.incidents || {}
   const alr = d.alerts || {}
   const ca = d.conditional_access || {}
+  const src = d.sources || {}
+  // Which cards Graph refused, and the permission each one needs.
+  const GRAPH_PERMS = {
+    secure_score:       'SecurityEvents.Read.All',
+    identity:           'IdentityRiskyUser.Read.All (needs Entra ID P2)',
+    risk_detections:    'IdentityRiskEvent.Read.All (needs Entra ID P2)',
+    devices:            'DeviceManagementManagedDevices.Read.All (needs Intune)',
+    incidents:          'SecurityIncident.Read.All (needs Defender XDR)',
+    alerts:             'SecurityAlert.Read.All (needs Defender XDR)',
+    mfa:                'AuditLog.Read.All + UserAuthenticationMethod.Read.All',
+    conditional_access: 'Policy.Read.All',
+  }
+  const blocked = Object.keys(GRAPH_PERMS).filter(key => src[key] && src[key] !== 'live')
   const devPct = dev.total ? Math.round(100 * (dev.compliant || 0) / dev.total) : 0
 
   return (
@@ -172,6 +199,26 @@ export default function M365SecurityDashboard({ compact = false, onOpen }) {
       </div>
 
       {/* Secure score + KPIs */}
+      {!compact && blocked.length > 0 && (
+        <div className="rounded-xl border border-amber-700/50 bg-amber-950/20 px-4 py-3 text-xs text-amber-200/90">
+          <div className="flex items-center gap-2 font-semibold text-amber-300 mb-1.5">
+            <AlertTriangle size={14} />
+            {blocked.length} of {Object.keys(GRAPH_PERMS).length} Graph queries were denied — those cards show &ldquo;—&rdquo;, not zero
+          </div>
+          <div className="text-amber-200/75 leading-relaxed">
+            Graph is connected and {Object.keys(GRAPH_PERMS).length - blocked.length} source(s) returned live data, so this is a
+            permissions gap rather than an outage. Grant these <strong>application</strong> permissions to the app registration
+            in <em>Entra ID → App registrations → API permissions</em> and click <em>Grant admin consent</em>:
+            <ul className="mt-1.5 ml-4 list-disc space-y-0.5">
+              {blocked.map(key => <li key={key}>{GRAPH_PERMS[key]}</li>)}
+            </ul>
+            <div className="mt-1.5">
+              Signing in with <code>az login</code> alone uses the Azure CLI client, which carries none of these — set
+              AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID for a consented app registration instead.
+            </div>
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         <div className="lg:col-span-3">
           <Card title="Microsoft Secure Score" icon={ShieldCheck} accent="#22c55e" source={ss.source} action={<PortalLink href={PORTAL.score} />}>
@@ -186,12 +233,12 @@ export default function M365SecurityDashboard({ compact = false, onOpen }) {
           </Card>
         </div>
         <div className="lg:col-span-9 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-          <Kpi label="Risky Users" value={k.risky_users ?? 0} sub={`${k.risky_users_high ?? 0} high risk`} icon={UserX} color="#ef4444" />
-          <Kpi label="Risk Detections" value={k.risk_detections ?? 0} sub="last 30 days" icon={Fingerprint} color="#f97316" />
-          <Kpi label="Open Incidents" value={k.open_incidents ?? 0} sub={`${k.high_alerts ?? 0} high alerts`} icon={ShieldAlert} color="#ef4444" />
-          <Kpi label="Non-compliant" value={k.noncompliant_devices ?? 0} sub="Intune devices" icon={Smartphone} color="#eab308" />
-          <Kpi label="MFA Coverage" value={`${k.mfa_coverage_pct ?? 0}%`} sub="registered" icon={KeyRound} color="#22c55e" />
-          <Kpi label="CA Policies" value={k.ca_enabled ?? 0} sub="enabled" icon={Lock} color="#3b82f6" />
+          <Kpi label="Risky Users" value={k.risky_users ?? 0} sub={`${k.risky_users_high ?? 0} high risk`} icon={UserX} color="#ef4444" source={src.identity} />
+          <Kpi label="Risk Detections" value={k.risk_detections ?? 0} sub="last 30 days" icon={Fingerprint} color="#f97316" source={src.risk_detections} />
+          <Kpi label="Open Incidents" value={k.open_incidents ?? 0} sub={`${k.high_alerts ?? 0} high alerts`} icon={ShieldAlert} color="#ef4444" source={src.incidents} />
+          <Kpi label="Non-compliant" value={k.noncompliant_devices ?? 0} sub="Intune devices" icon={Smartphone} color="#eab308" source={src.devices} />
+          <Kpi label="MFA Coverage" value={`${k.mfa_coverage_pct ?? 0}%`} sub="registered" icon={KeyRound} color="#22c55e" source={src.mfa} />
+          <Kpi label="CA Policies" value={k.ca_enabled ?? 0} sub="enabled" icon={Lock} color="#3b82f6" source={src.conditional_access} />
         </div>
       </div>
 

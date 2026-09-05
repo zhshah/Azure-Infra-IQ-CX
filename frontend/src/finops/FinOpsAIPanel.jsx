@@ -10,7 +10,7 @@
  * Rules of Hooks: every hook is declared unconditionally before any return.
  */
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { Brain, RefreshCw, AlertTriangle, Lightbulb, ChevronDown, ChevronRight, Sparkles, Crosshair, X, Check, SlidersHorizontal } from 'lucide-react'
+import { Brain, RefreshCw, AlertTriangle, Lightbulb, ChevronDown, ChevronRight, Sparkles, Crosshair, X, Check, SlidersHorizontal, MessageCircleQuestion } from 'lucide-react'
 import { finopsApi, fmtUsd } from './finopsApi'
 
 const IMPACT_COLOR = { high: '#ef4444', medium: '#f59e0b', low: '#22c55e' }
@@ -22,6 +22,16 @@ const SCOPE_PRESETS = [
   'Rightsizing opportunities', 'Reservations & Savings Plans',
   'Idle & orphaned waste', 'Cost anomalies & spikes',
   'Tagging & cost allocation', 'Forecast & budget risk',
+]
+
+// Starter questions for the free-text “Ask” feature.
+const ASK_PRESETS = [
+  'What are my top 3 cost drivers and why?',
+  'Where can I save the most with least risk?',
+  'What changed vs last month?',
+  'Which spend is untagged or unallocated?',
+  'Am I on track against budget?',
+  'What should I show the executive team?',
 ]
 
 // Structured business-context inputs — dropdowns that ground the AI's recommendations.
@@ -47,6 +57,11 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
   const [contextOpen, setContextOpen]   = useState(false)
   const [contextDraft, setContextDraft] = useState({})
   const contextRef = useRef({})
+  // Free-text “Ask” — lets the user interrogate this view's data in their own words.
+  const [question, setQuestion]     = useState('')
+  const [askDraft, setAskDraft]     = useState('')
+  const [askOpen, setAskOpen]       = useState(false)
+  const questionRef = useRef('')
   const abortRef = useRef(null)
 
   // Stable fingerprint of the data so the effect only re-runs on real changes.
@@ -54,22 +69,47 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
     try { return JSON.stringify(data || {}).slice(0, 4000) } catch { return '' }
   }, [data])
 
-  const load = useCallback(async (force = false, scopeArg, contextArg) => {
+  const load = useCallback(async (force = false, scopeArg, contextArg, questionArg, _retry = 0) => {
     if (abortRef.current) abortRef.current.abort()
     const ctrl = new AbortController()
     abortRef.current = ctrl
     const scopeVal = scopeArg !== undefined ? scopeArg : scopeRef.current
     const ctxVal = contextArg !== undefined ? contextArg : contextRef.current
+    const qVal = questionArg !== undefined ? questionArg : questionRef.current
     setLoading(true); setError(null)
     try {
-      const res = await finopsApi.aiInsights(view, data || {}, filters, force, ctrl.signal, scopeVal || null, ctxVal && Object.keys(ctxVal).length ? ctxVal : null)
+      const res = await finopsApi.aiInsights(view, data || {}, filters, force, ctrl.signal, scopeVal || null, ctxVal && Object.keys(ctxVal).length ? ctxVal : null, qVal || null)
       if (!ctrl.signal.aborted) { setInsights(res); if (onInsights) onInsights(res) }
     } catch (e) {
-      if (e.name !== 'AbortError') setError(e.message)
+      if (e.name === 'AbortError') return
+      // A dropped connection usually means the answer landed in the cache anyway,
+      // so one quiet retry (never forced) recovers it without spending tokens.
+      if (e.networkError && _retry === 0 && !ctrl.signal.aborted) {
+        await new Promise(r => setTimeout(r, 1500))
+        if (!ctrl.signal.aborted) return load(false, scopeArg, contextArg, questionArg, 1)
+      }
+      setError(e.message)
     } finally {
       if (!ctrl.signal.aborted) setLoading(false)
     }
   }, [view, dataKey, filters]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Ask / clear a free-text question about this view's data.
+  const applyAsk = useCallback(() => {
+    const q = (askDraft || '').trim()
+    if (!q) return
+    questionRef.current = q
+    setQuestion(q)
+    setAskOpen(false)
+    load(true, undefined, undefined, q)
+  }, [askDraft, load])
+  const clearAsk = useCallback(() => {
+    questionRef.current = ''
+    setQuestion('')
+    setAskDraft('')
+    setAskOpen(false)
+    load(true, undefined, undefined, '')
+  }, [load])
 
   // Apply / clear the active scope (forces a fresh, scoped generation).
   const applyScope = useCallback(() => {
@@ -106,8 +146,19 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
   }, [load])
 
   // Auto-load when data meaningfully changes (and there is something to analyse).
+  // A view often renders once with zeroed placeholders before its fetch lands; running
+  // the model on that wastes a 40-80s call and delays whatever the user actually asks.
   useEffect(() => {
     if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) return
+    const substantive = (v) => {
+      if (v == null) return false
+      if (Array.isArray(v)) return v.length > 0
+      if (typeof v === 'number') return v !== 0
+      if (typeof v === 'string') return v.trim() !== ''
+      if (typeof v === 'object') return Object.values(v).some(substantive)
+      return true
+    }
+    if (typeof data === 'object' && !Object.values(data).some(substantive)) return
     load(false)
   }, [dataKey, load]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -144,22 +195,36 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
             </span>
           )}
           {activeContextCount > 0 && (
-            <span title={`Business context: ${contextSummary}`} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9.5, color: '#c4b5fd', background: 'var(--c-1e1b4b)', border: '1px solid #6d28d9', borderRadius: 4, padding: '2px 6px', maxWidth: 240 }}>
+            <span title={`Business context: ${contextSummary}`} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9.5, color: 'var(--c-c4b5fd)', background: 'var(--c-1e1b4b)', border: '1px solid #6d28d9', borderRadius: 4, padding: '2px 6px', maxWidth: 240 }}>
               <SlidersHorizontal size={9} style={{ flexShrink: 0 }} />
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{contextSummary}</span>
               <X size={11} style={{ cursor: 'pointer', flexShrink: 0 }} onClick={clearContext} />
             </span>
           )}
+          {question && (
+            <span title={`Question: ${question}`} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9.5, color: '#fcd34d', background: '#2a2207', border: '1px solid #a16207', borderRadius: 4, padding: '2px 6px', maxWidth: 260 }}>
+              <MessageCircleQuestion size={9} style={{ flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{question}</span>
+              <X size={11} style={{ cursor: 'pointer', flexShrink: 0 }} onClick={clearAsk} />
+            </span>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          <button onClick={() => { setContextDraft({ ...context }); setContextOpen(o => !o); setScopeOpen(false) }} title="Add business context to ground the recommendations" style={{
+          <button onClick={() => { setAskDraft(question); setAskOpen(o => !o); setScopeOpen(false); setContextOpen(false) }} title="Ask your own question about this data" style={{
+            display: 'flex', alignItems: 'center', gap: 5, background: question || askOpen ? '#2a2207' : 'var(--c-0f172a)',
+            border: `1px solid ${question || askOpen ? '#a16207' : 'var(--c-1e293b)'}`, borderRadius: 6, padding: '5px 11px',
+            cursor: 'pointer', color: question || askOpen ? '#fcd34d' : 'var(--c-94a3b8)', fontSize: 11, fontWeight: 600,
+          }}>
+            <MessageCircleQuestion size={12} /> Ask
+          </button>
+          <button onClick={() => { setContextDraft({ ...context }); setContextOpen(o => !o); setScopeOpen(false); setAskOpen(false) }} title="Add business context to ground the recommendations" style={{
             display: 'flex', alignItems: 'center', gap: 5, background: activeContextCount || contextOpen ? 'var(--c-1e1b4b)' : 'var(--c-0f172a)',
             border: `1px solid ${activeContextCount || contextOpen ? '#6d28d9' : 'var(--c-1e293b)'}`, borderRadius: 6, padding: '5px 11px',
-            cursor: 'pointer', color: activeContextCount || contextOpen ? '#c4b5fd' : 'var(--c-94a3b8)', fontSize: 11, fontWeight: 600,
+            cursor: 'pointer', color: activeContextCount || contextOpen ? 'var(--c-c4b5fd)' : 'var(--c-94a3b8)', fontSize: 11, fontWeight: 600,
           }}>
             <SlidersHorizontal size={12} /> Context{activeContextCount ? ` (${activeContextCount})` : ''}
           </button>
-          <button onClick={() => { setScopeDraft(scope); setScopeOpen(o => !o); setContextOpen(false) }} title="Scope this analysis to a specific area" style={{
+          <button onClick={() => { setScopeDraft(scope); setScopeOpen(o => !o); setContextOpen(false); setAskOpen(false) }} title="Scope this analysis to a specific area" style={{
             display: 'flex', alignItems: 'center', gap: 5, background: scope || scopeOpen ? 'var(--c-0d2b3f)' : 'var(--c-0f172a)',
             border: `1px solid ${scope || scopeOpen ? '#0e7490' : 'var(--c-1e293b)'}`, borderRadius: 6, padding: '5px 11px',
             cursor: 'pointer', color: scope || scopeOpen ? '#67e8f9' : 'var(--c-94a3b8)', fontSize: 11, fontWeight: 600,
@@ -169,13 +234,55 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
           <button onClick={() => load(true)} disabled={loading} title="Generate a fresh analysis" style={{
             display: 'flex', alignItems: 'center', gap: 5, background: loading ? 'var(--c-1e293b)' : 'var(--c-1e1b4b)',
             border: `1px solid ${loading ? 'var(--c-334155)' : '#6d28d9'}`, borderRadius: 6, padding: '5px 11px',
-            cursor: loading ? 'not-allowed' : 'pointer', color: loading ? 'var(--c-94a3b8)' : '#c4b5fd', fontSize: 11, fontWeight: 600,
+            cursor: loading ? 'not-allowed' : 'pointer', color: loading ? 'var(--c-94a3b8)' : 'var(--c-c4b5fd)', fontSize: 11, fontWeight: 600,
           }}>
             {loading ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={12} />}
-            {loading ? 'Analysing…' : 'Refresh analysis'}
+            {loading ? (question ? 'Answering your question…' : 'Analysing…') : 'Refresh analysis'}
           </button>
         </div>
       </div>
+
+      {/* Ask popover — free-text question answered against this view's real data */}
+      {askOpen && (
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--c-15233b)', background: 'var(--c-0a1018)' }}>
+          <div style={{ color: 'var(--c-94a3b8)', fontSize: 11, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <MessageCircleQuestion size={12} style={{ color: '#fcd34d' }} /> Ask anything about this data
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+            {ASK_PRESETS.map(p => (
+              <button key={p} onClick={() => setAskDraft(p)} style={{
+                fontSize: 11, padding: '4px 10px', borderRadius: 14, cursor: 'pointer',
+                background: 'var(--c-0f172a)', color: 'var(--c-94a3b8)', border: '1px solid var(--c-1e293b)',
+              }}>{p}</button>
+            ))}
+          </div>
+          <textarea
+            value={askDraft}
+            onChange={e => setAskDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) applyAsk() }}
+            rows={2}
+            placeholder="e.g. Which resource groups grew most this month and what should I cut first?"
+            style={{
+              width: '100%', background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 6,
+              padding: '8px 10px', color: 'var(--c-e2e8f0)', fontSize: 11.5, resize: 'vertical', fontFamily: 'inherit',
+            }} />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+            <button onClick={applyAsk} disabled={!askDraft.trim() || loading} style={{
+              display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, borderRadius: 6, padding: '5px 12px',
+              cursor: (!askDraft.trim() || loading) ? 'not-allowed' : 'pointer',
+              background: (!askDraft.trim() || loading) ? 'var(--c-1e293b)' : '#a16207',
+              border: '1px solid #a16207', color: (!askDraft.trim() || loading) ? 'var(--c-64748b)' : '#fff',
+            }}><Check size={12} /> Ask</button>
+            {question && (
+              <button onClick={clearAsk} style={{
+                fontSize: 11, borderRadius: 6, padding: '5px 12px', cursor: 'pointer',
+                background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', color: 'var(--c-94a3b8)',
+              }}>Clear question</button>
+            )}
+            <span style={{ color: 'var(--c-475569)', fontSize: 10, marginLeft: 'auto' }}>Answered only from this view&rsquo;s live data. Ctrl/⌘+Enter to submit. Takes up to a minute.</span>
+          </div>
+        </div>
+      )}
 
       {/* Scope popover — advanced: narrow the AI analysis to a specific area */}
       {scopeOpen && (
@@ -222,7 +329,7 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
       {contextOpen && (
         <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--c-15233b)', background: 'var(--c-0a1018)' }}>
           <div style={{ color: 'var(--c-94a3b8)', fontSize: 11, fontWeight: 700, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <SlidersHorizontal size={12} style={{ color: '#c4b5fd' }} /> Add business context for more grounded recommendations
+            <SlidersHorizontal size={12} style={{ color: 'var(--c-c4b5fd)' }} /> Add business context for more grounded recommendations
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10, marginBottom: 10 }}>
             {CONTEXT_FIELDS.map((f) => (
@@ -267,7 +374,18 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
               <RefreshCw size={13} className="animate-spin" style={{ color: 'var(--c-a78bfa)' }} /> Generating AI cost analysis…
             </div>
           )}
-          {error && <div style={{ color: 'var(--c-f87171)', fontSize: 12 }}>AI error: {error}</div>}
+          {error && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ color: 'var(--c-f87171)', fontSize: 12 }}>AI error: {error}</span>
+          <button onClick={() => load(false)} disabled={loading}
+            style={{
+              fontSize: 11, padding: '3px 10px', borderRadius: 6, cursor: loading ? 'wait' : 'pointer',
+              background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', color: 'var(--c-e2e8f0)',
+            }}>
+            Retry
+          </button>
+        </div>
+      )}
           {notConfigured && (
             <div style={{ color: 'var(--c-94a3b8)', fontSize: 12 }}>
               {insights.summary}
@@ -276,6 +394,26 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
 
           {insights && !notConfigured && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {question && loading && (
+                <div style={{ background: '#1a1503', border: '1px solid #a16207', borderRadius: 8, padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <RefreshCw size={13} className="animate-spin" style={{ color: '#fbbf24' }} />
+                  <div>
+                    <div style={{ color: '#fbbf24', fontSize: 11, fontWeight: 700 }}>Answering: “{question}”</div>
+                    <div style={{ color: 'var(--c-94a3b8)', fontSize: 11, marginTop: 2 }}>
+                      Reading this view&rsquo;s live data — this usually takes 30–90 seconds.
+                    </div>
+                  </div>
+                </div>
+              )}
+              {insights.answer && insights.question && (
+                <div style={{ background: '#1a1503', border: '1px solid #a16207', borderRadius: 8, padding: '10px 12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                    <MessageCircleQuestion size={12} style={{ color: '#fcd34d', flexShrink: 0 }} />
+                    <span style={{ color: '#fcd34d', fontSize: 11, fontWeight: 700 }}>{insights.question}</span>
+                  </div>
+                  <p style={{ color: 'var(--c-e2e8f0)', fontSize: 13, lineHeight: 1.55, margin: 0 }}>{insights.answer}</p>
+                </div>
+              )}
               {insights.summary && (
                 <p style={{ color: 'var(--c-cbd5e1)', fontSize: 13, lineHeight: 1.5, margin: 0 }}>{insights.summary}</p>
               )}
@@ -333,9 +471,12 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
               {insights.generated_at && (
                 <div style={{ color: 'var(--c-475569)', fontSize: 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
                   {insights.grounded_on && insights.grounded_on.resources != null && (
-                    <span style={{ color: 'var(--c-64748b)' }}>
+                    <span
+                      style={{ color: 'var(--c-64748b)' }}
+                      title={insights.grounded_on.cost_source || undefined}>
                       🔎 Grounded on {insights.grounded_on.resources} resources
                       {insights.grounded_on.spend_usd != null ? ` · ${fmtUsd(insights.grounded_on.spend_usd)} analyzed` : ''}
+                      {insights.grounded_on.cost_window ? ` (${insights.grounded_on.cost_window})` : ''}
                       {insights.grounded_on.tagged_pct != null ? ` · ${insights.grounded_on.tagged_pct}% tagged` : ''}
                     </span>
                   )}

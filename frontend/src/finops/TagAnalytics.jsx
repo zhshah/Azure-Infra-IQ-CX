@@ -104,7 +104,7 @@ export default function TagAnalytics() {
   )
   if (!data) return null
 
-  const tagStats = data.tag_stats || []
+  const tagStats = data.tag_stats?.length ? data.tag_stats : (data.tag_keys || [])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -195,13 +195,25 @@ export default function TagAnalytics() {
           <div style={{ color: 'var(--c-64748b)', fontSize: 11, textAlign: 'center' }}>
             Overall tag compliance for {data.required_tags?.length || 0} required tags
           </div>
+          {/* A 0% score is almost always "this tag exists nowhere", not a bug. Say so. */}
+          {data.missing_required_tags?.length > 0 && (
+            <div style={{
+              fontSize: 10.5, lineHeight: 1.45, textAlign: 'center', borderRadius: 6, padding: '6px 8px',
+              background: 'rgba(245,158,11,.12)', border: '1px solid rgba(245,158,11,.45)', color: '#fbbf24',
+            }}>
+              {data.missing_required_tags.length} of {data.required_tags?.length || 0} required tags are on
+              <strong> no resource at all</strong>: {data.missing_required_tags.join(', ')}.
+              Compliance counts only resources carrying <em>every</em> required tag, so it stays 0% until these
+              are applied — or until you deselect them above.
+            </div>
+          )}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, alignContent: 'start' }}>
           {[
             { label: 'Total Resources', value: data.total_resources ?? 0, color: 'var(--c-94a3b8)' },
-            { label: 'Compliant', value: data.fully_compliant ?? 0, color: '#4ade80' },
-            { label: 'Non-Compliant', value: data.non_compliant ?? 0, color: '#f87171' },
-            { label: 'Untagged Spend', value: fmtUsd(data.untagged_spend_usd ?? 0), color: '#f59e0b' },
+            { label: 'Compliant', value: data.compliant_resources ?? data.fully_compliant ?? 0, color: '#4ade80' },
+            { label: 'Non-Compliant', value: data.non_compliant_resources ?? data.non_compliant ?? 0, color: '#f87171' },
+            { label: 'Untagged Spend', value: fmtUsd(data.untagged_spend_usd ?? data.untagged_cost_usd ?? 0), color: '#f59e0b' },
           ].map(c => (
             <div key={c.label} style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 8, padding: '10px 14px' }}>
               <div style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>{c.label}</div>
@@ -239,8 +251,8 @@ export default function TagAnalytics() {
                         {fmtPct(ts.coverage_pct)}
                       </div>
                     </td>
-                    <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{ts.resource_count ?? '—'}</td>
-                    <td style={{ padding: '6px 8px', color: 'var(--c-4ade80)' }}>{ts.tagged_count ?? '—'}</td>
+                      <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{ts.resource_count ?? ts.total_resources ?? '—'}</td>
+                      <td style={{ padding: '6px 8px', color: 'var(--c-4ade80)' }}>{ts.tagged_count ?? ts.covered_resources ?? '—'}</td>
                     <td style={{ padding: '6px 8px' }}>
                       {ts.is_required
                         ? <span style={{ color: '#f59e0b', fontSize: 10 }}>Required</span>

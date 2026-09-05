@@ -21,8 +21,11 @@ uniform actual/amortized support for every grouping.
 from __future__ import annotations
 
 import calendar
+import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 try:
     from services.database import get_raw_connection
@@ -347,6 +350,7 @@ def estate_total(
     (Overview, Cost Insights, Cost Lens) — reconciling them with the Analyze tab.
     Returns 0.0 when the warehouse is unavailable/empty (caller falls back)."""
     if get_raw_connection is None:
+        _LAST_ESTATE_TOTAL_ERROR["error"] = "Cost warehouse is not configured, so spend was never read."
         return 0.0
     d_from, d_to = resolve_period(period, date_from, date_to)
     ct = _norm_cost_type(cost_type)
@@ -355,9 +359,34 @@ def estate_total(
         con = get_raw_connection()
         cur = con.cursor()
         _, total = _agg_by_key(cur, ct, d_from, d_to, "service_family", subs, None)
+        _LAST_ESTATE_TOTAL_ERROR["error"] = ""
         return round(float(total or 0.0), 2)
-    except Exception:
+    except Exception as exc:
+        # Returning a bare 0.0 here would let a warehouse outage be reported as "$0 spend".
+        logger.warning("estate_total failed: %s", exc)
+        _LAST_ESTATE_TOTAL_ERROR["error"] = str(exc)
         return 0.0
+
+
+# Set by estate_total(); read via estate_total_ex() so callers can tell $0 from "unavailable".
+_LAST_ESTATE_TOTAL_ERROR: Dict[str, str] = {"error": ""}
+
+
+def estate_total_ex(
+    period: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    subscription_ids: Optional[List[str]] = None,
+    cost_type: str = "actual",
+) -> Dict[str, Any]:
+    """estate_total plus whether the warehouse actually answered.
+
+    ``{"total": float, "ok": bool, "error": str}`` — ``ok=False`` means the total is
+    unknown, NOT zero, and must never be printed as a spend figure.
+    """
+    total = estate_total(period, date_from, date_to, subscription_ids, cost_type)
+    err = _LAST_ESTATE_TOTAL_ERROR.get("error", "")
+    return {"total": total, "ok": not err, "error": err}
 
 
 def available_dimensions() -> List[Dict[str, str]]:

@@ -133,6 +133,9 @@ function KPITile({ icon: Icon, label, value, subtext, color = "#38bdf8", onClick
 
 function KPISection({ defenderData, allFindings, securityGaps, onDrill }) {
   const defenderAvailable = !!(defenderData?.defender);
+  // "not configured" and "we could not ask" are different claims and must not share a banner.
+  const collectionFailed = defenderData?.defender?.collection_ok === false;
+  const failedSources = defenderData?.defender?.failed_sources || [];
   const secureScore = defenderData?.defender?.secure_score;
   const plans = defenderData?.defender?.defender_plans;
   const alerts = defenderData?.defender?.alerts || [];
@@ -147,6 +150,26 @@ function KPISection({ defenderData, allFindings, securityGaps, onDrill }) {
 
   return (
     <div>
+      {collectionFailed && (
+        <div style={{
+          display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 16px",
+          borderRadius: 10, border: "1px solid #ef444460", background: "#ef444410",
+          marginBottom: 16,
+        }}>
+          <ShieldCheck size={18} color="#ef4444" style={{ flexShrink: 0, marginTop: 2 }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ color: '#fca5a5', fontWeight: 700, fontSize: 13 }}>
+              Security data could not be read — the figures below are incomplete, not a clean estate
+            </div>
+            <div style={{ color: "var(--c-94a3b8)", fontSize: 12, marginTop: 2 }}>
+              {failedSources.length} of 10 Defender/Advisor sources failed to answer
+              {failedSources.length ? `: ${failedSources.join(', ')}` : ''}. Sign in again or check
+              Security Reader permissions, then refresh — do not read a low score or a low finding
+              count as good news.
+            </div>
+          </div>
+        </div>
+      )}
       {!defenderAvailable && (
         <div style={{
           display: "flex", alignItems: "center", gap: 12, padding: "12px 16px",

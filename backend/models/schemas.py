@@ -206,6 +206,7 @@ class SavingsRecommendation(BaseModel):
     resource_name:  str
     resource_type:  str
     resource_group: str
+    subscription_id: str = ""   # the home-page scope filter needs this to narrow by subscription
     current_monthly_cost:      float
     estimated_monthly_savings: float
     savings_pct:               float
@@ -302,8 +303,11 @@ class AppSettings(BaseModel):
     # Azure OpenAI
     azure_openai_endpoint:   str = ""
     azure_openai_key:        str = ""  # masked
-    azure_openai_deployment: str = "gpt-4o-mini"
+    azure_openai_deployment: str = "gpt-5.6-sol"
     has_azure_openai_key:    bool = False
+    # AI tuning — the two global levers over analysis latency and token spend
+    ai_cache_ttl_hours:      int = 12
+    AI_REASONING_EFFORT:     str = "high"
     # Scoring
     idle_threshold_pct:    float = 3.0
     no_metrics_age_days:   int   = 7
@@ -1193,6 +1197,9 @@ class UpdateManagementSummary(BaseModel):
     linux_machines:          int   = 0
     machines_without_assessment: int = 0  # VMs visible but not yet assessed by Update Manager
     assessment_time:         str   = ""
+    # False when the Resource Graph query failed, so the UI can show "unknown" instead of 0.
+    collection_ok:           bool  = True
+    collection_error:        str   = ""
 
 
 class UpdatesByCategory(BaseModel):
@@ -1353,6 +1360,15 @@ class FinOpsTagAnalyticsResult(BaseModel):
     untagged_resource_count: int                    = 0
     compliance_score_pct:  float                    = 0.0   # % resources with all required tags
     required_tags:         List[str]                = Field(default_factory=list)
+    # Aggregates the Tags tab renders directly. Without them the KPI cards read 0
+    # and the coverage table stayed empty even when compliance was non-zero.
+    total_resources:       int                      = 0
+    compliant_resources:   int                      = 0
+    non_compliant_resources: int                    = 0
+    untagged_spend_usd:    float                    = 0.0   # alias of untagged_cost_usd
+    tag_stats:             List[FinOpsTagKeyStats]  = Field(default_factory=list)  # EVERY key, not just required
+    # Required tags that exist on no resource at all — the usual reason a score is 0%.
+    missing_required_tags: List[str]                = Field(default_factory=list)
     generated_at:          str                      = ""
     data_source:           str                      = "azure_cost_management"
 

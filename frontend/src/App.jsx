@@ -10,7 +10,7 @@ const NAV_SECTIONS = [
     { key: 'overview', label: 'Overview', icon: '/icons/general/10015-icon-service-Dashboard.svg' },
   ]},
   { heading: 'Analysis', items: [
-    { key: 'maturity',   label: 'Maturity',   icon: '/icons/management + governance/00003-icon-service-Advisor.svg' },
+    { key: 'maturity',   label: 'Maturity',   icon: '/icons/general/10851-icon-service-Workbooks.svg' },
     { key: 'security',   label: 'Security',   icon: '/icons/security/10241-icon-service-Microsoft-Defender-for-Cloud.svg' },
     { key: 'innovation', label: 'Innovation', icon: '/icons/general/10008-icon-service-Marketplace.svg' },
     { key: 'migration',  label: 'Migration',  icon: '/icons/migrate/10281-icon-service-Azure-Migrate.svg' },
@@ -21,35 +21,35 @@ const NAV_SECTIONS = [
     { key: 'bcdr',        label: 'BCDR',           icon: '/icons/management + governance/00017-icon-service-Recovery-Services-Vaults.svg' },
   ]},
   { heading: 'Optimization', items: [
-    { key: 'growth',    label: 'Cloud Adoption',  icon: '/icons/migrate/10281-icon-service-Azure-Migrate.svg' },
-    { key: 'licensing', label: 'Licensing & Reservation', icon: '/icons/general/10003-icon-service-Reservations.svg' },
+    { key: 'growth',    label: 'Cloud Adoption',  icon: '/icons/general/10814-icon-service-Journey-Hub.svg' },
+    { key: 'licensing', label: 'Licensing & Reservation', icon: '/icons/identity/02681-icon-service-Entra-Identity-Licenses.svg' },
   ]},
   { heading: 'Governance', items: [
-    { key: 'governance', label: 'Governance', icon: '/icons/management + governance/00003-icon-service-Advisor.svg' },
+    { key: 'governance', label: 'Governance', icon: '/icons/management + governance/10316-icon-service-Policy.svg' },
     { key: 'advisor',    label: 'Advisor',    icon: '/icons/management + governance/00003-icon-service-Advisor.svg' },
   ]},
   { heading: 'AI Assessments', items: [
-    { key: 'waf',              label: 'Well-Architected',        icon: '/icons/management + governance/00003-icon-service-Advisor.svg' },
-    { key: 'caf',              label: 'Cloud Adoption (CAF)',    icon: '/icons/migrate/10281-icon-service-Azure-Migrate.svg' },
+    { key: 'waf',              label: 'Well-Architected',        icon: '/icons/management + governance/00006-icon-service-Blueprints.svg' },
+    { key: 'caf',              label: 'Cloud Adoption (CAF)',    icon: '/icons/new icons/029636048-icon-service-Landing-Zone.svg' },
     { key: 'sql-modernization', label: 'SQL Modernization',      icon: '/icons/databases/10130-icon-service-SQL-Database.svg' },
     { key: 'appservice',       label: 'App Service',             icon: '/icons/compute/10035-icon-service-App-Services.svg' },
     { key: 'vm-performance',    label: 'VM Performance',          icon: '/icons/compute/10021-icon-service-Virtual-Machine.svg' },
-    { key: 'entra',            label: 'Identity & Access',  icon: '/icons/security/10241-icon-service-Microsoft-Defender-for-Cloud.svg' },
+    { key: 'entra',            label: 'Identity & Access',  icon: '/icons/identity/10235-icon-service-Identity-Governance.svg' },
   ]},
   { heading: 'Infrastructure', items: [
     { key: 'resources',  label: 'Resources',     icon: '/icons/general/10001-icon-service-All-Resources.svg' },
-    { key: 'infra',      label: 'Infrastructure', icon: '/icons/management + governance/00001-icon-service-Monitor.svg' },
+    { key: 'infra',      label: 'Infrastructure', icon: '/icons/management + governance/10318-icon-service-Resource-Graph-Explorer.svg' },
     { key: 'networking', label: 'Networking',     icon: '/icons/networking/10061-icon-service-Virtual-Networks.svg' },
-    { key: 'architecture-map', label: 'Architecture Map', icon: '/icons/networking/10061-icon-service-Virtual-Networks.svg' },
+    { key: 'architecture-map', label: 'Architecture Map', icon: '/icons/new icons/030868929-icon-service-Stage-Maps.svg' },
     { key: 'onpremise',  label: 'Hybrid & Arc',  icon: '/icons/management + governance/00756-icon-service-Azure-Arc.svg' },
-    { key: 'onprem_collection', label: 'On-Premises', icon: '/icons/compute/10021-icon-service-Virtual-Machine.svg' },
-    { key: 'software-governance', label: 'Software Governance', icon: '/icons/security/10241-icon-service-Microsoft-Defender-for-Cloud.svg' },
+    { key: 'onprem_collection', label: 'On-Premises', icon: '/icons/compute/10347-icon-service-Hosts.svg' },
+    { key: 'software-governance', label: 'Software Governance', icon: '/icons/management + governance/00011-icon-service-Compliance.svg' },
   ]},
   { heading: 'Operations', items: [
     { key: 'monitoring', label: 'Monitoring', icon: '/icons/management + governance/00001-icon-service-Monitor.svg' },
-    { key: 'updates', label: 'Update Management', icon: '/icons/management + governance/00001-icon-service-Monitor.svg' },
-    { key: 'service-health', label: 'Service Health', icon: '/icons/management + governance/00001-icon-service-Monitor.svg' },
-    { key: 'quota', label: 'Quota & Capacity', icon: '/icons/general/10003-icon-service-Reservations.svg' },
+    { key: 'updates', label: 'Update Management', icon: '/icons/other/02846-icon-service-Update-Management-Center.svg' },
+    { key: 'service-health', label: 'Service Health', icon: '/icons/general/10004-icon-service-Service-Health.svg' },
+    { key: 'quota', label: 'Quota & Capacity', icon: '/icons/other/02951-icon-service-Azure-Quotas.svg' },
   ]},
   { heading: 'Management', items: [
     { key: 'assessments', label: 'Assessments', icon: '/icons/general/10349-icon-service-Resource-Explorer.svg' },
@@ -57,22 +57,28 @@ const NAV_SECTIONS = [
     { key: 'tags',        label: 'Tags',        icon: '/icons/general/10014-icon-service-Tag.svg' },
   ]},
   { heading: 'FinOps', collapsible: true, items: [
-    { key: 'finops-overview',   label: '⚡ Overview',          icon: '/icons/management + governance/00001-icon-service-Monitor.svg' },
-    { key: 'finops-management', label: '👔 Management Review', icon: '/icons/general/10015-icon-service-Dashboard.svg' },
-    { key: 'finops-analysis-hub', label: '📈 Cost Analysis',   icon: '/icons/general/10015-icon-service-Dashboard.svg' },
-    { key: 'finops-optimization', label: '🎯 Optimization',    icon: '/icons/management + governance/00003-icon-service-Advisor.svg' },
-    { key: 'finops-commitments-hub', label: '🧾 Commitments', icon: '/icons/general/10003-icon-service-Reservations.svg' },
-    { key: 'finops-budgets-hub', label: '💰 Budgets & Alerts', icon: '/icons/general/10003-icon-service-Reservations.svg' },
-    { key: 'finops-governance-hub', label: '🏷️ Governance & Allocation', icon: '/icons/general/10014-icon-service-Tag.svg' },
-    { key: 'finops-anomalies', label: '📊 Anomaly Intelligence', icon: '/icons/management + governance/00001-icon-service-Monitor.svg' },
-    { key: 'finops-studio',   label: '🎨 Cost Studio',      icon: '/icons/general/10015-icon-service-Dashboard.svg' },
-    { key: 'finops-exec',     label: '📄 Executive Report', icon: '/icons/general/10015-icon-service-Dashboard.svg' },
+    { key: 'finops-overview',   label: 'Overview',          icon: '/icons/general/10019-icon-service-Cost-Management.svg' },
+    { key: 'finops-pulse',      label: 'Cost Pulse',        icon: '/icons/management + governance/00020-icon-service-Metrics.svg' },
+    { key: 'finops-management', label: 'Management Review', icon: '/icons/general/10002-icon-service-Subscriptions.svg' },
+    { key: 'finops-analysis-hub', label: 'Cost Analysis',   icon: '/icons/general/00004-icon-service-Cost-Management-and-Billing.svg' },
+    { key: 'finops-optimization', label: 'Optimization',    icon: '/icons/general/10792-icon-service-Cost-Analysis.svg' },
+    { key: 'finops-commitments-hub', label: 'Commitments', icon: '/icons/general/10003-icon-service-Reservations.svg' },
+    { key: 'finops-budgets-hub', label: 'Budgets & Alerts', icon: '/icons/general/10793-icon-service-Cost-Budgets.svg' },
+    { key: 'finops-governance-hub', label: 'Governance & Allocation', icon: '/icons/general/10011-icon-service-Management-Groups.svg' },
+    { key: 'finops-log-analytics', label: 'Sentinel & Log Analytics', icon: '/icons/security/10248-icon-service-Azure-Sentinel.svg' },
+    { key: 'finops-anomalies', label: 'Anomaly Intelligence', icon: '/icons/ai + machine learning/00814-icon-service-Anomaly-Detector.svg' },
+    { key: 'finops-studio',   label: 'Cost Studio',      icon: '/icons/other/01757-icon-service-Dashboard-Hub.svg' },
+    { key: 'finops-exec',     label: 'Executive Report', icon: '/icons/management + governance/00004-icon-service-Cost-Management-and-Billing.svg' },
+  ]},
+  // Reporting spans every module, so it sits at the top level rather than inside FinOps.
+  { heading: 'Reporting', items: [
+    { key: 'reporting', label: 'Report Studio', icon: '/icons/analytics/02189-icon-service-Azure-Workbooks.svg' },
   ]},
   // Keep 'About' LAST so it always sits at the bottom of the left-hand menu.
   { heading: 'About', items: [
     { key: 'about',          label: 'About',     icon: '/icons/general/10013-icon-service-Help-and-Support.svg' },
-    { key: 'about-features', label: 'Features',  icon: '/icons/general/10008-icon-service-Marketplace.svg' },
-    { key: 'about-faqs',     label: 'FAQs',      icon: '/icons/management + governance/00003-icon-service-Advisor.svg' },
+    { key: 'about-features', label: 'Features',  icon: '/icons/general/10827-icon-service-Feature-Previews.svg' },
+    { key: 'about-faqs',     label: 'FAQs',      icon: '/icons/general/10810-icon-service-Guide.svg' },
   ]},
 ]
 
@@ -105,13 +111,15 @@ function SidebarNav({ view, onNavigate, collapsed, onToggle, badges }) {
       width: sidebarW, minWidth: sidebarW,
       height: '100vh', position: 'sticky', top: 0, zIndex: 30,
       background: 'var(--c-0c1220)',
-      borderRight: '1px solid rgba(var(--rgb-slate), 0.6)',
+      // No border-right here: it would cross the 52px banner and split the band
+      // in two. The children below the banner carry the rule instead.
+      borderRight: 'none',
       display: 'flex', flexDirection: 'column',
       transition: 'width 0.25s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
       overflowX: 'hidden',
     }}>
-      {/* Logo area — height matches header exactly (52px) */}
-      <div style={{
+      {/* Logo area — 52px, matching the scope bar row so the two rules line up */}
+      <div className="app-banner" style={{
         height: 52, minHeight: 52, maxHeight: 52,
         padding: collapsed ? '0 8px' : '0 16px',
         borderBottom: '1px solid rgba(var(--rgb-slate), 0.6)',
@@ -137,6 +145,7 @@ function SidebarNav({ view, onNavigate, collapsed, onToggle, badges }) {
       {/* Navigation sections */}
       <div className="sidebar-scroll" style={{
         flex: 1, padding: '12px 0 8px', overflowY: 'auto',
+        borderRight: '1px solid rgba(var(--rgb-slate), 0.6)',
         scrollbarWidth: 'thin', scrollbarColor: 'var(--c-1e293b) transparent',
       }}>
         {NAV_SECTIONS.map((section, si) => {
@@ -217,13 +226,16 @@ function SidebarNav({ view, onNavigate, collapsed, onToggle, badges }) {
                       </span>
                     )}
                     {!collapsed && badges?.[item.key] > 0 && (
-                      <span style={{
-                        fontSize: 10, fontWeight: 600, lineHeight: 1,
-                        padding: '2px 6px', borderRadius: 10, minWidth: 18, textAlign: 'center',
-                        background: badges[item.key + '_color'] || (badges[item.key] > 5 ? '#ef4444' : '#f97316'),
-                        color: '#ffffff',
-                      }}>
-                        {badges[item.key]}
+                      <span
+                        className="nav-badge"
+                        title={badges[item.key + '_title']}
+                        style={{
+                          fontSize: 10, fontWeight: 600, lineHeight: 1,
+                          padding: '2px 6px', borderRadius: 10, minWidth: 18, textAlign: 'center',
+                          fontVariantNumeric: 'tabular-nums',
+                        }}
+                      >
+                        {badges[item.key] > 99 ? '99+' : badges[item.key]}
                       </span>
                     )}
                   </button>
@@ -240,7 +252,9 @@ function SidebarNav({ view, onNavigate, collapsed, onToggle, badges }) {
         style={{
           height: 40, padding: '0 12px',
           background: 'transparent',
-          border: 'none', borderTop: '1px solid rgba(var(--rgb-slate), 0.5)',
+          border: 'none',
+          borderTop: '1px solid rgba(var(--rgb-slate), 0.5)',
+          borderRight: '1px solid rgba(var(--rgb-slate), 0.6)',
           cursor: 'pointer', color: 'var(--c-475569)',
           display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-end',
           transition: 'color 0.15s',
@@ -428,6 +442,7 @@ import UpdateManagementView   from './components/updates/UpdateManagementView'
 // ── FinOps Module ─────────────────────────────────────────────────────────────
 import FinOpsOverview    from './finops/FinOpsOverview'
 import CostStudio        from './finops/CostStudio'
+import CostPulse         from './finops/CostPulse'
 import UnitEconomics     from './finops/UnitEconomics'
 import RecommendationStudio from './finops/RecommendationStudio'
 import AnalyzeHub        from './finops/AnalyzeHub'
@@ -438,6 +453,7 @@ import AnomalyIntelligence from './finops/AnomalyIntelligence'
 import CostLens          from './finops/CostLens'
 import FinOpsDashboard    from './finops/FinOpsDashboard'
 import ManagementDashboard from './finops/ManagementDashboard'
+import LogAnalyticsCost    from './finops/LogAnalyticsCost'
 import SavingsLedger       from './finops/SavingsLedger'
 import SubscriptionGovernance from './finops/SubscriptionGovernance'
 import BudgetManager      from './finops/BudgetManager'
@@ -2028,27 +2044,68 @@ function AppInner() {
   }, [data, isFiltered, filteredResources, filteredOrphans, filteredSavingsRecs, filteredRightsize,
       filteredScoreDist, filteredTypeSummary, subScopeSet, selectedSubscription, selectedResourceGroup])
 
-  // Compute sidebar badge counts from dashboard data
+  // ── Sidebar badge counts ─────────────────────────────────────────────────────
+  // A badge means "N items in this module need you". Every badge renders as the same
+  // neutral chip (.nav-badge) — the tooltip carries the severity and the source.
+  // Source is `pdfData` — the scope-filtered payload — so the counts always agree
+  // with the scope bar and with the exported PDF instead of staying estate-wide.
+  // Modules absent below simply have no count in this payload: Resilience/BCDR
+  // zone data comes from /api/bcdr/resilience, and Tags is excluded on purpose
+  // because untagged is 100% of the estate here, which flags everything and so
+  // signals nothing.
   const sidebarBadges = useMemo(() => {
-    if (!data) return {}
-    const gaps = data.security_gaps ?? []
-    const critSec = gaps.filter(g => g.severity === 'critical').length
-    const highSec = gaps.filter(g => g.severity === 'high').length
-    const bc = data.backup_coverage
-    const bcdrCrit = (bc?.critical_gaps ?? 0) + (bc?.high_gaps ?? 0)
-    const lopps = data.licensing_opportunities ?? []
-    const orphans = data.orphans ?? []
-    return {
-      security: critSec + highSec,
-      security_color: critSec > 0 ? '#ef4444' : '#f97316',
-      backup: bcdrCrit,
-      backup_color: bc?.critical_gaps > 0 ? '#ef4444' : '#f97316',
-      licensing: lopps.length > 0 ? lopps.length : 0,
-      licensing_color: '#22c55e',
-      resources: orphans.length > 0 ? orphans.length : 0,
-      resources_color: '#f97316',
+    const d = pdfData
+    if (!d) return {}
+    const is = (re, v) => re.test(String(v ?? ''))
+
+    const secGaps = d.security_gaps ?? []
+    const secCrit = secGaps.filter(g => is(/^critical$/i, g.severity)).length
+    const secHigh = secGaps.filter(g => is(/^high$/i, g.severity)).length
+    const bkCrit  = d.backup_coverage?.critical_gaps ?? 0
+    const bkHigh  = d.backup_coverage?.high_gaps ?? 0
+    const innov   = (d.innovation_gaps ?? []).filter(g => is(/^(critical|high)$/i, g.business_impact))
+    const advHigh = (d.resources ?? []).reduce((n, r) =>
+      n + (r.advisor_recommendations ?? []).filter(a => is(/^high$/i, a.impact)).length, 0)
+    const highSav = (d.savings_recommendations ?? []).filter(r => is(/^(critical|high)$/i, r.priority)).length
+
+    const out = {}
+    // `scoped` = this source carries subscription_id and so narrows with the scope
+    // bar. backup_coverage and acr_opportunities are estate-level aggregates, and
+    // innovation_gaps/orphans ship without subscription_id, so those four stay
+    // estate-wide — say so rather than let them look filtered.
+    const add = (key, count, title, scoped) => {
+      if (count <= 0) return
+      out[key] = count
+      out[key + '_title'] = title + (isFiltered && !scoped ? ' · estate-wide, not narrowed by the current scope' : '')
     }
-  }, [data])
+
+    // Every badge is the same neutral chip: a nav counter is a wayfinding cue, not an
+    // alarm, and a sidebar speckled with red/amber/green reads as noise. The tooltip
+    // carries the severity and the source.
+    add('security', secCrit + secHigh,
+        `${secCrit} critical + ${secHigh} high-severity security gaps`, true)
+    add('backup', bkCrit + bkHigh,
+        `${bkCrit} critical + ${bkHigh} high-severity backup gaps`, false)
+    add('innovation', innov.length,
+        `${innov.length} high-impact innovation gaps`, false)
+    add('advisor', advHigh,
+        `${advHigh} high-impact Azure Advisor recommendations`, true)
+    add('resources', (d.orphans ?? []).length,
+        `${(d.orphans ?? []).length} orphaned resources still billing`, false)
+    add('finops-anomalies', (d.cost_anomalies ?? []).length,
+        `${(d.cost_anomalies ?? []).length} open cost anomalies`, false)
+    add('migration', (d.modernization_opportunities ?? []).length,
+        `${(d.modernization_opportunities ?? []).length} modernisation opportunities`, true)
+    add('growth', d.acr_opportunities?.total_gaps ?? 0,
+        `${d.acr_opportunities?.total_gaps ?? 0} cloud adoption opportunities`, false)
+    add('licensing', (d.licensing_opportunities ?? []).length,
+        `${(d.licensing_opportunities ?? []).length} licensing & reservation opportunities`, true)
+    add('finops-optimization', highSav,
+        `${highSav} high-priority savings recommendations`, true)
+
+    return out
+  }, [pdfData, isFiltered])
+
 
   // Connection is managed by the deployment identity (prod) or local az login. The legacy
   // "Connect your Azure account" wizard (old "Azure Modernization Advisor" branding) is
@@ -2374,6 +2431,7 @@ function AppInner() {
         ]} />}
         {view === 'finops-management' && <FinOpsHub storageKey="finops:hub:mgmt" tabs={[
           { key: 'dashboard', label: 'Cost & Usage Review', render: () => <ManagementDashboard /> },
+          { key: 'loganalytics', label: 'Sentinel & Log Analytics', render: () => <LogAnalyticsCost /> },
           { key: 'governance', label: 'Subscription Governance', render: () => <SubscriptionGovernance /> },
           { key: 'ledger', label: 'Savings & ROI', render: () => <SavingsLedger /> },
         ]} />}
@@ -2381,8 +2439,10 @@ function AppInner() {
         {view === 'finops-analyze' && <AnalyzeHub />}
         {view === 'finops-costflow' && <CostFlow />}
         {view === 'finops-anomalies' && <AnomalyIntelligence />}
+        {view === 'finops-log-analytics' && <LogAnalyticsCost />}
         {view === 'finops-cost-lens' && <CostLens />}
         {view === 'finops-studio' && <CostStudio />}
+        {view === 'finops-pulse' && <CostPulse />}
         {view === 'finops' && <FinOpsDashboard />}
         {view === 'cost-explorer' && <AnalyzeHub />}
         {view === 'finops-dependencies' && <CostDependencies />}
@@ -2400,7 +2460,8 @@ function AppInner() {
         {view === 'finops-alerts' && <FinOpsAlerts />}
         {view === 'finops-warehouse' && <FinOpsWarehouse />}
         {view === 'finops-compliance' && <FinOpsComplianceView />}
-        {view === 'finops-exec' && <FinOpsExecutiveReport />}
+        {view === 'finops-exec' && <FinOpsExecutiveReport catalog="finops" />}
+        {view === 'reporting' && <FinOpsExecutiveReport catalog="all" />}
 
         {/* ── About / Features / FAQs ── */}
         {view === 'about' && <About tab="about" />}
@@ -3448,7 +3509,7 @@ function MaturityView({ data, filteredResources, moduleListMode, setModuleListMo
             <>
               <MaturityHero cm={cm} />
               <WAFScorecard waf={waf} />
-              <CloudMaturityPanel cloudMaturity={cm} />
+              <CloudMaturityPanel cloudMaturity={cm} resources={filteredResources} />
             </>
           )}
         </div>

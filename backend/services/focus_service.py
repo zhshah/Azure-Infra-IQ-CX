@@ -123,11 +123,11 @@ def _sub_names() -> Dict[str, str]:
     try:
         from services.database import get_connection
         with get_connection() as con:
-            con.execute(
+            cur = con.execute(
                 "SELECT DISTINCT subscription_id, subscription_name "
                 "FROM finops_daily_subscription_costs"
             )
-            for row in con.fetchall() or []:
+            for row in cur.fetchall() or []:
                 sid = row[0] if not isinstance(row, dict) else row.get("subscription_id")
                 nm = row[1] if not isinstance(row, dict) else row.get("subscription_name")
                 if sid:
@@ -175,8 +175,8 @@ def get_focus_records(
     rows: List[Any] = []
     try:
         with get_connection() as con:
-            con.execute(sql, params)
-            rows = con.fetchall() or []
+            cur = con.execute(sql, params)
+            rows = cur.fetchall() or []
     except Exception as exc:
         logger.warning("FOCUS: warehouse query failed: %s", exc)
         return []

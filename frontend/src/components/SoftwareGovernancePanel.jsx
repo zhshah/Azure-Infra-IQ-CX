@@ -268,7 +268,7 @@ export default function SoftwareGovernancePanel() {
                       <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{c.publisher || '—'}</td>
                       <td style={{ padding: '6px 8px' }}><CatBadge category={c.category} /></td>
                       <td style={{ padding: '6px 8px' }}><Badge text={c.risk} color={RISK_COLOR[c.risk]} /></td>
-                      <td style={{ padding: '6px 8px', color: c.license === 'commercial' ? '#c4b5fd' : 'var(--c-94a3b8)' }}>{c.license}</td>
+                      <td style={{ padding: '6px 8px', color: c.license === 'commercial' ? 'var(--c-c4b5fd)' : 'var(--c-94a3b8)' }}>{c.license}</td>
                       <td style={{ padding: '6px 8px' }}><span style={{ color: EOL_COLOR[c.eol_status] || 'var(--c-64748b)' }}>{c.eol_status}</span></td>
                       <td style={{ padding: '6px 8px', color: 'var(--c-60a5fa)', fontWeight: 700 }} title={(c.servers || []).join(', ')}>{c.server_count}</td>
                       <td style={{ padding: '6px 8px' }}>

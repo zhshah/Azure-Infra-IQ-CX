@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
 import uuid
 from contextlib import contextmanager
@@ -62,9 +63,22 @@ except ImportError:
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-DAILY_RESOURCE_DAYS = 30   # how many days of resource-level daily grain to keep
-MONTHLY_SERVICE_MONTHS = 12  # how many months of monthly service grain to keep
-MONTHLY_TAG_MONTHS = 3       # how many months of monthly tag grain to keep
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, "") or default))
+    except (TypeError, ValueError):
+        return default
+
+
+# Azure Cost Management retains roughly 13 months of ActualCost, so these default to
+# the practical maximum rather than a token window — a shallow warehouse makes every
+# trend, forecast and year-on-year comparison in the product useless. Widening does
+# NOT multiply API calls (each collector issues one range query per subscription), it
+# only returns more rows. Env-tunable for tenants where a full pull is too slow.
+DAILY_RESOURCE_DAYS = _env_int("FINOPS_DAILY_RESOURCE_DAYS", 90)        # resource-level daily grain
+MONTHLY_SERVICE_MONTHS = _env_int("FINOPS_MONTHLY_SERVICE_MONTHS", 13)  # monthly service grain
+MONTHLY_TAG_MONTHS = _env_int("FINOPS_MONTHLY_TAG_MONTHS", 13)          # monthly tag grain
 
 # ── Initial (first-run) windows ──────────────────────────────────────────────────────────────────────────
 # On a brand-new deployment the very first collection uses these SMALL windows so the
@@ -97,7 +111,7 @@ ANOMALY_MIN_COST_USD = 5.0  # ignore spikes on resources costing < $5/day avg
 # ── Analyze (warehouse-backed Cost Analysis) dimensional grain ──────────────────
 # Daily cost grouped by dimensions that do NOT trigger Cost Management per-resource
 # (ResourceId) throttling. Powers the "Analyze" experience entirely from SQL.
-ANALYZE_DIMENSION_DAYS = 120          # rolling daily window for the dimension warehouse
+ANALYZE_DIMENSION_DAYS = _env_int("FINOPS_ANALYZE_DIMENSION_DAYS", 395)  # ~13 months
 ANALYZE_DIMENSION_DAYS_INITIAL = 35   # fast first-run window
 ANALYZE_COST_TYPES = ("ActualCost", "AmortizedCost")
 # our dimension key → Azure Cost Management grouping dimension
@@ -131,6 +145,57 @@ def _conn():
 
 # ── ETL run tracking ──────────────────────────────────────────────────────────
 
+# ── Collection failure classification ─────────────────────────────────────────
+# An ETL run that collected nothing because the credential expired is NOT the same
+# as a tenant that genuinely has no spend, but both used to be written as
+# `status=completed, rows=0` — so every dashboard downstream said "no data collected
+# yet" when the truth was "we could not authenticate". Classify the cause and record
+# it, so the UI and the AI can tell the difference.
+_AUTH_HINTS = (
+    "aadsts70043", "aadsts700", "invalid_grant", "token_expired", "refresh token",
+    "credentialunavailable", "defaultazurecredential failed", "az login",
+    "interactionrequired", "authenticationrequired",
+)
+_PERM_HINTS = (
+    "authorizationfailed", "does not have authorization", "not authorized",
+    "forbidden", "insufficient privileges", "cost management reader",
+)
+_THROTTLE_HINTS = ("429", "too many requests", "throttl", "rate limit", "retry-after")
+
+_CAUSE_MESSAGE = {
+    "auth": "Azure sign-in has expired — run `az login` (local) or check the managed "
+            "identity. No cost data could be read.",
+    "permission": "The identity lacks Cost Management Reader on one or more "
+                  "subscriptions, so their cost data could not be read.",
+    "throttled": "Azure Cost Management throttled the request (429). Collected what it "
+                 "could; the next run will fill the gap.",
+    "error": "Collection failed — see error_message.",
+}
+
+
+def classify_collection_error(message: Any) -> str:
+    """Map a raw Azure error onto auth | permission | throttled | error."""
+    m = str(message or "").lower()
+    if any(h in m for h in _AUTH_HINTS):
+        return "auth"
+    if any(h in m for h in _PERM_HINTS):
+        return "permission"
+    if any(h in m for h in _THROTTLE_HINTS):
+        return "throttled"
+    return "error"
+
+
+def probe_credential() -> Tuple[bool, str]:
+    """Can we get an ARM token at all? Cheap, and it turns the most common cause of an
+    empty warehouse into a named, actionable failure instead of a silent zero."""
+    try:
+        from services.azure_auth import get_credential
+        get_credential().get_token("https://management.azure.com/.default")
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
 def _start_etl_run(triggered_by: str = "scheduler") -> str:
     run_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
@@ -147,9 +212,10 @@ def _start_etl_run(triggered_by: str = "scheduler") -> str:
     return run_id
 
 
-def _finish_etl_run(run_id: str, counters: dict, error: Optional[str] = None) -> None:
+def _finish_etl_run(run_id: str, counters: dict, error: Optional[str] = None,
+                    status: Optional[str] = None) -> None:
     now = datetime.now(timezone.utc).isoformat()
-    status = "failed" if error else "completed"
+    status = status or ("failed" if error else "completed")
     try:
         with _conn() as con:
             con.execute(
@@ -329,6 +395,86 @@ def _collect_mgmt_group_costs(today: date, run_id: str,
     return written
 
 
+# ── ETL step: auxiliary warehouses ────────────────────────────────────────────
+
+def _collect_auxiliary_warehouses(subscription_ids: List[str], run_id: str) -> Dict[str, int]:
+    """Populate the tables whose collectors sit outside the cost-grain passes.
+
+    Each of these owns a table that stays EMPTY unless something calls it, which is why
+    a deployed instance showed no budgets, no Sentinel/Log Analytics table costs and a
+    frozen utilisation history. Every step is independent and best-effort so one failure
+    cannot abort the ETL.
+    """
+    out: Dict[str, int] = {}
+
+    # Azure-native budgets → finops_budgets (previously only via ?sync_azure=true)
+    try:
+        from services import budget_service as _bud
+        out["budgets_synced"] = int(_bud.sync_azure_budgets(subscription_ids) or 0)
+    except Exception as e:
+        logger.warning("ETL: Azure budget sync failed: %s", e)
+
+    # Per-table Log Analytics / Sentinel ingestion cost → finops_la_table_costs
+    try:
+        from services import log_analytics_cost_service as _la
+        res = _la.collect_all(subscription_ids=subscription_ids, run_id=run_id)
+        out["la_table_rows"] = int((res or {}).get("rows", 0) or 0)
+    except Exception as e:
+        logger.warning("ETL: Log Analytics per-table cost collection failed: %s", e)
+
+    # Utilisation + storage-capacity history → finops_resource_utilization /
+    # finops_storage_capacity. Reads the persisted scan so it costs no Azure calls;
+    # the collectors use getattr(), hence the DashboardData rehydrate.
+    try:
+        from models.schemas import DashboardData
+        from services import finops_dashboard_service as _dash2
+        from services import persistence_service as _pers
+        snap = _pers.load_latest_dashboard()
+        if snap and (snap.get("resources") or []):
+            data = DashboardData(**{k: v for k, v in snap.items() if k in DashboardData.model_fields})
+            resources = data.resources or []
+            out["utilization_rows"] = _dash2.snapshot_utilization(resources, run_id)
+            out["storage_rows"] = _dash2.snapshot_storage_capacity(resources, run_id)
+    except Exception as e:
+        logger.warning("ETL: utilisation/storage snapshot failed: %s", e)
+
+    logger.info("ETL: auxiliary warehouses -> %s", out)
+    return out
+
+
+def missing_datasets() -> List[str]:
+    """Warehouse datasets that are still completely empty.
+
+    ``has_warehouse_data()`` only looks at the cost tables, so deploying onto a database
+    that already held cost rows never populated the auxiliary datasets. The startup gate
+    uses this to gap-fill exactly what is missing.
+    """
+    if not _DB_AVAILABLE:
+        return []
+    checks = {
+        "resource_costs":  "finops_daily_resource_costs",
+        "dimension_costs": "finops_daily_dimension_costs",
+        "meter_costs":     "finops_daily_meter_costs",
+        "budgets":         "finops_budgets",
+        "la_table_costs":  "finops_la_table_costs",
+        "utilization":     "finops_resource_utilization",
+        "storage_capacity": "finops_storage_capacity",
+    }
+    empty: List[str] = []
+    try:
+        with _conn() as con:
+            for label, table in checks.items():
+                try:
+                    cur = con.execute(f"SELECT COUNT(*) FROM {table}")
+                    if int((cur.fetchall() or [[0]])[0][0] or 0) == 0:
+                        empty.append(label)
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.warning("warehouse: dataset gap check failed: %s", e)
+    return empty
+
+
 # ── Main ETL orchestrator ──────────────────────────────────────────────────────
 
 def run_full_etl(
@@ -360,6 +506,16 @@ def run_full_etl(
     run_id = _start_etl_run(triggered_by)
     logger.info("ETL run %s started for %d subscriptions", run_id, len(subscription_ids))
 
+    # Fail fast and loudly on a dead credential rather than writing a run that looks
+    # successful but collected nothing.
+    _cred_ok, _cred_err = probe_credential()
+    if not _cred_ok:
+        cause = classify_collection_error(_cred_err)
+        msg = f"{_CAUSE_MESSAGE.get(cause, _CAUSE_MESSAGE['error'])} ({_cred_err[:300]})"
+        logger.error("ETL run %s aborted — %s", run_id, msg)
+        _finish_etl_run(run_id, {"subscriptions": len(subscription_ids)}, error=msg, status="failed")
+        return {"status": "failed", "run_id": run_id, "cause": cause, "message": msg}
+
     counters: Dict[str, int] = {
         "subscriptions": len(subscription_ids),
         "resource_costs": 0,
@@ -371,6 +527,7 @@ def run_full_etl(
 
     try:
         today = datetime.now(timezone.utc).date()
+        sub_errors: List[str] = []
 
         # First-run uses small windows; the background backfill pass uses the full ones.
         daily_days = DAILY_RESOURCE_DAYS_INITIAL if initial else DAILY_RESOURCE_DAYS
@@ -424,6 +581,7 @@ def run_full_etl(
 
             except Exception as sub_err:
                 logger.error("ETL: subscription %s failed: %s", sub_id, sub_err)
+                sub_errors.append(f"{sub_id[:8]}: {sub_err}")
                 # Continue with next subscription — partial data is better than none
 
         # e) Anomaly detection runs across all freshly-loaded daily data
@@ -459,6 +617,9 @@ def run_full_etl(
         except Exception as _mge:
             logger.warning("ETL: management group rollup failed: %s", _mge)
 
+        # i) Budgets, Sentinel/LA per-table cost, utilisation + storage history.
+        counters.update(_collect_auxiliary_warehouses(subscription_ids, run_id))
+
         # f) Purge old data beyond retention window
         _purge_old_data(today)
         try:
@@ -469,9 +630,20 @@ def run_full_etl(
         except Exception as _pe:
             logger.warning("ETL: extended purge failed: %s", _pe)
 
-        _finish_etl_run(run_id, counters)
-        logger.info("ETL run %s completed: %s", run_id, counters)
-        return {"status": "completed", "run_id": run_id, **counters}
+        # A run that read nothing is only "completed" when the tenant genuinely has no
+        # spend; if any subscription errored, say so instead of publishing a clean zero.
+        _cost_rows = sum(counters.get(k, 0) for k in
+                         ("resource_costs", "sub_costs", "service_costs", "tag_costs", "meter_costs"))
+        _cause = classify_collection_error(" ".join(sub_errors)) if sub_errors else ""
+        _status, _err_msg = "completed", None
+        if sub_errors:
+            _status = "failed" if _cost_rows == 0 else "partial"
+            _err_msg = f"{_CAUSE_MESSAGE.get(_cause, _CAUSE_MESSAGE['error'])} " \
+                       f"{len(sub_errors)}/{len(subscription_ids)} subscription(s): " + " | ".join(sub_errors)[:600]
+
+        _finish_etl_run(run_id, counters, error=_err_msg, status=_status)
+        logger.info("ETL run %s %s: %s", run_id, _status, counters)
+        return {"status": _status, "run_id": run_id, "cause": _cause, **counters}
 
     except Exception as e:
         logger.exception("ETL run %s failed: %s", run_id, e)

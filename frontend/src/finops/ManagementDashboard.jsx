@@ -39,6 +39,84 @@ const card = {
 
 const num = (v) => (v === null || v === undefined ? '—' : v)
 
+/**
+ * Share donut + its own key.
+ *
+ * A plain <Pie label> writes a label for every slice, so a category list with
+ * several $0 rows stacked six "0%" labels and their leader lines on top of each
+ * other. Here zero-value slices are dropped from the arc (they stay in the
+ * table), labels are drawn INSIDE the slice so they can never collide, and only
+ * slices big enough to hold text get one. Hovering either the arc or a key row
+ * highlights the other, which is what actually answers "what belongs to what".
+ */
+function ShareDonut({ data, nameKey, valueKey, colorOf, total, height = 260, hovered, onHover }) {
+  const rows = (data || []).filter(d => Number(d[valueKey]) > 0)
+  const sum = total ?? rows.reduce((s, d) => s + Number(d[valueKey] || 0), 0)
+  if (!rows.length) {
+    return (
+      <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: 'var(--c-64748b, #64748b)', fontSize: 12 }}>
+        No spend to chart in this period.
+      </div>
+    )
+  }
+  const renderLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }) => {
+    if (percent < 0.05) return null            // too thin to hold text
+    const RAD = Math.PI / 180
+    const r = innerRadius + (outerRadius - innerRadius) * 0.5
+    const x = cx + r * Math.cos(-midAngle * RAD)
+    const y = cy + r * Math.sin(-midAngle * RAD)
+    // Percentage only: the ring is too narrow for names, and the key beside the
+    // chart already carries them. The centre shows the name on hover.
+    return (
+      <text x={x} y={y} textAnchor="middle" dominantBaseline="central"
+            fill="#ffffff" fontSize={12} fontWeight={700} style={{ pointerEvents: 'none' }}>
+        {`${(percent * 100).toFixed(percent < 0.1 ? 1 : 0)}%`}
+      </text>
+    )
+  }
+  const active = hovered ? rows.find(d => d[nameKey] === hovered) : null
+  return (
+    <div style={{ height, position: 'relative' }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie data={rows} dataKey={valueKey} nameKey={nameKey} cx="50%" cy="50%"
+               innerRadius="52%" outerRadius="82%" paddingAngle={1} minAngle={2}
+               labelLine={false} label={renderLabel} isAnimationActive={false}
+               onMouseEnter={(_, i) => onHover?.(rows[i][nameKey])}
+               onMouseLeave={() => onHover?.(null)}>
+            {rows.map((d, i) => (
+              <Cell key={i} fill={colorOf(d, i)}
+                    stroke={hovered === d[nameKey] ? '#ffffff' : 'transparent'}
+                    strokeWidth={hovered === d[nameKey] ? 2 : 0}
+                    opacity={!hovered || hovered === d[nameKey] ? 1 : 0.32} />
+            ))}
+          </Pie>
+          <Tooltip {...tooltipStyle} formatter={(v, n) => [fmtUsd(v), n]} />
+        </PieChart>
+      </ResponsiveContainer>
+      <div style={{
+        position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', padding: '0 22%',
+      }}>
+        <div style={{ fontSize: 9.5, letterSpacing: 0.5, textTransform: 'uppercase', color: 'var(--c-64748b, #64748b)',
+                      textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
+          {active ? active[nameKey] : 'Total'}
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--c-e2e8f0, #e2e8f0)', fontVariantNumeric: 'tabular-nums' }}>
+          {fmtUsd(active ? active[valueKey] : sum)}
+        </div>
+        {active && sum > 0 && (
+          <div style={{ fontSize: 10.5, color: 'var(--c-94a3b8, #94a3b8)', fontVariantNumeric: 'tabular-nums' }}>
+            {((Number(active[valueKey]) / sum) * 100).toFixed(1)}% of total
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
 function Kpi({ label, value, sub, color, icon: Icon }) {
   return (
     <div style={{ ...card, flex: '1 1 180px', minWidth: 170 }}>
@@ -94,6 +172,8 @@ export default function ManagementDashboard() {
   const [error, setError] = useState(null)
   const [collecting, setCollecting] = useState(false)
   const [days, setDays] = useState(30)
+  const [hoverCat, setHoverCat] = useState(null)
+  const [hoverEnv, setHoverEnv] = useState(null)
 
   const load = async () => {
     setLoading(true); setError(null)
@@ -195,18 +275,13 @@ export default function ManagementDashboard() {
           <NoData what="service category" hint="Requires meter-level collection." />
         ) : (
           <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-            <div style={{ flex: '1 1 320px', height: 260 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={service_categories.categories} dataKey="cost_usd" nameKey="category"
-                    cx="50%" cy="50%" outerRadius={95} label={(e) => `${e.cost_pct}%`}>
-                    {(service_categories.categories || []).map((_, i) => (
-                      <Cell key={i} fill={PALETTE[i % PALETTE.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip {...tooltipStyle} formatter={(v) => fmtUsd(v)} />
-                </PieChart>
-              </ResponsiveContainer>
+            <div style={{ flex: '1 1 320px' }}>
+              <ShareDonut
+                data={service_categories.categories}
+                nameKey="category" valueKey="cost_usd"
+                colorOf={(c) => PALETTE[(service_categories.categories || []).indexOf(c) % PALETTE.length]}
+                hovered={hoverCat} onHover={setHoverCat}
+              />
             </div>
             <div style={{ flex: '1 1 320px' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
@@ -218,16 +293,32 @@ export default function ManagementDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(service_categories.categories || []).map((c, i) => (
-                    <tr key={c.category} style={{ borderTop: '1px solid var(--c-1e293b, #1e293b)' }}>
-                      <td style={{ padding: '6px 8px', color: 'var(--c-e2e8f0, #e2e8f0)' }}>
-                        <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: PALETTE[i % PALETTE.length], marginRight: 8 }} />
-                        {c.category}
-                      </td>
-                      <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--c-e2e8f0, #e2e8f0)' }}>{fmtUsd(c.cost_usd)}</td>
-                      <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--c-94a3b8, #94a3b8)' }}>{c.cost_pct}%</td>
-                    </tr>
-                  ))}
+                  {(service_categories.categories || []).map((c, i) => {
+                    const zero = !(Number(c.cost_usd) > 0)
+                    const on = hoverCat === c.category
+                    return (
+                      <tr key={c.category}
+                          onMouseEnter={() => setHoverCat(c.category)}
+                          onMouseLeave={() => setHoverCat(null)}
+                          style={{
+                            borderTop: '1px solid var(--c-1e293b, #1e293b)',
+                            background: on ? 'rgba(59,130,246,.12)' : 'transparent',
+                            opacity: zero ? 0.55 : 1,
+                          }}>
+                        <td style={{ padding: '6px 8px', color: 'var(--c-e2e8f0, #e2e8f0)' }}>
+                          <span style={{
+                            display: 'inline-block', width: 8, height: 8, borderRadius: 2,
+                            background: zero ? 'var(--c-475569, #475569)' : PALETTE[i % PALETTE.length],
+                            marginRight: 8,
+                          }} />
+                          {c.category}
+                          {zero && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--c-64748b, #64748b)' }}>no spend</span>}
+                        </td>
+                        <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--c-e2e8f0, #e2e8f0)', fontVariantNumeric: 'tabular-nums' }}>{fmtUsd(c.cost_usd)}</td>
+                        <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--c-94a3b8, #94a3b8)', fontVariantNumeric: 'tabular-nums' }}>{c.cost_pct}%</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -488,19 +579,29 @@ export default function ManagementDashboard() {
                 value={prodCost + nonProdCost > 0 ? `${Math.round(nonProdCost / (prodCost + nonProdCost) * 100)}%` : '—'}
                 sub="of classified spend" />
             </div>
-            <div style={{ flex: '1 1 300px', height: 200 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={environments.environments} dataKey="cost_usd" nameKey="environment"
-                    cx="50%" cy="50%" outerRadius={75} label={(e) => `${e.cost_pct}%`}>
-                    {(environments.environments || []).map((e, i) => (
-                      <Cell key={i} fill={ENV_COLORS[e.environment] || PALETTE[i % PALETTE.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip {...tooltipStyle} formatter={(v) => fmtUsd(v)} />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                </PieChart>
-              </ResponsiveContainer>
+            <div style={{ flex: '1 1 300px' }}>
+              <ShareDonut
+                data={environments.environments}
+                nameKey="environment" valueKey="cost_usd"
+                colorOf={(e, i) => ENV_COLORS[e.environment] || PALETTE[i % PALETTE.length]}
+                height={200}
+                hovered={hoverEnv} onHover={setHoverEnv}
+              />
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4 }}>
+                {(environments.environments || []).map((e, i) => (
+                  <span key={e.environment}
+                        onMouseEnter={() => setHoverEnv(e.environment)}
+                        onMouseLeave={() => setHoverEnv(null)}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, cursor: 'default',
+                          color: 'var(--c-cbd5e1, #cbd5e1)',
+                          opacity: !hoverEnv || hoverEnv === e.environment ? 1 : 0.45,
+                        }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 2, background: ENV_COLORS[e.environment] || PALETTE[i % PALETTE.length] }} />
+                    {e.environment} <span style={{ color: 'var(--c-64748b, #64748b)' }}>{fmtUsd(e.cost_usd)}</span>
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
         )}

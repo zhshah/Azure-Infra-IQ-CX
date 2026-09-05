@@ -117,6 +117,9 @@ _cache: Dict[str, Any] = {
     "machines": None,
     "last_refresh": None,
     "ttl_minutes": 15,
+    # Why a query returned nothing. Without this an auth/permission failure is
+    # indistinguishable from "this estate has no machines" and renders as a confident 0.
+    "errors": {},
 }
 
 
@@ -135,31 +138,47 @@ async def refresh_cache() -> None:
     sub_ids = get_subscription_ids()
     if not sub_ids:
         logger.warning("update_management: no subscription IDs configured")
+        _cache["errors"] = {"machines": "No subscriptions are configured, so Update Manager was never queried."}
+        _cache["machines"] = []
+        _cache["assessments"] = []
+        _cache["installations"] = []
+        _cache["last_refresh"] = datetime.now(timezone.utc)
         return
 
     logger.info("update_management: refreshing data from Resource Graph...")
+    errors: Dict[str, str] = {}
 
     try:
         _cache["machines"] = query_resource_graph(_VM_LIST_KQL, sub_ids, max_results=10000)
         logger.info(f"update_management: found {len(_cache['machines'])} machines")
+        if not getattr(_cache["machines"], "ok", True):
+            errors["machines"] = getattr(_cache["machines"], "error", "Resource Graph query failed")
     except Exception as e:
         logger.warning(f"update_management: VM list query failed: {e}")
         _cache["machines"] = []
+        errors["machines"] = str(e)
 
     try:
         _cache["assessments"] = query_resource_graph(_PATCH_ASSESSMENT_KQL, sub_ids, max_results=10000)
         logger.info(f"update_management: found {len(_cache['assessments'])} assessment results")
+        if not getattr(_cache["assessments"], "ok", True):
+            errors["assessments"] = getattr(_cache["assessments"], "error", "Resource Graph query failed")
     except Exception as e:
         logger.warning(f"update_management: assessment query failed: {e}")
         _cache["assessments"] = []
+        errors["assessments"] = str(e)
 
     try:
         _cache["installations"] = query_resource_graph(_PATCH_INSTALLATION_KQL, sub_ids, max_results=10000)
         logger.info(f"update_management: found {len(_cache['installations'])} installation results")
+        if not getattr(_cache["installations"], "ok", True):
+            errors["installations"] = getattr(_cache["installations"], "error", "Resource Graph query failed")
     except Exception as e:
         logger.warning(f"update_management: installation query failed: {e}")
         _cache["installations"] = []
+        errors["installations"] = str(e)
 
+    _cache["errors"] = errors
     _cache["last_refresh"] = datetime.now(timezone.utc)
     logger.info("update_management: cache refresh complete")
 
@@ -317,9 +336,15 @@ async def get_update_summary() -> UpdateManagementSummary:
     """Get high-level KPIs for the Update Management dashboard."""
     await _ensure_cache()
     machines = _build_all_machine_statuses()
-    
+    errors = _cache.get("errors") or {}
+    collection_error = errors.get("machines", "")
+
     if not machines:
-        return UpdateManagementSummary(assessment_time=datetime.now(timezone.utc).isoformat())
+        return UpdateManagementSummary(
+            assessment_time=datetime.now(timezone.utc).isoformat(),
+            collection_ok=not collection_error,
+            collection_error=collection_error,
+        )
 
     azure_vms = [m for m in machines if m.machine_type == "AzureVM"]
     arc_machines = [m for m in machines if m.machine_type == "Arc"]
@@ -362,6 +387,8 @@ async def get_update_summary() -> UpdateManagementSummary:
         linux_machines=len(linux),
         machines_without_assessment=len(without_assessment),
         assessment_time=_cache.get("last_refresh", datetime.now(timezone.utc)).isoformat(),
+        collection_ok=not collection_error,
+        collection_error=collection_error,
     )
 
 

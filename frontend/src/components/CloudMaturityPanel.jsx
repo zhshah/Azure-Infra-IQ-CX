@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import AIControlsBar, { AffectedResources, EMPTY_AI_CONTROLS, aiControlsQuery } from "./ai/AIAnalysisTools";
 import { Cloud, CloudSun, CloudHail, CloudFog, Landmark, BarChart3 } from "lucide-react";
 
 const GRADE_COLOR = { A: "#22c55e", B: "#84cc16", C: "#eab308", D: "#f97316", F: "#ef4444" };
@@ -84,6 +85,7 @@ function DimensionBar({ dim }) {
                   <span style={{ color: "#22c55e" }}>→</span><span>{r}</span>
                 </div>
               ))}
+              <AffectedResources items={dim.affected_resources} count={dim.affected_count} />
             </div>
           )}
         </>
@@ -92,10 +94,32 @@ function DimensionBar({ dim }) {
   );
 }
 
-export default function CloudMaturityPanel({ cloudMaturity }) {
-  if (!cloudMaturity) return null;
+export default function CloudMaturityPanel({ cloudMaturity, resources = null }) {
+  const [controls, setControls] = useState(EMPTY_AI_CONTROLS);
+  const [scoped, setScoped]     = useState(null);   // scoped re-run result
+  const [busy, setBusy]         = useState(false);
+  const [err, setErr]           = useState(null);
 
-  const { overall_score, overall_grade, overall_label, dimensions } = cloudMaturity;
+  const applyControls = async (next) => {
+    setControls(next);
+    const q = aiControlsQuery(next);
+    if (!q) { setScoped(null); setErr(null); return; }   // back to the estate-wide view
+    setBusy(true); setErr(null);
+    try {
+      const res = await fetch(`/api/ai/maturity?refresh=true${q}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setScoped(await res.json());
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const view = scoped || cloudMaturity;
+  if (!view) return null;
+
+  const { overall_score, overall_grade, overall_label, dimensions } = view;
   const gradeColor  = GRADE_COLOR[overall_grade]  || "var(--c-64748b)";
   const labelColor  = LABEL_COLOR[overall_label]  || "var(--c-64748b)";
   const labelIcon   = LABEL_ICON[overall_label]   || Cloud;
@@ -146,6 +170,26 @@ export default function CloudMaturityPanel({ cloudMaturity }) {
           <div style={{ color: "var(--c-64748b)", fontSize: 12, marginTop: 1 }}>{labelDesc}</div>
         </div>
       </div>
+
+      {/* AI controls — scope / context / filter / export */}
+      <AIControlsBar
+        title="Cloud Maturity Index"
+        report={view}
+        resources={resources}
+        value={controls}
+        onApply={applyControls}
+        busy={busy}
+      />
+      {scoped && (
+        <div style={{ fontSize: 11, color: "#93c5fd", marginBottom: 10 }}>
+          Showing a re-run scoped to your selection. Clear the chips above to return to the estate-wide assessment.
+        </div>
+      )}
+      {err && (
+        <div style={{ fontSize: 11, color: "#f87171", marginBottom: 10 }}>
+          Scoped analysis failed: {err}
+        </div>
+      )}
 
       {/* Dimension bars */}
       <div>

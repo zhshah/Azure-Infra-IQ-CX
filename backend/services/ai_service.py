@@ -101,6 +101,19 @@ def _build_resource_context(resource: dict) -> dict:
     return ctx
 
 
+# Defined locally rather than imported from ai_infra_service to avoid an import cycle.
+_MONEY_DISCIPLINE = """
+
+MONEY DISCIPLINE (MANDATORY):
+- Every dollar must come from a supplied cost/savings field, or be a simple sum of them. Never
+  invent, infer from SKU knowledge, or estimate a price.
+- A $0 cost means NOT ATTRIBUTED (Azure Cost Management throttles per-resource cost), not free
+  and not idle. Never present $0 as evidence of no spend or of a saving.
+- Do not annualise by 8760 hours and do not extrapolate a month-to-date figure to a longer period.
+- Percentages must be derived from supplied numbers and stated with their base.
+- Prefer counts and configuration facts over money when cost data is missing.
+"""
+
 _SYSTEM_PROMPT = """You are an Azure cloud cost optimisation expert.
 You receive a batch of Azure resources with their cost, utilisation metrics,
 trend data, and Azure Advisor recommendations.
@@ -290,7 +303,7 @@ def get_ai_verdicts(resources: List[dict]) -> List[AIVerdict]:
     elif provider == "azure_openai":
         endpoint   = svc.get_value("AZURE_OPENAI_ENDPOINT",   "")
         api_key    = svc.get_value("AZURE_OPENAI_KEY",        "")
-        deployment = svc.get_value("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+        deployment = svc.get_value("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-sol")
         if not endpoint or not api_key:
             logger.info("Azure OpenAI selected but credentials not set — skipping AI scoring")
             return []
@@ -382,6 +395,10 @@ Use plain English — no bullet points, no headers, no markdown. Write for a bus
 Be specific with numbers. Be direct and actionable."""
 
 
+_SYSTEM_PROMPT += _MONEY_DISCIPLINE
+_NARRATIVE_SYSTEM += _MONEY_DISCIPLINE
+
+
 def get_ai_narrative(resources: list, kpi) -> str | None:
     """
     Generate a plain-English narrative summary of the subscription's cost health.
@@ -450,7 +467,7 @@ def get_ai_narrative(resources: list, kpi) -> str | None:
         elif provider == "azure_openai":
             endpoint   = svc.get_value("AZURE_OPENAI_ENDPOINT", "")
             api_key    = svc.get_value("AZURE_OPENAI_KEY", "")
-            deployment = svc.get_value("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+            deployment = svc.get_value("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-sol")
             if not endpoint or not api_key:
                 return None
             from openai import AzureOpenAI

@@ -42,11 +42,15 @@ _TYPE_LABEL = {
 
 def get_service_health(subscription_ids: Optional[List[str]] = None) -> Dict[str, Any]:
     """Service Health events rollup (active issues, maintenance, advisories)."""
+    collection_error = ""
     try:
         rows = query_resource_graph(_EVENTS_KQL, subscription_ids, max_results=20000)
+        if not getattr(rows, "ok", True):
+            collection_error = getattr(rows, "error", "Resource Graph query failed")
     except Exception as exc:
         logger.warning("service_health: query failed: %s", exc)
         rows = []
+        collection_error = str(exc)
 
     by_type: Dict[str, int] = {}
     active = 0
@@ -85,6 +89,9 @@ def get_service_health(subscription_ids: Optional[List[str]] = None) -> Dict[str
         "by_type": by_type,
         "items": items[:1000],
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        # Zero events and "we could not ask" look identical without this.
+        "collection_ok": not collection_error,
+        "collection_error": collection_error,
     }
 
 

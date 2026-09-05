@@ -78,7 +78,18 @@ RUN apt-get update \
 
 # Graft the pure-JS ZureMap engine (Node app at /app) from the engine image. Cross-arch file
 # copy: the arm64 engine's JavaScript runs on the amd64 Node runtime installed above.
-COPY --from=zmengine /app /app
+#
+# The graft is OPTIONAL, mirroring container-start.sh, which probes /app/proxy/server.js and
+# sets ZUREMAP_ENABLED=0 when the engine is absent. ZUREMAP_IMAGE therefore may legitimately
+# point at a plain base image (e.g. when the private upstream engine image is unavailable),
+# and this COPY must not hard-fail in that case.
+#   * `/app[/]` is a glob that matches ONLY when the engine image actually has /app.
+#   * `/etc/hostname` is a guaranteed-present sentinel, so at least one source always matches
+#     and Docker never aborts with "no source files were specified". It lands as the inert
+#     file /app/hostname, which nothing reads.
+# When a real engine image IS supplied this behaves exactly as `COPY /app /app` did: a
+# directory source copies its CONTENTS into the destination.
+COPY --from=zmengine /etc/hostname /app[/] /app/
 
 # Python deps in an isolated venv (avoids Debian's externally-managed-environment).
 COPY backend/requirements.txt /srv/app/requirements.txt

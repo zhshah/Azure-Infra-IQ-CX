@@ -1388,19 +1388,19 @@ $aiCapacity = 0
 if ($deployedCapacity) { [int]::TryParse($deployedCapacity, [ref]$aiCapacity) | Out-Null }
 $isProvisioned = ($deployedSku -like "*Provisioned*")
 if ($isProvisioned) {
-    $aiMaxRetries = 3; $aiBackoff = 10; $aiMaxTokens = 8192; $aiCtxResources = 150
+    $aiMaxRetries = 3; $aiBackoff = 10; $aiMaxTokens = 16384; $aiCtxResources = 400; $aiEffort = "high"
     $aiTuneNote = "provisioned (PTU) throughput"
 } elseif ($aiCapacity -gt 0 -and $aiCapacity -lt 100) {
-    $aiMaxRetries = 5; $aiBackoff = 20; $aiMaxTokens = 4096; $aiCtxResources = 40
+    $aiMaxRetries = 5; $aiBackoff = 20; $aiMaxTokens = 4096; $aiCtxResources = 40; $aiEffort = "low"
     $aiTuneNote = "low shared quota (${aiCapacity}K TPM)"
-} elseif ($aiCapacity -gt 0 -and $aiCapacity -lt 400) {
-    $aiMaxRetries = 4; $aiBackoff = 15; $aiMaxTokens = 6144; $aiCtxResources = 80
+} elseif ($aiCapacity -gt 0 -and $aiCapacity -lt 200) {
+    $aiMaxRetries = 4; $aiBackoff = 15; $aiMaxTokens = 8192; $aiCtxResources = 120; $aiEffort = "medium"
     $aiTuneNote = "moderate shared quota (${aiCapacity}K TPM)"
 } else {
-    $aiMaxRetries = 3; $aiBackoff = 15; $aiMaxTokens = 8192; $aiCtxResources = 150
+    $aiMaxRetries = 3; $aiBackoff = 15; $aiMaxTokens = 16384; $aiCtxResources = 400; $aiEffort = "high"
     $aiTuneNote = if ($aiCapacity -gt 0) { "ample quota (${aiCapacity}K TPM)" } else { "capacity not readable - using safe defaults" }
 }
-Write-Info "AI throughput tuning: $aiTuneNote -> retries=$aiMaxRetries backoff=${aiBackoff}s maxTokens=$aiMaxTokens contextResources=$aiCtxResources"
+Write-Info "AI throughput tuning: $aiTuneNote -> retries=$aiMaxRetries backoff=${aiBackoff}s maxTokens=$aiMaxTokens contextResources=$aiCtxResources reasoning=$aiEffort"
 
 # ============================================
 # PRIVATE ENDPOINT FOR OPENAI (PRIVATE MODE)
@@ -2013,6 +2013,7 @@ $settings = @(
     "AI_RETRY_BACKOFF_SECONDS=$aiBackoff",
     "AI_MAX_TOKENS_ANALYSIS=$aiMaxTokens",
     "AI_MAX_RESOURCES_CONTEXT=$aiCtxResources",
+    "AI_REASONING_EFFORT=$aiEffort",
     "AZURE_TENANT_ID=$EntraTenantId",
     "AZURE_SUBSCRIPTION_ID=$SubscriptionId",
     "AZURE_SUBSCRIPTION_IDS=$ScanSubscriptionsEnv",
@@ -2502,6 +2503,7 @@ $miRbacRef = @(
     @{ Role = "Reader";                         Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "Resource Graph / inventory reads across all subscriptions" },
     @{ Role = "Cost Management Reader";          Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "Cost analysis, spend trends, budgets" },
     @{ Role = "Monitoring Reader";               Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "CPU / memory / network metrics for right-sizing" },
+    @{ Role = "Log Analytics Reader";            Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "Query workspace Usage tables for per-table Sentinel / Log Analytics ingestion cost" },
     @{ Role = "Cognitive Services OpenAI User";  Scope = $openaiScope; ScopeLabel = "Azure OpenAI resource ONLY";         Purpose = "Call the deployed model for chat completions" },
     @{ Role = "Management Group Reader";         Scope = $mgScope;     ScopeLabel = "Tenant Root MG";                     Purpose = "List management groups in the hierarchy dropdown" },
     @{ Role = "Reservations Reader";            Scope = $capacityScope; ScopeLabel = "/providers/Microsoft.Capacity";     Purpose = "Read Reserved Instances inventory & recommendations" }
@@ -2529,6 +2531,12 @@ $roles = @(
         Scope = "/providers/Microsoft.Management/managementGroups/$EntraTenantId"
         ScopeDescription = "Tenant Root Management Group (inherits to ALL subscriptions)"
         Justification = "Required for CPU / memory / network metrics behind right-sizing and performance views"
+    },
+    @{
+        Name = "Log Analytics Reader"
+        Scope = "/providers/Microsoft.Management/managementGroups/$EntraTenantId"
+        ScopeDescription = "Tenant Root Management Group (inherits to ALL subscriptions)"
+        Justification = "Required to query each workspace's Usage table for per-table Sentinel / Log Analytics ingestion cost"
     }
 )
 
@@ -2560,9 +2568,9 @@ foreach ($role in $roles) {
 $subList = @($SubscriptionIdsCsv -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($subList.Count -gt 0) {
     Write-Host ""
-    Write-Info "Ensuring Reader + Cost Management Reader + Monitoring Reader on each target subscription ($($subList.Count))..."
+    Write-Info "Ensuring Reader + Cost Management Reader + Monitoring Reader + Log Analytics Reader on each target subscription ($($subList.Count))..."
     foreach ($sid in $subList) {
-        foreach ($roleName in @("Reader", "Cost Management Reader", "Monitoring Reader")) {
+        foreach ($roleName in @("Reader", "Cost Management Reader", "Monitoring Reader", "Log Analytics Reader")) {
             $subAssign = az role assignment create --assignee $principalId --role $roleName --scope "/subscriptions/$sid" --output none 2>&1
             if ($LASTEXITCODE -eq 0 -or $subAssign -match "already exists") {
                 Write-Success "$roleName on $sid"

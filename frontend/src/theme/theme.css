@@ -91,91 +91,110 @@
   --rgb-slate: 30, 41, 59;
 }
 
+/* Light palette — modelled on the reference design:
+   canvas #f1f6fb, white cards, #e4ebf2 hairlines, ink #0e1726/#1a2332, teal accent.
+   Every muted ink below is >= 4.5:1 on white; the old map had tokens that washed out. */
 html.theme-light {
-  --c-0c1220: #ffffff;
-  --c-0b1220: #ffffff;
+  /* Cards / panels */
   --c-0f172a: #ffffff;
   --c-111827: #ffffff;
-  --c-0d1117: #ffffff;
   --c-1f2937: #ffffff;
   --c-111a2e: #ffffff;
   --c-131a2b: #ffffff;
   --c-131c33: #ffffff;
   --c-131c2e: #ffffff;
-  --c-0c1322: #ffffff;
-  --c-0d1424: #ffffff;
   --c-15233b: #ffffff;
   --c-16233b: #ffffff;
   --c-1a2332: #ffffff;
   --c-243044: #ffffff;
   --c-0c1929: #ffffff;
-  --c-0a1a2e: #ffffff;
-  --c-0c1a2e: #ffffff;
   --c-0c1f33: #ffffff;
   --c-0d2b3f: #ffffff;
   --c-0c2a4d: #ffffff;
   --c-0c4a6e: #ffffff;
-  --c-080c14: #eef1f6;
-  --c-020617: #eef1f6;
-  --c-0a0f1a: #eef1f6;
-  --c-0a0f1e: #eef1f6;
-  --c-0a1018: #eef1f6;
-  --c-0b1018: #eef1f6;
-  --c-1e293b: #dde4ee;
-  --c-374151: #dde4ee;
-  --c-334155: #c3ccda;
-  --c-1e3a5f: #e6eefb;
-  --c-0e3f73: #e6eefb;
-  --c-3b0000: #fdecec;
-  --c-1a0a0a: #fdecec;
-  --c-1e0a0a: #fdecec;
-  --c-2a0a0a: #fdecec;
-  --c-450a0a: #fdecec;
-  --c-7f1d1d: #fbe3e3;
-  --c-991b1b: #fbe3e3;
-  --c-b91c1c: #fbe3e3;
-  --c-1c1003: #fdf3e2;
-  --c-1c100a: #fdf3e2;
-  --c-1c1a05: #fdf6e0;
-  --c-1c1a0a: #fdf6e0;
-  --c-431407: #fdf3e2;
-  --c-451a03: #fdf3e2;
-  --c-422006: #fdf3e2;
-  --c-3a2c08: #fdf6e0;
-  --c-3b2b10: #fdf6e0;
-  --c-78350f: #fbecd6;
-  --c-7c3a00: #fbecd6;
-  --c-5c4700: #fbf3d6;
-  --c-9a3412: #fbe6d6;
-  --c-92400e: #fbecd6;
-  --c-0a1a0e: #e7f8ee;
-  --c-05280f: #e7f8ee;
-  --c-052e16: #e7f8ee;
-  --c-0f2a1f: #e7f8ee;
-  --c-0d2b1f: #e7f8ee;
-  --c-06351f: #e7f8ee;
-  --c-064e3b: #dcf4e6;
-  --c-14532d: #dcf4e6;
-  --c-065f46: #dcf4e6;
-  --c-166534: #dcf4e6;
-  --c-1e1b2e: #eeeffb;
-  --c-1e1b4b: #eeeffb;
-  --c-312e81: #e7e8fb;
-  --c-3730a3: #e7e8fb;
-  --c-4c1d95: #f1e8fb;
-  --c-e5e7eb: #2a3a4f;
-  --c-d1d5db: #3a4a5e;
-  --c-f8fafc: #0e1a2b;
-  --c-f1f5f9: #16273e;
-  --c-e2e8f0: #2a3a4f;
-  --c-cbd5e1: #45566b;
-  --c-94a3b8: #64758b;
-  --c-64748b: #5b6b7e;
-  --c-475569: #566274;
-  --rgb-slate: 205, 213, 224;
+  /* Recessed insets (darker than the card in dark → faintly grey in light) */
+  --c-0c1220: #f8fafc;
+  --c-0b1220: #f8fafc;
+  --c-0d1117: #f8fafc;
+  --c-0c1322: #f8fafc;
+  --c-0d1424: #f8fafc;
+  --c-0a1a2e: #f8fafc;
+  --c-0c1a2e: #f8fafc;
+  /* App canvas */
+  --c-080c14: #f1f6fb;
+  --c-020617: #f1f6fb;
+  --c-0a0f1a: #f1f6fb;
+  --c-0a0f1e: #f1f6fb;
+  --c-0a1018: #f1f6fb;
+  --c-0b1018: #f1f6fb;
+  /* Hairlines / dividers */
+  --c-1e293b: #e4ebf2;
+  --c-374151: #e4ebf2;
+  --c-334155: #d6e0ea;
+  /* Brand bands */
+  --c-1e3a5f: #eaf1f7;
+  --c-0e3f73: #eaf1f7;
+  /* Status tints — red */
+  --c-3b0000: #fef2f2;
+  --c-1a0a0a: #fef2f2;
+  --c-1e0a0a: #fef2f2;
+  --c-2a0a0a: #fef2f2;
+  --c-450a0a: #fef2f2;
+  --c-7f1d1d: #fee2e2;
+  --c-991b1b: #fee2e2;
+  --c-b91c1c: #fee2e2;
+  /* Status tints — amber / orange */
+  --c-1c1003: #fff7ed;
+  --c-1c100a: #fff7ed;
+  --c-431407: #fff7ed;
+  --c-451a03: #fff7ed;
+  --c-422006: #fff7ed;
+  --c-78350f: #ffedd5;
+  --c-7c3a00: #ffedd5;
+  --c-9a3412: #ffedd5;
+  --c-92400e: #ffedd5;
+  /* Status tints — yellow */
+  --c-1c1a05: #fefce8;
+  --c-1c1a0a: #fefce8;
+  --c-3a2c08: #fefce8;
+  --c-3b2b10: #fefce8;
+  --c-5c4700: #fef9c3;
+  /* Status tints — green / teal (the reference accent family) */
+  --c-0a1a0e: #ecfdf5;
+  --c-05280f: #ecfdf5;
+  --c-052e16: #ecfdf5;
+  --c-0f2a1f: #ecfdf5;
+  --c-0d2b1f: #ecfdf5;
+  --c-06351f: #ecfdf5;
+  --c-064e3b: #d1fae5;
+  --c-14532d: #d1fae5;
+  --c-065f46: #d1fae5;
+  --c-166534: #d1fae5;
+  /* Status tints — indigo / violet */
+  --c-1e1b2e: #eef2ff;
+  --c-1e1b4b: #eef2ff;
+  --c-312e81: #e0e7ff;
+  --c-3730a3: #e0e7ff;
+  --c-4c1d95: #f3e8ff;
+  /* Ink — inverted, hierarchy preserved, all AA on white */
+  --c-f8fafc: #0e1726;
+  --c-f1f5f9: #16202f;
+  --c-e2e8f0: #1a2332;
+  --c-e5e7eb: #1e293b;
+  --c-cbd5e1: #334155;
+  --c-d1d5db: #3d4c5f;
+  --c-94a3b8: #52627a;
+  --c-64748b: #5d6c80;
+  --c-475569: #6b7889;
+  --rgb-slate: 226, 232, 240;
   background: var(--c-080c14);
   color-scheme: light;
 }
+/* index.css does `@apply bg-gray-950 text-gray-100` on the root, which compiles to a
+   literal light ink with no class for the overrides below to match — so anything that
+   merely inherits body colour rendered near-white on the light canvas. */
+html.theme-light,
+html.theme-light body { color: #1a2332 !important; }
 html.theme-light body { background: var(--c-080c14); }
 /* ── Tailwind dark utilities → light (covers opacity variants e.g. bg-slate-800/60) ── */
 html.theme-light [class*="bg-gray-9"], html.theme-light [class*="bg-gray-8"],
@@ -184,48 +203,54 @@ html.theme-light [class*="bg-neutral-9"], html.theme-light [class*="bg-zinc-9"] 
   background-color: #ffffff !important;
 }
 html.theme-light [class*="bg-gray-7"], html.theme-light [class*="bg-slate-7"] {
-  background-color: #eef1f6 !important;
+  background-color: #f0f5fa !important;
 }
 
 html.theme-light [class*="border-gray-9"], html.theme-light [class*="border-gray-8"],
 html.theme-light [class*="border-gray-7"], html.theme-light [class*="border-slate-9"],
 html.theme-light [class*="border-slate-8"], html.theme-light [class*="border-slate-7"] {
-  border-color: #e2e8f1 !important;
+  border-color: #e4ebf2 !important;
 }
 html.theme-light .divide-slate-800 > *, html.theme-light .divide-gray-800 > *,
 html.theme-light .divide-slate-700 > *, html.theme-light .divide-gray-700 > * {
-  border-color: #e2e8f1 !important;
+  border-color: #e4ebf2 !important;
 }
 
 html.theme-light .text-white,
 html.theme-light [class*="text-gray-1"], html.theme-light [class*="text-gray-2"], html.theme-light [class*="text-gray-3"],
 html.theme-light [class*="text-slate-1"], html.theme-light [class*="text-slate-2"], html.theme-light [class*="text-slate-3"] {
-  color: #16273e !important;
+  color: #0e1726 !important;
 }
 html.theme-light [class*="text-gray-4"], html.theme-light [class*="text-gray-5"],
 html.theme-light [class*="text-slate-4"], html.theme-light [class*="text-slate-5"] {
-  color: #5b6b7e !important;
+  color: #5d6c80 !important;
+}
+/* text-gray-600/700 are body copy in light — never let them fade out. */
+html.theme-light [class*="text-gray-6"], html.theme-light [class*="text-gray-7"],
+html.theme-light [class*="text-slate-6"], html.theme-light [class*="text-slate-7"] {
+  color: #475569 !important;
 }
 
 /* ── Accent-tinted Tailwind surfaces → soft light tints (readable in light) ── */
 html.theme-light [class*="bg-green-9"], html.theme-light [class*="bg-green-8"],
 html.theme-light [class*="bg-emerald-9"], html.theme-light [class*="bg-emerald-8"],
-html.theme-light [class*="bg-teal-9"], html.theme-light [class*="bg-lime-9"] { background-color: #e6f6ed !important; }
+html.theme-light [class*="bg-teal-9"], html.theme-light [class*="bg-lime-9"] { background-color: #ecfdf5 !important; }
 html.theme-light [class*="bg-red-9"], html.theme-light [class*="bg-red-8"],
-html.theme-light [class*="bg-rose-9"], html.theme-light [class*="bg-rose-8"] { background-color: #fdecec !important; }
+html.theme-light [class*="bg-rose-9"], html.theme-light [class*="bg-rose-8"] { background-color: #fef2f2 !important; }
 html.theme-light [class*="bg-amber-9"], html.theme-light [class*="bg-amber-8"],
 html.theme-light [class*="bg-yellow-9"], html.theme-light [class*="bg-orange-9"],
-html.theme-light [class*="bg-orange-8"] { background-color: #fdf3e2 !important; }
+html.theme-light [class*="bg-orange-8"] { background-color: #fff7ed !important; }
 html.theme-light [class*="bg-blue-9"], html.theme-light [class*="bg-blue-8"],
 html.theme-light [class*="bg-indigo-9"], html.theme-light [class*="bg-indigo-8"],
-html.theme-light [class*="bg-sky-9"], html.theme-light [class*="bg-cyan-9"] { background-color: #e9f1fd !important; }
+html.theme-light [class*="bg-sky-9"], html.theme-light [class*="bg-cyan-9"] { background-color: #eff6ff !important; }
 html.theme-light [class*="bg-purple-9"], html.theme-light [class*="bg-purple-8"],
 html.theme-light [class*="bg-violet-9"], html.theme-light [class*="bg-fuchsia-9"],
-html.theme-light [class*="bg-pink-9"] { background-color: #f3ecfc !important; }
+html.theme-light [class*="bg-pink-9"] { background-color: #f3e8ff !important; }
 
 /* Accent text → readable darker accent on light surfaces */
 html.theme-light [class*="text-green-"], html.theme-light [class*="text-emerald-"],
-html.theme-light [class*="text-teal-"], html.theme-light [class*="text-lime-"] { color: #15803d !important; }
+html.theme-light [class*="text-lime-"] { color: #15803d !important; }
+html.theme-light [class*="text-teal-"] { color: #0f766e !important; }
 html.theme-light [class*="text-red-"], html.theme-light [class*="text-rose-"] { color: #c02626 !important; }
 html.theme-light [class*="text-amber-"], html.theme-light [class*="text-yellow-"],
 html.theme-light [class*="text-orange-"] { color: #b45309 !important; }
@@ -249,9 +274,9 @@ html.theme-light [class*="border-purple-9"], html.theme-light [class*="border-pu
 html.theme-light [class*="border-violet-8"] { border-color: #e3d4f7 !important; }
 
 /* ── White-alpha overlays/borders (dark-design pages e.g. Login) → light ──── */
-html.theme-light [class*="border-white"] { border-color: #e4e9f2 !important; }
-html.theme-light [class*="ring-white"] { --tw-ring-color: #dde4ee !important; }
-html.theme-light [class*="bg-white/"] { background-color: #eef2f8 !important; }
+html.theme-light [class*="border-white"] { border-color: #e4ebf2 !important; }
+html.theme-light [class*="ring-white"] { --tw-ring-color: #d6e0ea !important; }
+html.theme-light [class*="bg-white/"] { background-color: #f0f5fa !important; }
 
 /* Keep WHITE text on solid accent buttons/badges (don't let .text-white darken them) */
 html.theme-light [class*="bg-sky-5"].text-white, html.theme-light [class*="bg-sky-6"].text-white,
@@ -280,10 +305,7 @@ html.theme-light .td { color: #2a3a4f !important; }
 html.theme-light [data-app-shell] {
   background: linear-gradient(180deg, #f5f8fd 0%, #eaeff7 55%, #e7edf6 100%) !important;
 }
-html.theme-light [data-scope-bar] {
-  background: #ffffff !important;
-  border-bottom: 1px solid #e4e9f2 !important;
-}
+/* The scope bar is part of the dark top banner now — see .app-banner below. */
 html.theme-light [data-app-header] {
   background: #ffffff !important;
   border-bottom: 1px solid #e4e9f2 !important;
@@ -292,15 +314,18 @@ html.theme-light [data-app-header] {
 html.theme-light [data-app-header] > div { background: transparent !important; }
 html.theme-light [data-app-sidebar] {
   background: linear-gradient(180deg, #ffffff 0%, #f5f8fe 100%) !important;
-  border-right: 1px solid #e4e9f2 !important;
   box-shadow: 1px 0 6px rgba(15, 23, 42, .03) !important;
 }
+/* Rule stops below the banner — see the .app-banner block for why. */
+html.theme-light [data-app-sidebar] > :not(.app-banner) {
+  border-right: 1px solid #e4e9f2 !important;
+}
 
-/* ── Card depth — make white surfaces float on the canvas ────────────────── */
+/* ── Card depth — soft float, matching the reference's subtle-card-shadow ─── */
 html.theme-light [style*="var(--c-0f172a)"],
 html.theme-light [style*="var(--c-111827)"],
 html.theme-light .card {
-  box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 12px 28px -12px rgba(15, 23, 42, .16) !important;
+  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, .05), 0 1px 3px 0 rgba(15, 23, 42, .03) !important;
 }
 /* Nested/inner panels: lighter, no double-heavy shadow */
 html.theme-light [style*="var(--c-0b1220)"] {
@@ -316,14 +341,14 @@ html.theme-light [class*="from-violet-9"], html.theme-light [class*="from-purple
 }
 html.theme-light [class*="from-emerald-9"], html.theme-light [class*="from-green-9"],
 html.theme-light [class*="from-teal-9"] {
-  background-image: linear-gradient(135deg, #edfaf1 0%, #eafaf4 100%) !important;
+  background-image: linear-gradient(135deg, #ecfdf5 0%, #e6fbf4 100%) !important;
 }
 html.theme-light [class*="from-amber-9"], html.theme-light [class*="from-orange-9"],
 html.theme-light [class*="from-yellow-9"] {
-  background-image: linear-gradient(135deg, #fdf6e8 0%, #fdf2e3 100%) !important;
+  background-image: linear-gradient(135deg, #fff7ed 0%, #fef3e2 100%) !important;
 }
 html.theme-light [class*="from-red-9"], html.theme-light [class*="from-rose-9"] {
-  background-image: linear-gradient(135deg, #fdeeee 0%, #fdecec 100%) !important;
+  background-image: linear-gradient(135deg, #fef2f2 0%, #fde8e8 100%) !important;
 }
 /* Soften dark accent borders used on those banners */
 html.theme-light [class*="border-sky-9"], html.theme-light [class*="border-indigo-9"],
@@ -331,12 +356,54 @@ html.theme-light [class*="border-blue-9"], html.theme-light [class*="border-emer
 html.theme-light [class*="border-green-9"], html.theme-light [class*="border-amber-9"],
 html.theme-light [class*="border-purple-9"], html.theme-light [class*="border-violet-9"],
 html.theme-light [class*="border-red-9"], html.theme-light [class*="border-cyan-9"] {
-  border-color: #e4e9f2 !important;
+  border-color: #e4ebf2 !important;
 }
 
 /* Scrollbars */
-html.theme-light ::-webkit-scrollbar-thumb { background: #c3ccd9; }
-html.theme-light ::-webkit-scrollbar-thumb:hover { background: #aab6c7; }
+html.theme-light ::-webkit-scrollbar-thumb { background: #cbd5e1; }
+html.theme-light ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* ── Recharts chrome ──────────────────────────────────────────────────────
+   Axis ticks/grids are written as SVG presentation attributes with dark-theme
+   literals (a CSS var() cannot be used there), so on white they rendered at
+   ~2.8:1 and read as invisible. A CSS `fill`/`stroke` rule DOES override a
+   presentation attribute, so restyle them here — dark theme is untouched. */
+html.theme-light .recharts-cartesian-axis-tick-value,
+html.theme-light .recharts-cartesian-axis-tick text,
+html.theme-light .recharts-label,
+html.theme-light .recharts-text { fill: #475569 !important; }
+html.theme-light .recharts-cartesian-axis-line,
+html.theme-light .recharts-cartesian-axis-tick-line { stroke: #cbd5e1 !important; }
+html.theme-light .recharts-cartesian-grid line,
+html.theme-light .recharts-cartesian-grid-horizontal line,
+html.theme-light .recharts-cartesian-grid-vertical line { stroke: #e4ebf2 !important; }
+html.theme-light .recharts-legend-item-text { color: #334155 !important; fill: #334155 !important; }
+html.theme-light .recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: #ffffff !important;
+  border: 1px solid #e4ebf2 !important;
+  color: #1a2332 !important;
+  border-radius: 10px !important;
+  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, .10) !important;
+}
+html.theme-light .recharts-polar-angle-axis-tick-value,
+html.theme-light .recharts-polar-radius-axis-tick-value { fill: #475569 !important; }
+
+/* ── Cost Pulse surfaces ──────────────────────────────────────────────────
+   CostPulse.jsx paints its cards with a hard-coded inline dark gradient
+   instead of a var(--c-*) token, so remapping tokens could not reach it: the
+   card stayed navy while its text tokens resolved to dark ink, leaving the
+   chart legend and leaderboard labels invisible. Inline styles can only be
+   beaten by !important. Dark theme never matches these rules. */
+html.theme-light .pulse-card {
+  background: #ffffff !important;
+  border-color: #e4ebf2 !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 8px 24px -14px rgba(15, 23, 42, .18) !important;
+}
+/* The hero band stays navy as the one dark accent, so its text must stay light. */
+html.theme-light .pulse-hero h2,
+html.theme-light .pulse-hero p,
+html.theme-light .pulse-hero strong { color: #e2e8f0 !important; }
+html.theme-light .pulse-hero p { color: #b6c2d4 !important; }
 
 /* ── Accent TEXT colours — darkened for light mode. These tokens are applied
       ONLY where a light accent was used as text (`color:`), never on chart
@@ -348,6 +415,7 @@ html.theme-light ::-webkit-scrollbar-thumb:hover { background: #aab6c7; }
   --c-67e8f9:#67e8f9; --c-38bdf8:#38bdf8; --c-a78bfa:#a78bfa; --c-c4b5fd:#c4b5fd;
   --c-c7d2fe:#c7d2fe; --c-fca5a5:#fca5a5; --c-f87171:#f87171; --c-fdba74:#fdba74;
   --c-fed7aa:#fed7aa; --c-9ca3af:#9ca3af; --c-6b7280:#6b7280;
+  --c-a5b4fc:#a5b4fc; --c-fde68a:#fde68a;
 }
 html.theme-light {
   --c-60a5fa:#2563eb; --c-93c5fd:#2563eb; --c-86efac:#15803d; --c-34d399:#15803d;
@@ -356,4 +424,91 @@ html.theme-light {
   --c-67e8f9:#0e7490; --c-38bdf8:#0369a1; --c-a78bfa:#7c3aed; --c-c4b5fd:#7c3aed;
   --c-c7d2fe:#4f46e5; --c-fca5a5:#dc2626; --c-f87171:#dc2626; --c-fdba74:#c2410c;
   --c-fed7aa:#c2410c; --c-9ca3af:#5b6b7e; --c-6b7280:#5b6b7e;
+  /* Pale accent inks: on a light surface they measured 1.1–2.0:1, i.e. invisible. */
+  --c-a5b4fc:#4f46e5; --c-fde68a:#b45309;
+}
+
+/* ── Sidebar count badges ─────────────────────────────────────────────────
+   One neutral chip, not a red/amber/green traffic light. A nav counter is a
+   wayfinding cue; colouring each by severity turned the sidebar into noise and
+   read as an alarm panel rather than a professional tool. The severity and the
+   source live in the tooltip. Defined per-theme because the sidebar is near-black
+   in dark mode and near-white in light. */
+.nav-badge {
+  background: rgba(148, 163, 184, .20);
+  color: #cbd5e1;
+  border: 1px solid rgba(148, 163, 184, .28);
+}
+html.theme-light .nav-badge {
+  background: #ccd7e8;
+  color: #35425a;
+  border-color: #b9c8de;
+}
+
+/* ── Top banner ───────────────────────────────────────────────────────────
+   The logo block and the scope bar are separate elements in separate layout
+   columns, so the band must not depend on where either sits. A VERTICAL
+   gradient does that: both are 52px tall, so both paint an identical ramp and
+   the seam is invisible at any window width or sidebar state. (An earlier
+   horizontal gradient with background-attachment:fixed relied on viewport
+   geometry and Chromium dropped it in some compositing paths, leaving the two
+   halves different colours.) Applies to both themes — deliberately dark in
+   light mode too.
+
+   The sidebar's right divider must NOT be drawn on the <aside> itself: that
+   border spans the full page height, so it cut a pale vertical line straight
+   through the band. It lives on the aside's children below the banner instead
+   (the aside sets overflow-x:hidden, so a child cannot paint over a border on
+   the parent, and an ::after at right:-1px would be clipped). */
+.app-banner {
+  background-color: #101a3d;
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, .07) 0%, rgba(255, 255, 255, 0) 42%),
+    linear-gradient(180deg, #16214f 0%, #111a3f 55%, #0c1330 100%);
+  /* Border + inset hairline rather than an ::after: the scope bar has absolutely
+     positioned dropdowns, and adding position:relative here would re-anchor them. */
+  border-bottom: 1px solid rgba(72, 116, 190, .55) !important;
+  box-shadow: inset 0 -2px 0 -1px rgba(56, 160, 248, .30);
+}
+
+/* The band is dark in BOTH themes, so its contents must be light in both. The
+   slate tokens these controls inherit are tuned for a panel, not for this
+   band, and measured 2.3-3.8:1 on it. Hierarchy comes from size/weight. */
+.app-banner,
+.app-banner span,
+.app-banner div,
+.app-banner label,
+.app-banner button,
+.app-banner select,
+.app-banner input { color: #e8eefc !important; }
+.app-banner svg { color: #a9bbe4 !important; }
+
+/* Controls read as glass pills on the band rather than transplanted panel widgets. */
+.app-banner button,
+.app-banner select,
+.app-banner input {
+  background-color: rgba(255, 255, 255, .085) !important;
+  border: 1px solid rgba(255, 255, 255, .18) !important;
+  border-radius: 8px !important;
+  transition: background-color .16s ease, border-color .16s ease, transform .16s ease;
+}
+.app-banner button:hover,
+.app-banner select:hover,
+.app-banner input:hover {
+  background-color: rgba(255, 255, 255, .16) !important;
+  border-color: rgba(160, 190, 255, .45) !important;
+}
+.app-banner button:active { transform: translateY(1px); }
+.app-banner select:focus,
+.app-banner input:focus {
+  outline: none !important;
+  border-color: #58b6f5 !important;
+  box-shadow: 0 0 0 3px rgba(56, 160, 248, .22) !important;
+}
+.app-banner select option { color: #1a2332 !important; background: #ffffff !important; }
+
+/* The brand mark gets a soft halo so the logo anchors the band. */
+.app-banner img[src*="logo-mark"] {
+  border-radius: 9px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .10), 0 4px 14px -4px rgba(56, 160, 248, .75) !important;
 }

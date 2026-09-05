@@ -6,6 +6,7 @@ import {
   Play, Search, X, Loader, Globe, ArrowRight,
 } from 'lucide-react'
 import { api } from '../../api/client'
+import AIControlsBar, { EMPTY_AI_CONTROLS, aiControlsQuery } from '../ai/AIAnalysisTools'
 
 // ── Safe text helper — prevents "Objects are not valid as a React child" ──────
 function safeTxt(v) {
@@ -203,13 +204,13 @@ function AISearch({ onResults }) {
 
 // ── Streaming Analysis Component ──────────────────────────────────────────────
 
-function StreamingAnalysis({ onComplete }) {
+function StreamingAnalysis({ onComplete, controlsQuery = '' }) {
   const [chunks, setChunks]   = useState('')
   const [done,   setDone]     = useState(false)
   const [error,  setError]    = useState(null)
 
   useEffect(() => {
-    const es = new EventSource('/api/ai/workload/stream?refresh=true')
+    const es = new EventSource(`/api/ai/workload/stream?refresh=true${controlsQuery}`)
     es.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data)
@@ -220,7 +221,7 @@ function StreamingAnalysis({ onComplete }) {
     }
     es.onerror = () => { setError('Connection lost'); es.close() }
     return () => es.close()
-  }, [])
+  }, [controlsQuery])
 
   if (error) return (
     <div className="flex items-center gap-2 text-red-400 text-sm p-4">
@@ -251,6 +252,7 @@ export default function InfraAIPanel({ onSearchResults, onOpenSettings }) {
   const [streaming,  setStreaming]  = useState(false)
   const [error,      setError]      = useState(null)
   const [aiStatus,   setAIStatus]   = useState(null)
+  const [aiControls, setAiControls] = useState(EMPTY_AI_CONTROLS)
   const [activeTab,  setActiveTab]  = useState('summary')   // summary | findings | opportunities | quickwins | plan
 
   useEffect(() => {
@@ -260,10 +262,10 @@ export default function InfraAIPanel({ onSearchResults, onOpenSettings }) {
     loadCachedAnalysis()
   }, [])
 
-  async function loadCachedAnalysis() {
+  async function loadCachedAnalysis(ctl = aiControls) {
     setLoading(true)
     try {
-      const res  = await fetch('/api/ai/workload')
+      const res  = await fetch(`/api/ai/workload?_=1${aiControlsQuery(ctl)}`)
       const data = await res.json()
       if (!data.error) setAnalysis(data)
       else if (data.error.includes('No AI provider')) setError('ai_not_configured')
@@ -333,6 +335,14 @@ export default function InfraAIPanel({ onSearchResults, onOpenSettings }) {
         </div>
       </div>
 
+      <AIControlsBar
+        title="AI Infrastructure Intelligence"
+        report={analysis}
+        value={aiControls}
+        busy={loading || streaming}
+        onApply={next => { setAiControls(next); setAnalysis(null); setStreaming(true) }}
+      />
+
       {/* AI not configured warning */}
       {error === 'ai_not_configured' && (
         <div className="rounded-xl border border-yellow-700/50 bg-yellow-950/20 p-5">
@@ -370,7 +380,7 @@ export default function InfraAIPanel({ onSearchResults, onOpenSettings }) {
       {/* Streaming */}
       {streaming && (
         <div className="card">
-          <StreamingAnalysis onComplete={handleStreamComplete} />
+          <StreamingAnalysis onComplete={handleStreamComplete} controlsQuery={aiControlsQuery(aiControls)} />
         </div>
       )}
 

@@ -29,11 +29,75 @@ from services.ai_infra_service import (
     _get_ai_client_for_analysis,
     _compress_resource,
     _build_workload_summary,
-    _call_ai,
+    _call_ai as _call_ai_raw,
     _enrich_with_custom_tags,
     _build_tag_summary,
     MAX_TOKENS_ANALYSIS,
 )
+
+# ── User-directed scope / business context ────────────────────────────────────
+# Every module analysis funnels through _call_ai and _get_cached, so setting a
+# request-scoped directive here reaches all of them without touching each one.
+import contextvars as _contextvars
+
+_USER_DIRECTIVE: "_contextvars.ContextVar" = _contextvars.ContextVar("ai_user_directive", default=None)
+
+
+def set_user_directive(scope: str = "", context: Optional[dict] = None,
+                       filter_label: str = ""):
+    """Attach a user-directed focus / business context / resource filter to this request.
+
+    Returns a token for reset(); safe to ignore in request handlers."""
+    payload = {
+        "scope": (scope or "").strip()[:500],
+        "context": {k: str(v)[:240] for k, v in (context or {}).items()
+                    if v not in (None, "", "\u2014") and str(v).strip()},
+        "filter_label": (filter_label or "").strip()[:300],
+    }
+    if not any(payload.values()):
+        payload = None
+    return _USER_DIRECTIVE.set(payload)
+
+
+def _directive_block() -> str:
+    """Prompt text for the active user directive (empty when none is set)."""
+    d = _USER_DIRECTIVE.get()
+    if not d:
+        return ""
+    parts = []
+    if d.get("filter_label"):
+        parts.append(
+            "\n## RESOURCE SCOPE (the estate has been FILTERED to this subset — analyse ONLY it):\n"
+            f"{d['filter_label']}\n"
+            "Every finding must refer to resources inside this scope, and say so when summarising.\n")
+    if d.get("scope"):
+        parts.append(
+            "\n## ANALYSIS FOCUS (user-directed — prioritise this):\n"
+            f"Focus this analysis specifically on: {d['scope']}\n"
+            "Centre the findings, categories and recommendations on this focus. You may briefly flag "
+            "other critical issues, but keep the deep-dive on what the user asked for.\n")
+    if d.get("context"):
+        lines = "\n".join(f"- {k.replace('_', ' ').title()}: {v}" for k, v in d["context"].items())
+        parts.append(
+            "\n## BUSINESS CONTEXT (ground the analysis in this customer's situation):\n"
+            f"{lines}\n"
+            "Tailor findings, prioritisation, benchmarks and tone to it.\n")
+    return "".join(parts)
+
+
+def _directive_fingerprint() -> str:
+    """Short, stable suffix so a scoped run never serves a globally-cached result."""
+    d = _USER_DIRECTIVE.get()
+    if not d:
+        return ""
+    import hashlib as _hl
+    raw = json.dumps(d, sort_keys=True, default=str)
+    return ":u" + _hl.sha1(raw.encode("utf-8")).hexdigest()[:10]
+
+
+def _call_ai(system_prompt: str, user_prompt: str, **kwargs):
+    """Shared AI call with the active user directive appended to the prompt."""
+    return _call_ai_raw(system_prompt, user_prompt + _directive_block(), **kwargs)
 
 MAX_TOKENS_MODULE = 8000  # cap module-analysis output (prompt bounds array sizes; parser recovers any truncation)
 
@@ -90,6 +154,28 @@ CUSTOM TAGS — PRIORITISATION ONLY:
   Mission Critical / Business Critical resources first; deprioritise Non-Critical / Dev-Test.
 - DR_Tier / RPO / RTO are recovery targets — apply them ONLY when this analysis is about BCDR, backup, or
   resilience. In any other category, do not surface them.
+
+MONEY DISCIPLINE (MANDATORY — a wrong dollar figure destroys trust in the whole report):
+- Every dollar you output must come from a cost field supplied in the resource data (cost_mtd / cost_usd /
+  an explicitly supplied savings or price figure), or be a simple sum of such fields. NEVER invent, infer
+  from SKU knowledge, or "reasonably estimate" a price.
+- The supplied cost is MONTH-TO-DATE and is collected from Azure Cost Management, which rate-limits
+  per-resource queries — so it is frequently 0 or partial. A $0 cost means "not attributed", NOT "free" and
+  NOT "idle". If a resource shows 0, either omit the dollar claim or state that its cost is unattributed;
+  never present $0 as evidence of savings or of no spend.
+- Each resource carries a `cost_basis` field naming what its `cost_mtd` actually measures
+  ("month-to-date (scan)", "30-day run rate (cost warehouse)", or "unattributed — no cost data"). Quote the
+  basis whenever you quote the money, and never add together figures that have different bases.
+- Do NOT annualise by multiplying by 8760 hours, and do NOT extrapolate a month-to-date figure to a full
+  month, quarter or year. Report the figure on the basis you were given and name that basis
+  (e.g. "$412 month-to-date").
+- For any target/after state (a different SKU, tier, region or platform), only give a target cost or a
+  savings amount when the data supplies it. Otherwise set the field to null and say the change requires
+  pricing confirmation — do not fill it with a plausible number or a generic percentage.
+- Percentages must be computed from supplied numbers and stated with the base they came from. Never state
+  a percentage you cannot derive from the data.
+- Prefer counts, configuration facts and risk statements over money when cost data is missing. An analysis
+  with no dollar figures is far better than one with invented dollar figures.
 
 ADVANCED, DECISION-READY OUTPUT (MANDATORY — this is what makes the analysis genuinely useful, not generic):
 - Be SPECIFIC and EVIDENCE-LED: every finding and recommendation must reference the ACTUAL configuration
@@ -170,6 +256,27 @@ def _build_resource_lookup(resources: list) -> dict:
     return lookup
 
 
+_SUBS_TTL_SECS = 900.0
+_subs_cache: Dict[str, Any] = {"at": 0.0, "map": {}}
+
+
+def _subscription_name_map() -> Dict[str, str]:
+    """subscription_id (lowercase) -> friendly name, so findings name the sub, not a GUID."""
+    now = time.time()
+    if _subs_cache["map"] and (now - float(_subs_cache["at"])) < _SUBS_TTL_SECS:
+        return _subs_cache["map"]
+    m: Dict[str, str] = {}
+    try:
+        from services import finops_data_service as _fds
+        for sid, nm in (_fds.get_subscription_names() or {}).items():
+            if sid and nm:
+                m[str(sid).lower()] = nm
+    except Exception as exc:
+        logger.debug("subscription name map unavailable: %s", exc)
+    _subs_cache.update({"at": now, "map": m})
+    return m
+
+
 def _resolve_affected_resources(items: list, lookup: dict) -> list:
     """Normalise affected_resources entries to full structured objects.
 
@@ -177,6 +284,22 @@ def _resolve_affected_resources(items: list, lookup: dict) -> list:
     resolves them against the original resources list so every entry carries the
     canonical resource_id, resource_group, subscription_id, resource_type and cost.
     """
+    from services.ai_infra_service import _res_monthly_cost
+    _subs = _subscription_name_map()
+
+    def _row(r: dict, fallback: dict) -> dict:
+        sid = r.get("subscription_id", "") or fallback.get("subscription_id", "")
+        return {
+            "resource_id": r.get("resource_id", "") or fallback.get("resource_id", ""),
+            "resource_name": r.get("resource_name", "") or fallback.get("resource_name", ""),
+            "resource_group": r.get("resource_group", "") or fallback.get("resource_group", ""),
+            "subscription_id": sid,
+            "subscription_name": _subs.get(str(sid).lower(), "") or fallback.get("subscription_name", ""),
+            "resource_type": r.get("resource_type", "") or fallback.get("resource_type", ""),
+            "location": r.get("location", "") or fallback.get("location", ""),
+            "cost_usd": round(_res_monthly_cost(r), 2) if r else fallback.get("cost_usd", 0),
+        }
+
     resolved: list = []
     for item in items:
         if isinstance(item, str):
@@ -187,21 +310,16 @@ def _resolve_affected_resources(items: list, lookup: dict) -> list:
                         r = val
                         break
             if r:
-                resolved.append({
-                    "resource_id": r.get("resource_id", ""),
-                    "resource_name": r.get("resource_name", item),
-                    "resource_group": r.get("resource_group", ""),
-                    "subscription_id": r.get("subscription_id", ""),
-                    "resource_type": r.get("resource_type", ""),
-                    "cost_usd": round(r.get("cost_current_month", 0), 2),
-                })
+                resolved.append(_row(r, {"resource_name": item}))
             else:
                 resolved.append({
                     "resource_name": item,
                     "resource_id": "",
                     "resource_group": "",
                     "subscription_id": "",
+                    "subscription_name": "",
                     "resource_type": "",
+                    "location": "",
                     "cost_usd": 0,
                 })
         elif isinstance(item, dict):
@@ -218,21 +336,17 @@ def _resolve_affected_resources(items: list, lookup: dict) -> list:
             if r:
                 # Canonical resource values from the original inventory always win —
                 # the AI frequently abbreviates/truncates resource_id & subscription_id.
-                resolved.append({
-                    "resource_id": r.get("resource_id", "") or item.get("resource_id", ""),
-                    "resource_name": r.get("resource_name", "") or r_name,
-                    "resource_group": r.get("resource_group", "") or item.get("resource_group", ""),
-                    "subscription_id": r.get("subscription_id", "") or item.get("subscription_id", ""),
-                    "resource_type": r.get("resource_type", "") or item.get("resource_type", ""),
-                    "cost_usd": round(r.get("cost_current_month", 0), 2),
-                })
+                resolved.append(_row(r, item))
             else:
+                sid = item.get("subscription_id", "")
                 resolved.append({
                     "resource_id": item.get("resource_id", ""),
                     "resource_name": r_name,
                     "resource_group": item.get("resource_group", ""),
-                    "subscription_id": item.get("subscription_id", ""),
+                    "subscription_id": sid,
+                    "subscription_name": _subs.get(str(sid).lower(), ""),
                     "resource_type": item.get("resource_type", ""),
+                    "location": item.get("location", ""),
                     "cost_usd": item.get("cost_usd", 0),
                 })
     return resolved
@@ -460,8 +574,21 @@ def _normalize_migration_response(result: dict) -> dict:
 _MEM_CACHE: Dict[str, tuple] = {}
 
 
-def _get_cached(analysis_type: str, max_age_hours: int = 12) -> Optional[dict]:
+def _cache_ttl_hours(default: float = 12.0) -> float:
+    """Global AI answer-cache lifetime (`ai_cache_ttl_hours`); 0 disables caching."""
+    try:
+        import services.settings_service as _s
+        return max(0.0, float(_s.get_value("ai_cache_ttl_hours", default)))
+    except Exception:
+        return default
+
+
+def _get_cached(analysis_type: str, max_age_hours: Optional[float] = None) -> Optional[dict]:
     """Check the in-memory cache first (DB-independent), then the database."""
+    max_age_hours = _cache_ttl_hours() if max_age_hours is None else max_age_hours
+    if not max_age_hours:
+        return None
+    analysis_type = f"{analysis_type}{_directive_fingerprint()}"
     entry = _MEM_CACHE.get(analysis_type)
     if entry:
         ts, cached_result = entry
@@ -485,12 +612,15 @@ def _get_cached(analysis_type: str, max_age_hours: int = 12) -> Optional[dict]:
         return None
 
 
-def _get_cached_any_scope(base: str, max_age_hours: int = 12) -> Optional[dict]:
+def _get_cached_any_scope(base: str, max_age_hours: Optional[float] = None) -> Optional[dict]:
     """Scope-tolerant cache read for the home-page summary: returns the freshest
     persisted analysis for a module whether it was saved under the bare module
     key or a scope-fingerprinted variant ("base:<hash>"). Only used where any
     scope is acceptable (the home dashboard) — the per-module analyze functions
     keep using exact-key _get_cached so each scope stays isolated."""
+    max_age_hours = _cache_ttl_hours() if max_age_hours is None else max_age_hours
+    if not max_age_hours:
+        return None
     entry = _MEM_CACHE.get(base)
     if entry:
         ts, cached_result = entry
@@ -519,6 +649,7 @@ def _save_cache(analysis_type: str, model: str, result: dict):
     database in a background daemon thread so a slow/unreachable DB (e.g. an Azure
     SQL 'Login timeout expired' with retries) can NEVER block the AI response."""
     import threading
+    analysis_type = f"{analysis_type}{_directive_fingerprint()}"
     try:
         _MEM_CACHE[analysis_type] = (time.time(), result)
         _register_ai_summary(analysis_type, model, result)

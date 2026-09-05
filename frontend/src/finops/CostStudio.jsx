@@ -23,6 +23,7 @@ import {
 import SearchableSelect from '../components/shared/SearchableSelect'
 import FinOpsAIPanel from './FinOpsAIPanel'
 import FinOpsExportMenu from './FinOpsExportMenu'
+import DetailTable from '../components/shared/DetailTable'
 
 // ── Design tokens & shared styles ───────────────────────────────────────────
 const PALETTE = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#f97316', '#ec4899', '#10b981', '#eab308', '#a855f7', '#14b8a6']
@@ -268,18 +269,45 @@ function RGTreemap({ items }) {
     </ResponsiveContainer>
   )
 }
+
+// Relative luminance / contrast per WCAG, so the label colour is measured rather than guessed.
+const _srgb = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4) }
+function _luminance(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex).trim())
+  if (!m) return 0
+  const n = parseInt(m[1], 16)
+  return 0.2126 * _srgb((n >> 16) & 255) + 0.7152 * _srgb((n >> 8) & 255) + 0.0722 * _srgb(n & 255)
+}
+const _contrast = (a, b) => {
+  const [hi, lo] = [_luminance(a), _luminance(b)].sort((p, q) => q - p)
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+// Prefer the softer near-black/near-white pair, and only fall back to pure black or white
+// on the few palette tones where the soft pair cannot reach 4.5:1 (the label is 11px bold,
+// which is NOT "large text" under WCAG, so the 4.5 bar applies).
+function _labelInk(fill) {
+  if (_contrast('#0b1220', fill) >= 4.5) return '#0b1220'
+  if (_contrast('#ffffff', fill) >= 4.5) return '#ffffff'
+  return _contrast('#000000', fill) >= _contrast('#ffffff', fill) ? '#000000' : '#ffffff'
+}
+
 function TreemapCell(props) {
   const { x, y, width, height, name, size, index } = props
   if (width < 2 || height < 2) return null
   const fill = PALETTE[(index ?? 0) % PALETTE.length]
   const showLabel = width > 60 && height > 30
+  const ink = _labelInk(fill)
+  const sub = ink === '#ffffff' ? '#e2e8f0' : '#1e293b'
   return (
     <g>
-      <rect x={x} y={y} width={width} height={height} fill={fill} stroke="#0f172a" strokeWidth={1} opacity={0.9} />
+      {/* Fully opaque: a translucent tile blends with the card, so the colour the contrast
+          was computed against would not be the colour on screen. */}
+      <rect x={x} y={y} width={width} height={height} fill={fill} stroke="#0f172a" strokeWidth={1} />
       {showLabel && (
         <>
-          <text x={x + 6} y={y + 14} fontSize={11} fill="#fff" fontWeight={700}>{(name || '').slice(0, Math.max(4, Math.floor(width / 8)))}</text>
-          <text x={x + 6} y={y + 28} fontSize={10} fill="#e2e8f0">{fmtUsd(size)}</text>
+          <text x={x + 6} y={y + 14} fontSize={11} fill={ink} fontWeight={700}>{(name || '').slice(0, Math.max(4, Math.floor(width / 8)))}</text>
+          <text x={x + 6} y={y + 28} fontSize={10} fill={sub}>{fmtUsd(size)}</text>
         </>
       )}
     </g>
@@ -399,71 +427,68 @@ function RIGauges({ c }) {
 }
 
 function TopResources({ rows }) {
-  const list = (rows || []).slice(0, 12)
-  if (!list.length) return <Empty msg="No per-resource costs yet — try a wider time range" />
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-        <thead>
-          <tr style={{ color: 'var(--c-64748b)', textAlign: 'left' }}>
-            <th style={{ padding: '4px 6px', borderBottom: '1px solid var(--c-1e293b)' }}>Resource</th>
-            <th style={{ padding: '4px 6px', borderBottom: '1px solid var(--c-1e293b)' }}>Group</th>
-            <th style={{ padding: '4px 6px', borderBottom: '1px solid var(--c-1e293b)' }}>Type</th>
-            <th style={{ padding: '4px 6px', borderBottom: '1px solid var(--c-1e293b)' }}>Region</th>
-            <th style={{ padding: '4px 6px', borderBottom: '1px solid var(--c-1e293b)', textAlign: 'right' }}>Cost</th>
-          </tr>
-        </thead>
-        <tbody>
-          {list.map((r, i) => (
-            <tr key={i} style={{ color: 'var(--c-cbd5e1)' }}>
-              <td style={{ padding: '5px 6px', borderBottom: '1px solid #1e293b22', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.resource_name || r.name || '—'}</td>
-              <td style={{ padding: '5px 6px', borderBottom: '1px solid #1e293b22', color: 'var(--c-94a3b8)' }}>{r.resource_group || '—'}</td>
-              <td style={{ padding: '5px 6px', borderBottom: '1px solid #1e293b22', color: 'var(--c-94a3b8)' }}>{(r.resource_type || '').split('/').pop() || '—'}</td>
-              <td style={{ padding: '5px 6px', borderBottom: '1px solid #1e293b22', color: 'var(--c-94a3b8)' }}>{r.location || r.region || '—'}</td>
-              <td style={{ padding: '5px 6px', borderBottom: '1px solid #1e293b22', textAlign: 'right', color: '#60a5fa', fontWeight: 600 }}>{fmtUsd(r.cost ?? r.cost_usd ?? 0)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DetailTable
+      title="Top costliest resources"
+      rows={rows}
+      limit={12}
+      emptyMsg="No per-resource costs yet — try a wider time range"
+      columns={[
+        { label: 'Resource', value: r => r.resource_name || r.name || '—', maxWidth: 220 },
+        { label: 'Group', value: r => r.resource_group || '—', color: 'var(--c-94a3b8)' },
+        { label: 'Type', value: r => (r.resource_type || '').split('/').pop() || '—', color: 'var(--c-94a3b8)' },
+        { label: 'Region', value: r => r.location || r.region || '—', color: 'var(--c-94a3b8)' },
+        { label: 'Cost', align: 'right', color: '#60a5fa', bold: true,
+          value: r => r.cost ?? r.cost_usd ?? 0,
+          render: r => fmtUsd(r.cost ?? r.cost_usd ?? 0) },
+      ]}
+    />
   )
 }
 
 function SavingsList({ items }) {
-  const list = (items || []).slice(0, 8)
-  if (!list.length) return <Empty msg="No savings opportunities detected" />
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {list.map((o, i) => (
-        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--c-0f172a)', border: '1px solid var(--c-1e293b)', borderRadius: 6, padding: '6px 10px' }}>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ color: 'var(--c-e2e8f0)', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.resource_name || o.title || o.category || 'Opportunity'}</div>
-            <div style={{ color: 'var(--c-64748b)', fontSize: 10 }}>{o.category || o.type || o.action || ''}</div>
-          </div>
-          <div style={{ color: '#22c55e', fontWeight: 700, fontSize: 12, flexShrink: 0, marginLeft: 8 }}>
-            {fmtUsd(o.potential_savings_usd ?? o.savings_usd ?? o.monthly_savings ?? o.estimated_monthly_savings ?? 0)}/mo
-          </div>
-        </div>
-      ))}
-    </div>
+    <DetailTable
+      title="Savings opportunities"
+      rows={items}
+      limit={10}
+      emptyMsg="No savings opportunities detected"
+      columns={[
+        { label: 'Resource', value: r => r.resource_name || r.title || r.category || 'Opportunity', maxWidth: 200 },
+        { label: 'Type', value: r => (r.resource_type || r.type || '').split('/').pop() || '—', color: 'var(--c-94a3b8)' },
+        { label: 'Resource group', value: r => r.resource_group || '—', color: 'var(--c-94a3b8)' },
+        { label: 'Category', value: r => r.category_label || r.category || r.action || '—', color: 'var(--c-94a3b8)' },
+        { label: 'Cost/mo', align: 'right', color: 'var(--c-cbd5e1)',
+          value: r => r.current_monthly_cost ?? r.cost_current_month ?? 0,
+          render: r => fmtUsd(r.current_monthly_cost ?? r.cost_current_month ?? 0) },
+        { label: 'Saves/mo', align: 'right', color: '#22c55e', bold: true,
+          value: r => r.potential_savings_usd ?? r.savings_usd ?? r.monthly_savings ?? r.estimated_monthly_savings ?? 0,
+          render: r => fmtUsd(r.potential_savings_usd ?? r.savings_usd ?? r.monthly_savings ?? r.estimated_monthly_savings ?? 0) + '/mo' },
+      ]}
+    />
   )
 }
 
 function AnomalyList({ s }) {
-  const list = (s?.anomalies || s?.cost_anomalies || []).slice(0, 8)
-  if (!list.length) return <Empty msg="No cost anomalies detected 🎉" />
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {list.map((a, i) => (
-        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#1c0f07', border: '1px solid var(--c-9a3412)', borderRadius: 6, padding: '6px 10px' }}>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ color: '#fdba74', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.resource_name || a.name || a.title || 'Anomaly'}</div>
-            <div style={{ color: 'var(--c-64748b)', fontSize: 10 }}>{a.date || a.detected_date || ''} · spike +{(a.spike_pct ?? 0).toFixed(0)}%</div>
-          </div>
-          <div style={{ color: '#f97316', fontWeight: 700, fontSize: 12, flexShrink: 0 }}>{fmtUsd(a.cost_latest ?? a.cost ?? 0)}</div>
-        </div>
-      ))}
-    </div>
+    <DetailTable
+      title="Cost anomalies"
+      rows={s?.anomalies || s?.cost_anomalies || []}
+      limit={10}
+      emptyMsg="No cost anomalies detected 🎉"
+      columns={[
+        { label: 'Resource', value: r => r.resource_name || r.name || r.title || 'Anomaly', color: '#fdba74', maxWidth: 200 },
+        { label: 'Resource group', value: r => r.resource_group || '—', color: 'var(--c-94a3b8)' },
+        { label: 'Detected', value: r => r.date || r.detected_date || '—', color: 'var(--c-94a3b8)' },
+        { label: 'Severity', value: r => r.severity || '—', color: 'var(--c-94a3b8)' },
+        { label: '7d avg', align: 'right', color: 'var(--c-94a3b8)',
+          value: r => r.cost_7d_avg ?? 0, render: r => fmtUsd(r.cost_7d_avg ?? 0) },
+        { label: 'Spike', align: 'right', color: '#f97316', bold: true,
+          value: r => r.spike_pct ?? 0, render: r => '+' + Number(r.spike_pct ?? 0).toFixed(0) + '%' },
+        { label: 'Latest', align: 'right', color: '#f97316', bold: true,
+          value: r => r.cost_latest ?? r.cost ?? 0, render: r => fmtUsd(r.cost_latest ?? r.cost ?? 0) },
+      ]}
+    />
   )
 }
 
@@ -532,26 +557,37 @@ export default function CostStudio() {
   const [loading,    setLoading]    = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error,      setError]      = useState(null)
+  const [stalled,    setStalled]    = useState([])   // calls that timed out or failed
 
   const fetchAll = useCallback(async () => {
-    setRefreshing(true); setError(null)
+    setRefreshing(true); setError(null); setStalled([])
     const p = {
       subscription_id: filters.subscription_id || undefined,
       resource_group:  filters.resource_group  || undefined,
       time_range:      filters.time_range      || 'last_30d',
     }
+    // Without a bound, one slow call (metrics/commitments need live Azure) left the whole
+    // view on "Loading Cost Studio…" forever with no explanation.
+    const LOAD_BUDGET_MS = 25000
+    const withBudget = (label, promise) => Promise.race([
+      promise,
+      new Promise((_, rej) => setTimeout(() => rej(new Error(`${label} timed out`)), LOAD_BUDGET_MS)),
+    ])
+    const LABELS = ['Summary', 'Cost by group', 'By subscription', 'By resource group',
+                    'By region', 'Forecast', 'Savings', 'Commitments', 'Top resources']
     try {
       const results = await Promise.allSettled([
-        finopsApi.getSummary(),
-        finopsApi.getDashboardData({ ...p, group_by: filters.group_by || 'ServiceName' }),
-        finopsApi.getDashboardData({ ...p, group_by: 'SubscriptionId' }),
-        finopsApi.getDashboardData({ ...p, group_by: 'ResourceGroupName' }),
-        finopsApi.getDashboardData({ ...p, group_by: 'ResourceLocation' }),
-        finopsApi.getForecast(90),
-        finopsApi.getSavings(),
-        finopsApi.getCommitments(),
-        finopsApi.getCostResources({ ...p, limit: 15 }),
+        withBudget(LABELS[0], finopsApi.getSummary()),
+        withBudget(LABELS[1], finopsApi.getDashboardData({ ...p, group_by: filters.group_by || 'ServiceName' })),
+        withBudget(LABELS[2], finopsApi.getDashboardData({ ...p, group_by: 'SubscriptionId' })),
+        withBudget(LABELS[3], finopsApi.getDashboardData({ ...p, group_by: 'ResourceGroupName' })),
+        withBudget(LABELS[4], finopsApi.getDashboardData({ ...p, group_by: 'ResourceLocation' })),
+        withBudget(LABELS[5], finopsApi.getForecast(90)),
+        withBudget(LABELS[6], finopsApi.getSavings()),
+        withBudget(LABELS[7], finopsApi.getCommitments()),
+        withBudget(LABELS[8], finopsApi.getCostResources({ ...p, limit: 15 })),
       ])
+      setStalled(results.map((r, i) => (r.status === 'rejected' ? LABELS[i] : null)).filter(Boolean))
       const [s, dbGrp, dbSub, dbRG, dbReg, f, sv, cm, tr] = results
       if (s.status === 'fulfilled')     setSummary(s.value)
       if (dbGrp.status === 'fulfilled') setDashData(dbGrp.value)
@@ -659,6 +695,17 @@ export default function CostStudio() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {stalled.length > 0 && (
+        <div style={{
+          border: '1px solid rgba(234,179,8,.4)', background: 'rgba(234,179,8,.08)',
+          borderRadius: 10, padding: '10px 14px', color: 'var(--c-fbbf24)', fontSize: 12.5,
+        }}>
+          <b>{stalled.length} data source{stalled.length === 1 ? '' : 's'} did not respond</b>
+          {' — '}{stalled.join(', ')}. Widgets fed by these are blank because the data could not
+          be loaded, not because the values are zero. Usually an expired Azure sign-in; run{' '}
+          <code>az login</code> and Refresh.
+        </div>
+      )}
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 10 }}>
         <div>
