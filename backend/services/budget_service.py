@@ -278,6 +278,36 @@ def delete_budget(budget_id: str) -> bool:
 
 # ── Variance computation (live Azure data) ────────────────────────────────────
 
+def _warehouse_daily_spend(sub_ids: List[str], from_date, to_date) -> Dict[str, float]:
+    """Daily actual spend per date from the cost warehouse, for the given subscriptions.
+
+    Used only when live Cost Management returns nothing, so a throttled subscription is not
+    reported as $0 spent. Uses the same canonical service_family partition as estate_total.
+    """
+    from services.database import get_connection
+
+    if not sub_ids:
+        return {}
+    placeholders = ",".join("?" for _ in sub_ids)
+    sql = (
+        "SELECT snapshot_date, SUM(cost_usd) AS c "
+        "FROM finops_daily_dimension_costs "
+        "WHERE dimension = 'service_family' AND cost_type = 'actual' "
+        f"AND subscription_id IN ({placeholders}) "
+        "AND snapshot_date >= ? AND snapshot_date <= ? "
+        "GROUP BY snapshot_date"
+    )
+    params = list(sub_ids) + [from_date.strftime("%Y-%m-%d"), to_date.strftime("%Y-%m-%d")]
+    out: Dict[str, float] = {}
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        for row in cur.fetchall():
+            if row[0] is not None:
+                out[str(row[0])] = float(row[1] or 0.0)
+    return out
+
+
 def compute_budget_variance(budget_id: str) -> Optional[FinOpsBudgetVariance]:
     """
     Compute live budget vs. actual spend using Azure Cost Management API.
@@ -334,6 +364,21 @@ def compute_budget_variance(budget_id: str) -> Optional[FinOpsBudgetVariance]:
         if nr["date"]:
             daily[nr["date"]] = daily.get(nr["date"], 0.0) + nr["cost_usd"]
 
+    # Cost Management routinely returns nothing for a throttled or restricted subscription.
+    # Reporting that as "$0 spent, on track" against a real budget is a false all-clear, so
+    # fall back to the warehouse (same spine as estate_total) before believing a zero.
+    source = "azure_cost_management"
+    if not daily:
+        try:
+            wh_daily = _warehouse_daily_spend(sub_ids, from_date, today)
+            if wh_daily:
+                daily = wh_daily
+                source = "cost_warehouse"
+                logger.info("budget %s: live Cost Management returned nothing, used warehouse (%.2f)",
+                            budget.name, sum(daily.values()))
+        except Exception as exc:
+            logger.warning("budget %s: warehouse fallback failed: %s", budget.name, exc)
+
     actual_usd = sum(daily.values())
     burn_rate  = actual_usd / elapsed_days if elapsed_days else 0.0
     forecasted = actual_usd + burn_rate * days_remaining
@@ -374,7 +419,7 @@ def compute_budget_variance(budget_id: str) -> Optional[FinOpsBudgetVariance]:
         days_remaining=days_remaining,
         projected_overrun_usd=round(overrun, 2),
         daily_breakdown=breakdown,
-        data_source="azure_cost_management",
+        data_source=source,
     )
 
 

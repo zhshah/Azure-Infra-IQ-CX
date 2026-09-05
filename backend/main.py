@@ -5170,10 +5170,57 @@ async def finops_top_movers(
 ):
     """
     Resources/groups with largest cost change vs. prior 30-day period.
-    Live Azure Cost Management data — same as Azure Portal Cost Change analysis.
+    Served from the cost warehouse (throttle-immune); falls back to live Cost
+    Management only when the warehouse has nothing for that dimension.
     """
     _require_finops()
     loop = asyncio.get_event_loop()
+    lim = max(1, min(limit, 100))
+
+    # Azure Cost Management dimension names -> warehouse dimensions.
+    _WH_DIM = {
+        "ResourceGroupName": "resource_group",
+        "ServiceName":       "service_name",
+        "SubscriptionId":    "subscription",
+        "ResourceLocation":  "location",
+        "MeterCategory":     "meter_category",
+    }
+
+    def _from_warehouse() -> List[FinOpsTopMover]:
+        from services import cost_analytics_service as _ca_wh
+        wh_dim = _WH_DIM.get(dimension)
+        if not wh_dim:
+            return []
+        res = _ca_wh.analyze(None, wh_dim, period="last_30d", compare=True, top=lim)
+        rows = res.get("breakdown") or []
+        sub_names = _sub_name_map() if wh_dim == "subscription" else {}
+        out: List[FinOpsTopMover] = []
+        for r in rows:
+            delta = float(r.get("delta_usd") or 0.0)
+            key = str(r.get("key") or "")
+            out.append(FinOpsTopMover(
+                subscription_id=key if wh_dim == "subscription" else "",
+                subscription_name=sub_names.get(key.lower(), "") if wh_dim == "subscription" else "",
+                resource_group=key if wh_dim == "resource_group" else "",
+                dimension_value=key,
+                dimension=dimension,
+                current_cost=round(float(r.get("cost") or 0.0), 2),
+                prior_cost=round(float(r.get("prev_cost") or 0.0), 2),
+                delta_usd=round(delta, 2),
+                delta_pct=round(float(r.get("delta_pct") or 0.0), 1),
+                direction="up" if delta >= 0 else "down",
+            ))
+        out.sort(key=lambda m: -abs(m.delta_usd))
+        return out[:lim]
+
+    try:
+        movers = await loop.run_in_executor(_pool, _from_warehouse)
+        if movers:
+            return movers
+        logger.info("finops_top_movers: warehouse empty for %s, trying live", dimension)
+    except Exception as exc:
+        logger.warning("finops_top_movers warehouse path failed: %s", exc)
+
     # Two live Cost Management queries; bounded so 429 retry storms cannot hang the request.
     try:
         return await asyncio.wait_for(
@@ -5181,7 +5228,7 @@ async def finops_top_movers(
                 _pool,
                 lambda: finops_svc.get_top_movers(
                     dimension=dimension,
-                    limit=max(1, min(limit, 100))
+                    limit=lim
                 )
             ),
             timeout=45,

@@ -8,6 +8,22 @@ import { finopsApi, fmtUsd, fmtPct } from './finopsApi'
 import FinOpsAIPanel from './FinOpsAIPanel'
 import FinOpsExportMenu from './FinOpsExportMenu'
 
+// Shown instead of a 0% gauge when the scope owns no commitments at all.
+function NoCommitmentTile({ label }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+      <div style={{ width: 64, height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <svg width="64" height="64" viewBox="0 0 64 64">
+          <circle cx="32" cy="32" r="26" fill="none" style={{ stroke: 'var(--c-1e293b)' }} strokeWidth="6" strokeDasharray="4 6" />
+        </svg>
+        <div style={{ position: 'absolute', fontSize: 16, fontWeight: 700, color: 'var(--c-64748b)' }}>—</div>
+      </div>
+      <div style={{ color: 'var(--c-64748b)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase' }}>{label}</div>
+      <div style={{ color: 'var(--c-64748b)', fontSize: 9.5 }}>none owned</div>
+    </div>
+  )
+}
+
 function UtilGauge({ pct, label }) {
   const color = pct >= 80 ? '#22c55e' : pct >= 60 ? '#f59e0b' : '#ef4444'
   return (
@@ -98,13 +114,27 @@ export default function CommitmentTracker() {
         </button>
       </div>
 
+      {/* Owning no reservations is not the same as owning some and using 0% of them. */}
+      {reservations.length === 0 && (
+        <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: '12px 16px', color: 'var(--c-94a3b8)', fontSize: 12.5 }}>
+          <b style={{ color: 'var(--c-e2e8f0)' }}>No reservations or savings plans found in this scope.</b>{' '}
+          Utilisation and coverage are shown as “—” rather than 0% — there is nothing to utilise,
+          which is different from owning commitments and wasting them. Buy recommendations below (if any)
+          show where a commitment would pay off.
+        </div>
+      )}
+
       {/* KPI row */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, alignItems: 'start' }}>
         <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-          <UtilGauge pct={data.utilization_pct ?? 0} label="RI Utilization" />
+          {reservations.length === 0
+            ? <NoCommitmentTile label="RI Utilization" />
+            : <UtilGauge pct={data.utilization_pct ?? 0} label="RI Utilization" />}
         </div>
         <div style={{ background: 'var(--c-111827)', border: '1px solid var(--c-1e293b)', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-          <UtilGauge pct={data.coverage_pct ?? 0} label="RI Coverage" />
+          {reservations.length === 0
+            ? <NoCommitmentTile label="RI Coverage" />
+            : <UtilGauge pct={data.coverage_pct ?? 0} label="RI Coverage" />}
         </div>
         {[
           { label: 'Reservations', value: reservations.length, color: '#3b82f6' },

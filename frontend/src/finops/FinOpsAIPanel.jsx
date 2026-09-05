@@ -69,6 +69,12 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
     try { return JSON.stringify(data || {}).slice(0, 4000) } catch { return '' }
   }, [data])
 
+  // Callers pass `filters` as an inline object literal, so its identity changes on every
+  // parent render. Depending on the object rebuilt `load` constantly; fingerprint it too.
+  const filtersKey = useMemo(() => {
+    try { return JSON.stringify(filters || {}) } catch { return '' }
+  }, [filters])
+
   const load = useCallback(async (force = false, scopeArg, contextArg, questionArg, _retry = 0) => {
     if (abortRef.current) abortRef.current.abort()
     const ctrl = new AbortController()
@@ -92,7 +98,7 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
     } finally {
       if (!ctrl.signal.aborted) setLoading(false)
     }
-  }, [view, dataKey, filters]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [view, dataKey, filtersKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Ask / clear a free-text question about this view's data.
   const applyAsk = useCallback(() => {
@@ -159,6 +165,11 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
       return true
     }
     if (typeof data === 'object' && !Object.values(data).some(substantive)) return
+    // A question the user typed is answered ONCE. This view's background fetches (metrics,
+    // savings, commitments, insights) land at different times and each one changes dataKey,
+    // which used to re-send the same question — a 40-80s model call that also overwrote the
+    // answer on screen. Re-asking is an explicit action: Ask again, or Refresh analysis.
+    if (questionRef.current) return
     load(false)
   }, [dataKey, load]) // eslint-disable-line react-hooks/exhaustive-deps
 
