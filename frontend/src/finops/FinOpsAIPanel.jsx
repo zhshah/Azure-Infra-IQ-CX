@@ -202,7 +202,7 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
             </span>
           )}
           {question && (
-            <span title={`Question: ${question}`} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9.5, color: '#fcd34d', background: '#2a2207', border: '1px solid #a16207', borderRadius: 4, padding: '2px 6px', maxWidth: 260 }}>
+              <span title={`Question: ${question}`} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9.5, color: 'var(--c-fcd34d)', background: 'var(--c-2a2207)', border: '1px solid var(--c-a16207)', borderRadius: 4, padding: '2px 6px', maxWidth: 260 }}>
               <MessageCircleQuestion size={9} style={{ flexShrink: 0 }} />
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{question}</span>
               <X size={11} style={{ cursor: 'pointer', flexShrink: 0 }} onClick={clearAsk} />
@@ -211,9 +211,9 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           <button onClick={() => { setAskDraft(question); setAskOpen(o => !o); setScopeOpen(false); setContextOpen(false) }} title="Ask your own question about this data" style={{
-            display: 'flex', alignItems: 'center', gap: 5, background: question || askOpen ? '#2a2207' : 'var(--c-0f172a)',
-            border: `1px solid ${question || askOpen ? '#a16207' : 'var(--c-1e293b)'}`, borderRadius: 6, padding: '5px 11px',
-            cursor: 'pointer', color: question || askOpen ? '#fcd34d' : 'var(--c-94a3b8)', fontSize: 11, fontWeight: 600,
+            display: 'flex', alignItems: 'center', gap: 5, background: question || askOpen ? 'var(--c-2a2207)' : 'var(--c-0f172a)',
+            border: `1px solid ${question || askOpen ? 'var(--c-a16207)' : 'var(--c-1e293b)'}`, borderRadius: 6, padding: '5px 11px',
+            cursor: 'pointer', color: question || askOpen ? 'var(--c-fcd34d)' : 'var(--c-94a3b8)', fontSize: 11, fontWeight: 600,
           }}>
             <MessageCircleQuestion size={12} /> Ask
           </button>
@@ -246,7 +246,7 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
       {askOpen && (
         <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--c-15233b)', background: 'var(--c-0a1018)' }}>
           <div style={{ color: 'var(--c-94a3b8)', fontSize: 11, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <MessageCircleQuestion size={12} style={{ color: '#fcd34d' }} /> Ask anything about this data
+                <MessageCircleQuestion size={12} style={{ color: 'var(--c-fcd34d)' }} /> Ask anything about this data
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
             {ASK_PRESETS.map(p => (
@@ -395,10 +395,10 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
           {insights && !notConfigured && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {question && loading && (
-                <div style={{ background: '#1a1503', border: '1px solid #a16207', borderRadius: 8, padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <RefreshCw size={13} className="animate-spin" style={{ color: '#fbbf24' }} />
+                <div style={{ background: 'var(--c-1a1503)', border: '1px solid var(--c-a16207)', borderRadius: 8, padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <RefreshCw size={13} className="animate-spin" style={{ color: 'var(--c-fbbf24)' }} />
                   <div>
-                    <div style={{ color: '#fbbf24', fontSize: 11, fontWeight: 700 }}>Answering: “{question}”</div>
+                    <div style={{ color: 'var(--c-fbbf24)', fontSize: 11, fontWeight: 700 }}>Answering: “{question}”</div>
                     <div style={{ color: 'var(--c-94a3b8)', fontSize: 11, marginTop: 2 }}>
                       Reading this view&rsquo;s live data — this usually takes 30–90 seconds.
                     </div>
@@ -406,10 +406,10 @@ export default function FinOpsAIPanel({ view, data, filters = null, title = 'AI 
                 </div>
               )}
               {insights.answer && insights.question && (
-                <div style={{ background: '#1a1503', border: '1px solid #a16207', borderRadius: 8, padding: '10px 12px' }}>
+                <div style={{ background: 'var(--c-1a1503)', border: '1px solid var(--c-a16207)', borderRadius: 8, padding: '10px 12px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                    <MessageCircleQuestion size={12} style={{ color: '#fcd34d', flexShrink: 0 }} />
-                    <span style={{ color: '#fcd34d', fontSize: 11, fontWeight: 700 }}>{insights.question}</span>
+                    <MessageCircleQuestion size={12} style={{ color: 'var(--c-fcd34d)', flexShrink: 0 }} />
+                    <span style={{ color: 'var(--c-fcd34d)', fontSize: 11, fontWeight: 700 }}>{insights.question}</span>
                   </div>
                   <p style={{ color: 'var(--c-e2e8f0)', fontSize: 13, lineHeight: 1.55, margin: 0 }}>{insights.answer}</p>
                 </div>

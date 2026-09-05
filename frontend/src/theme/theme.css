@@ -54,6 +54,10 @@
   --c-1c100a: #1c100a;
   --c-1c1a05: #1c1a05;
   --c-1c1a0a: #1c1a0a;
+  /* Amber "Ask" panel: surface, chip and border. */
+  --c-1a1503: #1a1503;
+  --c-2a2207: #2a2207;
+  --c-a16207: #a16207;
   --c-431407: #431407;
   --c-451a03: #451a03;
   --c-422006: #422006;
@@ -156,6 +160,11 @@ html.theme-light {
   /* Status tints — yellow */
   --c-1c1a05: #fefce8;
   --c-1c1a0a: #fefce8;
+  /* Amber "Ask" panel. The surface MUST flip with the theme: its body text uses
+     --c-e2e8f0, which becomes near-black on light, so a dark surface here measured 1.15:1. */
+  --c-1a1503: #fffbeb;
+  --c-2a2207: #fef3c7;
+  --c-a16207: #d97706;
   --c-3a2c08: #fefce8;
   --c-3b2b10: #fefce8;
   --c-5c4700: #fef9c3;
