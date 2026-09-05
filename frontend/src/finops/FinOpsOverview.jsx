@@ -92,6 +92,7 @@ export default function FinOpsOverview() {
   const [savingsSort,  setSavingsSort]  = useState({ key: 'potential_savings_usd', dir: 'desc' })
   const [downloading,  setDownloading]  = useState(false)
   const [downloadErr,  setDownloadErr]  = useState(null)
+  const [slowMs,       setSlowMs]       = useState(0)   // how long the blocking load has run
   const [liveRefreshing, setLiveRefreshing] = useState(false)
   const [snapAsOf,     setSnapAsOf]     = useState(null)
   const [showAllAlerts, setShowAllAlerts] = useState(false)
@@ -113,11 +114,22 @@ export default function FinOpsOverview() {
   }
 
   const load = useCallback(async () => {
-    setLoading(true); setError(null)
+    setLoading(true); setError(null); setSlowMs(0)
+    const startedAt = Date.now()
+    // On a cold backend /api/finops/summary rebuilds the dashboard from live Azure Cost
+    // Management, which can take minutes under 429 throttling. Tick so the user sees
+    // progress rather than an unexplained blank page, and cap the wait.
+    const tick = setInterval(() => setSlowMs(Date.now() - startedAt), 1000)
+    const LOAD_CAP_MS = 240000
     try {
       // Fast path: load critical KPIs, advisor, and optimization first
       const [k, adv, op] = await Promise.all([
-        finopsApi.getSummary(),
+        Promise.race([
+          finopsApi.getSummary(),
+          new Promise((_, rej) => setTimeout(
+            () => rej(new Error('The cost summary did not respond within 4 minutes. The backend is most likely still building its first dashboard from Azure Cost Management (rate limits make the first load after a restart slow). Retry in a moment.')),
+            LOAD_CAP_MS)),
+        ]),
         finopsApi.getAdvisorCost().catch(() => null),
         finopsApi.getResourceOptimization().catch(() => null),
       ])
@@ -134,6 +146,7 @@ export default function FinOpsOverview() {
       finopsApi.getBudgetAlerts().then(al => setAlerts(al)).catch(() => {})
       finopsApi.getCostInsights().then(setInsights).catch(() => {})
     } catch (e) { setError(e.message); setLoading(false) }
+    finally { clearInterval(tick) }
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -252,7 +265,26 @@ export default function FinOpsOverview() {
   }
 
   /* ── Render ── */
-  if (loading) return <OverviewSkeleton />
+  if (loading) return (
+    <div>
+      {slowMs > 8000 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '10px 14px',
+          borderRadius: 10, border: '1px solid rgba(59,130,246,.35)', background: 'rgba(59,130,246,.08)',
+          color: 'var(--c-93c5fd)', fontSize: 12.5,
+        }}>
+          <RefreshCw size={14} className="animate-spin" style={{ flexShrink: 0 }} />
+          <div>
+            <b>Still loading — {Math.round(slowMs / 1000)}s.</b>{' '}
+            The first load after a backend restart rebuilds the cost dashboard from Azure Cost
+            Management, and Azure rate-limits those calls, so this can take a few minutes.
+            Later loads are served from cache and are fast.
+          </div>
+        </div>
+      )}
+      <OverviewSkeleton />
+    </div>
+  )
 
   if (error) return (
     <div style={{ background: '#1a0e0e', border: '1px solid var(--c-7f1d1d)', borderRadius: 10, padding: 20, color: 'var(--c-fca5a5)', display: 'flex', gap: 10 }}>

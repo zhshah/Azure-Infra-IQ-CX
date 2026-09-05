@@ -9,6 +9,8 @@ All data sourced live from Azure APIs:
 from __future__ import annotations
 
 import logging
+import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -24,14 +26,43 @@ from models.schemas import (
 )
 
 
-def get_commitment_summary() -> FinOpsCommitmentSummary:
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
+# Reservations and RI recommendations are slow to fetch (measured ~37s across three
+# subscriptions) and Azure only recomputes them daily, so re-fetching per request bought
+# nothing while making /api/metrics/summary a ~55s call on every single load.
+_SUMMARY_TTL_SECONDS = _env_int("FINOPS_COMMITMENT_CACHE_SECONDS", 900)
+_summary_cache: Dict[str, Any] = {"data": None, "ts": 0.0}
+
+
+def get_commitment_summary(force_refresh: bool = False) -> FinOpsCommitmentSummary:
     """
     Fetch live RI and savings plan data from Azure APIs.
     Returns CommitmentSummary identical to Azure Portal Reservations view.
+
+    Cached for FINOPS_COMMITMENT_CACHE_SECONDS (default 900s); pass force_refresh=True
+    to bypass. Set the env var to 0 to disable caching entirely.
     """
+    now = time.monotonic()
+    if (not force_refresh and _SUMMARY_TTL_SECONDS > 0
+            and _summary_cache["data"] is not None
+            and (now - _summary_cache["ts"]) < _SUMMARY_TTL_SECONDS):
+        logger.debug("commitment summary: cache hit (age %.0fs)", now - _summary_cache["ts"])
+        return _summary_cache["data"]
+
+    started = time.perf_counter()
     reservations  = _get_reservations()
     ri_recs       = _get_ri_recommendations()
     summary       = _compute_summary(reservations, ri_recs)
+    logger.info("commitment summary: refreshed from Azure in %.1fs", time.perf_counter() - started)
+
+    _summary_cache["data"] = summary
+    _summary_cache["ts"] = now
     return summary
 
 
