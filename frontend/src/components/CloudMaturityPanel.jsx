@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import AIControlsBar, { AffectedResources, EMPTY_AI_CONTROLS, aiControlsQuery } from "./ai/AIAnalysisTools";
 import { Cloud, CloudSun, CloudHail, CloudFog, Landmark, BarChart3 } from "lucide-react";
+import { asText } from '../utils/safeText';
 
 const GRADE_COLOR = { A: "#22c55e", B: "#84cc16", C: "#eab308", D: "#f97316", F: "#ef4444" };
 
@@ -75,14 +76,14 @@ function DimensionBar({ dim }) {
                 <div style={{ marginBottom: 6 }}>
                   {(dim?.gaps || []).map((g, i) => (
                     <div key={i} style={{ color: "#f97316", fontSize: 11, marginBottom: 2, display: "flex", gap: 5 }}>
-                      <span>△</span><span>{g}</span>
+                      <span>△</span><span>{asText(g)}</span>
                     </div>
                   ))}
                 </div>
               )}
               {(dim?.recommendations || []).map((r, i) => (
                 <div key={i} style={{ color: "var(--c-64748b)", fontSize: 11, marginBottom: 2, display: "flex", gap: 5 }}>
-                  <span style={{ color: "#22c55e" }}>→</span><span>{r}</span>
+                  <span style={{ color: "#22c55e" }}>→</span><span>{asText(r)}</span>
                 </div>
               ))}
               <AffectedResources items={dim.affected_resources} count={dim.affected_count} />

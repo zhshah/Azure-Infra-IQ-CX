@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { pdf, Document, Page, Text, View, StyleSheet, Font, Svg, Path, Rect, Circle, Polyline, Defs, LinearGradient, Stop, G } from '@react-pdf/renderer'
 import { BrandMark } from '../utils/pdfBrand'
 import { FileDown, Loader } from 'lucide-react'
+import { asText } from '../utils/safeText';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -1014,7 +1015,7 @@ function WAFScorecardPage({ waf, subscriptionId }) {
             </View>
             <View style={{ width: 160 }}>
               {p.gaps.slice(0, 2).map((g, gi) => (
-                <Text key={gi} style={{ fontSize: 7, color: C.textDim, marginBottom: 1 }}>• {g}</Text>
+                <Text key={gi} style={{ fontSize: 7, color: C.textDim, marginBottom: 1 }}>• {asText(g)}</Text>
               ))}
             </View>
           </View>
@@ -1028,7 +1029,7 @@ function WAFScorecardPage({ waf, subscriptionId }) {
           <View key={i} style={{ marginBottom: 7 }}>
             <Text style={{ fontSize: 8, fontFamily: 'Helvetica-Bold', color: C.text, marginBottom: 2 }}>{p.pillar}</Text>
             {p.recommendations.map((r, ri) => (
-              <Text key={ri} style={{ fontSize: 7.5, color: C.textMuted, marginBottom: 1.5, paddingLeft: 10 }}>• {r}</Text>
+              <Text key={ri} style={{ fontSize: 7.5, color: C.textMuted, marginBottom: 1.5, paddingLeft: 10 }}>• {asText(r)}</Text>
             ))}
           </View>
         ))}
@@ -1564,7 +1565,7 @@ function CloudMaturityPage({ maturity, subscriptionId }) {
             </View>
             <View style={{ width: 150 }}>
               {(d.gaps || []).slice(0, 2).map((g, gi) => (
-                <Text key={gi} style={{ fontSize: 7, color: C.textDim, marginBottom: 1 }}>• {g}</Text>
+                <Text key={gi} style={{ fontSize: 7, color: C.textDim, marginBottom: 1 }}>• {asText(g)}</Text>
               ))}
             </View>
           </View>

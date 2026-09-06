@@ -162,7 +162,7 @@ function RecommendationList({ recommendations, onResourceClick }) {
             {r.azure_services?.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
                 {(r?.azure_services || []).map((s, j) => (
-                  <span key={j} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', border: '1px solid #0369a150', color: 'var(--c-38bdf8)' }}>{s}</span>
+                  <span key={j} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', border: '1px solid #0369a150', color: 'var(--c-38bdf8)' }}>{asText(s)}</span>
                 ))}
               </div>
             )}

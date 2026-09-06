@@ -252,7 +252,7 @@ export default function ArcAIAnalysis() {
               {analysis.bcdr_assessment.recommendations.map((rec, i) => (
                 <li key={i} className="flex items-start gap-2 text-xs text-gray-300">
                   <ArrowRight size={10} className="text-purple-400 shrink-0 mt-0.5" />
-                  {rec}
+                  {asText(rec)}
                 </li>
               ))}
             </ul>

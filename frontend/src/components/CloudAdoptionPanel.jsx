@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useCallback } from "react";
 import AIControlsBar, { EMPTY_AI_CONTROLS, aiControlsQuery } from "./ai/AIAnalysisTools";
 import { ResourceIconImg } from "../utils/resourceIcons";
+import { asText } from '../utils/safeText';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -362,11 +363,11 @@ function MigrationSummaryCards({ categories }) {
 
           <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
             {(card?.benefits || []).map(b => (
-              <span key={b} style={{
+              <span key={asText(b)} style={{
                 background: `${card.color}10`, color: `${card.color}cc`,
                 fontSize: 9, fontWeight: 600, padding: "2px 7px",
                 borderRadius: 8, border: `1px solid ${card.color}20`,
-              }}>{b}</span>
+              }}>{asText(b)}</span>
             ))}
           </div>
         </div>
@@ -554,7 +555,7 @@ function AdoptionCard({ gap }) {
                   <ol style={{ margin: 0, paddingLeft: 18 }}>
                     {(gap?.implementation_steps || []).map((step, i) => (
                       <li key={i} style={{ color: "var(--c-94a3b8)", fontSize: 12, lineHeight: 1.7, marginBottom: 2 }}>
-                        {step}
+                        {asText(step)}
                       </li>
                     ))}
                   </ol>
@@ -756,7 +757,7 @@ function AIAdoptionAnalysis({ data, loading, error, onRun }) {
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
                     {(opp.benefits || []).map((b, j) => (
-                      <span key={j} style={{ background: "var(--c-0f172a)", color: "var(--c-94a3b8)", fontSize: 9, padding: "2px 7px", borderRadius: 8, border: "1px solid var(--c-334155)" }}>{b}</span>
+                      <span key={j} style={{ background: "var(--c-0f172a)", color: "var(--c-94a3b8)", fontSize: 9, padding: "2px 7px", borderRadius: 8, border: "1px solid var(--c-334155)" }}>{asText(b)}</span>
                     ))}
                     {opp.effort_weeks && (
                       <span style={{ background: "var(--c-0f172a)", color: "#eab308", fontSize: 9, padding: "2px 7px", borderRadius: 8, border: "1px solid #eab30825" }}>
@@ -766,7 +767,7 @@ function AIAdoptionAnalysis({ data, loading, error, onRun }) {
                   </div>
                   {opp.steps && (opp?.steps || []).length > 0 && (
                     <div style={{ color: "var(--c-64748b)", fontSize: 10, lineHeight: 1.6 }}>
-                      {(opp?.steps || []).map((s, j) => <div key={j}>• {s}</div>)}
+                      {(opp?.steps || []).map((s, j) => <div key={j}>• {asText(s)}</div>)}
                     </div>
                   )}
                 </div>
@@ -794,7 +795,7 @@ function AIAdoptionAnalysis({ data, loading, error, onRun }) {
                   </div>
                   <div style={{ color: "var(--c-e2e8f0)", fontSize: 11, fontWeight: 600, marginBottom: 8 }}>{wave.theme}</div>
                   {(wave.actions || []).map((a, j) => (
-                    <div key={j} style={{ color: "var(--c-94a3b8)", fontSize: 10, lineHeight: 1.6 }}>• {a}</div>
+                    <div key={j} style={{ color: "var(--c-94a3b8)", fontSize: 10, lineHeight: 1.6 }}>• {asText(a)}</div>
                   ))}
                   {wave.expected_savings > 0 && (
                     <div style={{ color: "#22c55e", fontSize: 10, fontWeight: 600, marginTop: 6 }}>

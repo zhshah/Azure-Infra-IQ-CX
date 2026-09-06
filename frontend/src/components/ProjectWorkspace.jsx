@@ -1121,7 +1121,7 @@ function AssessmentResult({ result, project, resources = [] }) {
             <ul className="space-y-1.5">
               {insights.map((ins, i) => (
                 <li key={i} className="text-sm text-gray-300 flex items-start gap-2">
-                  <span className="text-blue-400 mt-1">•</span> {ins}
+                  <span className="text-blue-400 mt-1">•</span> {asText(ins)}
                 </li>
               ))}
             </ul>
@@ -1183,7 +1183,7 @@ function AssessmentResult({ result, project, resources = [] }) {
             <ul className="space-y-1">
               {risks.map((rk, i) => (
                 <li key={i} className="text-xs text-gray-400 flex items-start gap-2">
-                  <span className="text-amber-500 mt-0.5">⚠</span> {rk}
+                  <span className="text-amber-500 mt-0.5">⚠</span> {asText(rk)}
                 </li>
               ))}
             </ul>

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import clsx from 'clsx'
+import { asText } from '../../utils/safeText';
 import {
   Server, Shield, DollarSign, Activity, Network, Tag,
   AlertTriangle, CheckCircle, TrendingUp, TrendingDown, Minus,
@@ -278,7 +279,7 @@ function ResourceGroupExplorer({ byRg }) {
               <div className="px-3 pb-3 pt-1 border-t border-gray-800/40">
                 <div className="flex flex-wrap gap-1">
                   {(rg.types || []).map(t => (
-                    <span key={t} className="text-xs px-2 py-0.5 rounded-full bg-gray-800 text-gray-400 border border-gray-700/50">{t}</span>
+                    <span key={asText(t)} className="text-xs px-2 py-0.5 rounded-full bg-gray-800 text-gray-400 border border-gray-700/50">{asText(t)}</span>
                   ))}
                 </div>
               </div>

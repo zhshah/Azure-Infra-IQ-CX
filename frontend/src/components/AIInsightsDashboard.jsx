@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { getJSON } from './mgmt/MgmtWidgets';
 import AIControlsBar, { EMPTY_AI_CONTROLS, aiControlsQuery } from './ai/AIAnalysisTools';
+import { asText } from '../utils/safeText';
 
 // Per-category presentation metadata (icon + accent). Keyed by backend `key`.
 const MODULE_META = {
@@ -205,7 +206,7 @@ function ExecutiveBriefing({ briefing, loading, error, canGenerate, analyzedCoun
                       <span style={{ fontSize: 9.5, fontWeight: 700, color: riskColor(r.severity), textTransform: 'uppercase' }}>{r.severity}</span>
                       <span style={{ color: 'var(--c-f1f5f9)', fontWeight: 600, fontSize: 12.5 }}>{r.title}</span>
                       {(r.categories || []).map((c, j) => (
-                        <span key={j} style={{ fontSize: 9.5, color: 'var(--c-94a3b8)', background: 'var(--c-1e293b)', borderRadius: 4, padding: '0 6px' }}>{c}</span>
+                        <span key={j} style={{ fontSize: 9.5, color: 'var(--c-94a3b8)', background: 'var(--c-1e293b)', borderRadius: 4, padding: '0 6px' }}>{asText(c)}</span>
                       ))}
                     </div>
                     {r.detail && <div style={{ color: 'var(--c-94a3b8)', fontSize: 11.5, marginTop: 3, lineHeight: 1.45 }}>{r.detail}</div>}
@@ -225,7 +226,7 @@ function ExecutiveBriefing({ briefing, loading, error, canGenerate, analyzedCoun
                   <div key={b.key} style={{ background: 'var(--c-0b1220)', border: '1px solid var(--c-1e293b)', borderRadius: 8, padding: '10px 12px' }}>
                     <div style={{ color: b.color, fontSize: 11, fontWeight: 700, marginBottom: 6 }}>{b.label}</div>
                     <ul style={{ margin: 0, paddingLeft: 16, color: 'var(--c-cbd5e1)', fontSize: 11.5, lineHeight: 1.5 }}>
-                      {(roadmap[b.key] || []).slice(0, 5).map((a, i) => <li key={i} style={{ marginBottom: 4 }}>{a}</li>)}
+                      {(roadmap[b.key] || []).slice(0, 5).map((a, i) => <li key={i} style={{ marginBottom: 4 }}>{asText(a)}</li>)}
                       {!(roadmap[b.key] || []).length && <li style={{ color: 'var(--c-475569)', listStyle: 'none', marginLeft: -12 }}>—</li>}
                     </ul>
                   </div>

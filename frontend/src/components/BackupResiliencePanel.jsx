@@ -1059,10 +1059,10 @@ export default function BackupResiliencePanel({ backupCoverage }) {
                   <div style={{ color: "var(--c-64748b)", fontSize: 10, fontWeight: 700, textTransform: "uppercase", marginBottom: 6 }}>Supported RoC Workloads</div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                     {(roc.supported_workloads || []).map(w => (
-                      <span key={w} style={{
+                      <span key={asText(w)} style={{
                         fontSize: 10, color: "var(--c-94a3b8)", background: "var(--c-1e293b)",
                         padding: "3px 8px", borderRadius: 8, border: "1px solid var(--c-334155)",
-                      }}>{w}</span>
+                      }}>{asText(w)}</span>
                     ))}
                   </div>
                 </div>

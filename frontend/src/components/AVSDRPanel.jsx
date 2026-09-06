@@ -11,6 +11,7 @@ import React, { useState, useEffect } from "react";
 import { api } from "../api/client";
 import { ResourceIconImg, getResourceIcon } from "../utils/resourceIcons";
 import { Brain } from "lucide-react";
+import { asText } from '../utils/safeText';
 
 const AVS_ICON = "/icons/other/01219-icon-service-Azure-VMware-Solution.svg";
 const EXPRESSROUTE_ICON = "/icons/networking/10079-icon-service-ExpressRoute-Circuits.svg";
@@ -237,7 +238,7 @@ function DRImplementationCard({ data }) {
             <div key={pi} style={{ marginBottom: 16 }}>
               <div style={phaseHeaderStyle}>{phase.phase}</div>
               {phase.steps.map((s, si) => (
-                <div key={si} style={stepStyle}>{s}</div>
+                <div key={si} style={stepStyle}>{asText(s)}</div>
               ))}
             </div>
           ))}

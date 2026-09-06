@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { RefreshCw, Wrench, Landmark, Hammer, Trash2, Pin, BarChart3, Waves, ClipboardList, Target, Zap, Rocket, HardHat } from "lucide-react";
 import { ResourceIconImg } from "../utils/resourceIcons";
+import { asText } from '../utils/safeText';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -260,7 +261,7 @@ function DetailPanel({ opp, onClose }) {
           <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none" }}>
             {opp.benefits.map((b, i) => (
               <li key={i} style={{ color: "var(--c-94a3b8)", fontSize: 12, marginBottom: 4, display: "flex", gap: 6 }}>
-                <span style={{ color: "#22c55e" }}>✓</span>{b}
+                <span style={{ color: "#22c55e" }}>✓</span>{asText(b)}
               </li>
             ))}
           </ul>

@@ -5,6 +5,7 @@
  */
 import React, { useState } from 'react';
 import AIAnalysisPanel, { ScoreGauge, FindingsList, RecommendationList, ExpandableCard } from './AIAnalysisPanel';
+import { asText } from '../utils/safeText';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Shared helpers
@@ -264,7 +265,7 @@ function InnovationAIReport({ data }) {
               {g.azure_services?.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
                   {(g?.azure_services || []).map((s, j) => (
-                    <span key={j} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', border: '1px solid #0369a150', color: 'var(--c-38bdf8)' }}>{s}</span>
+                    <span key={j} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', border: '1px solid #0369a150', color: 'var(--c-38bdf8)' }}>{asText(s)}</span>
                   ))}
                 </div>
               )}
@@ -650,7 +651,7 @@ function DeepBCDRAIReport({ data, onResourceClick }) {
               <div style={{ marginBottom: 8 }}>
                 <span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Primary Regions: </span>
                 {(data?.regional_analysis?.primary_regions || []).map((r, i) => (
-                  <span key={i} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', color: 'var(--c-38bdf8)', marginRight: 4 }}>{r}</span>
+                  <span key={i} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', color: 'var(--c-38bdf8)', marginRight: 4 }}>{asText(r)}</span>
                 ))}
               </div>
             )}
@@ -658,7 +659,7 @@ function DeepBCDRAIReport({ data, onResourceClick }) {
               <div>
                 <span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Recommended DR: </span>
                 {(data?.regional_analysis?.recommended_dr_regions || []).map((r, i) => (
-                  <span key={i} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#16a34a20', color: 'var(--c-86efac)', marginRight: 4 }}>{r}</span>
+                  <span key={i} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#16a34a20', color: 'var(--c-86efac)', marginRight: 4 }}>{asText(r)}</span>
                 ))}
               </div>
             )}

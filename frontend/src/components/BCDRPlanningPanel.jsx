@@ -23,6 +23,7 @@ import clsx from 'clsx'
 import { FileText, FileSpreadsheet, X, Loader2, SlidersHorizontal, Paperclip, ChevronLeft, ChevronRight, Columns3, Check, RefreshCw } from 'lucide-react'
 import { api } from '../api/client'
 import { BCDRBadge, BulkBCDREditor, ResourceBCDREditor, CRITICALITY_OPTIONS, DR_TIER_OPTIONS, RTO_OPTIONS, RPO_OPTIONS, AZURE_REGIONS, ENVIRONMENTS, DATA_CLASSES, BCDR_INTAKE_FIELDS } from './BCDRMetadataEditor'
+import { asText } from '../utils/safeText';
 
 // localStorage key for the user's chosen column visibility in the Phase 1 grid.
 const COLS_STORAGE_KEY = 'bcdr-phase1-columns-v1'
@@ -885,7 +886,7 @@ export function CustomerIntakeModal({ customerInfo, onChange, onClose, onGenerat
             <div className="text-xs text-amber-200 bg-amber-900/15 border border-amber-700/40 rounded-lg px-3 py-2.5">
               <div className="font-semibold mb-1">Required continuity inputs missing — {missingList.length}:</div>
               <ul className="space-y-0.5 ml-1">
-                {missingList.map((m, i) => <li key={i}>• {m}</li>)}
+                {missingList.map((m, i) => <li key={i}>• {asText(m)}</li>)}
               </ul>
               <div className="text-amber-300/70 mt-1.5">Fill these in the &quot;Customer continuity requirements&quot; section above before generating — without them the AI fabricates an architecture and downstream RTO/RPO cells will read &quot;Not supplied&quot;.</div>
             </div>

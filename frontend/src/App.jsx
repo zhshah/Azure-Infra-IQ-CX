@@ -3105,7 +3105,7 @@ function AIBCDRPanel() {
                 {data.executive_summary.key_findings.slice(0, 3).map((finding, i) => (
                   <div key={i} className="flex items-start gap-2 text-xs text-gray-300">
                     <span className="text-orange-400 mt-0.5">•</span>
-                    <span>{finding}</span>
+                    <span>{asText(finding)}</span>
                   </div>
                 ))}
               </div>
@@ -3229,7 +3229,7 @@ function AIBCDRPanel() {
                           <summary className="cursor-pointer hover:text-gray-400">Implementation Steps ({rec.implementation_steps.length})</summary>
                           <ol className="list-decimal list-inside mt-2 space-y-1 ml-2">
                             {rec.implementation_steps.map((step, si) => (
-                              <li key={si} className="text-gray-400">{step}</li>
+                              <li key={si} className="text-gray-400">{asText(step)}</li>
                             ))}
                           </ol>
                         </details>
@@ -3258,7 +3258,7 @@ function AIBCDRPanel() {
                       {data.implementation_roadmap.phase_1_immediate.actions.map((action, i) => (
                         <li key={i} className="flex items-start gap-2">
                           <span className="text-red-400 shrink-0">•</span>
-                          <span>{action}</span>
+                          <span>{asText(action)}</span>
                         </li>
                       ))}
                     </ul>
@@ -3273,7 +3273,7 @@ function AIBCDRPanel() {
                       {data.implementation_roadmap.phase_2_short_term.actions.map((action, i) => (
                         <li key={i} className="flex items-start gap-2">
                           <span className="text-orange-400 shrink-0">•</span>
-                          <span>{action}</span>
+                          <span>{asText(action)}</span>
                         </li>
                       ))}
                     </ul>
@@ -3288,7 +3288,7 @@ function AIBCDRPanel() {
                       {data.implementation_roadmap.phase_3_long_term.actions.map((action, i) => (
                         <li key={i} className="flex items-start gap-2">
                           <span className="text-blue-400 shrink-0">•</span>
-                          <span>{action}</span>
+                          <span>{asText(action)}</span>
                         </li>
                       ))}
                     </ul>
@@ -3313,7 +3313,7 @@ function AIBCDRPanel() {
                     <div className="flex flex-wrap gap-1">
                       {data.regional_analysis.primary_regions && data.regional_analysis.primary_regions.map((region, i) => (
                         <span key={i} className="text-xs px-2 py-1 rounded bg-blue-900/40 text-blue-300 border border-blue-800">
-                          {region}
+                          {asText(region)}
                         </span>
                       ))}
                     </div>
@@ -3332,7 +3332,7 @@ function AIBCDRPanel() {
                   <div className="flex flex-wrap gap-1">
                     {data.regional_analysis.recommended_dr_regions && data.regional_analysis.recommended_dr_regions.map((region, i) => (
                       <span key={i} className="text-xs px-2 py-1 rounded bg-green-900/40 text-green-300 border border-green-800">
-                        ✓ {region}
+                        ✓ {asText(region)}
                       </span>
                     ))}
                   </div>
@@ -3421,7 +3421,7 @@ function AIBCDRPanel() {
               {item.action_steps?.length > 0 && (
                 <ol className="space-y-0.5 pl-2">
                   {item.action_steps.slice(0, 3).map((s, j) => (
-                    <li key={j} className="text-xs text-gray-500">{j+1}. {s}</li>
+                    <li key={j} className="text-xs text-gray-500">{j+1}. {asText(s)}</li>
                   ))}
                 </ol>
               )}

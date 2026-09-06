@@ -13,6 +13,7 @@
  */
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { ShieldCheck, Save, PlayCircle, Brain, AlertTriangle, CheckCircle2, XCircle, RefreshCw, ListChecks, Gauge, Boxes, Search, Sparkles, ChevronDown, ChevronRight, ShieldAlert, FileWarning, Rocket } from 'lucide-react'
+import { asText } from '../utils/safeText';
 
 const RISK_COLOR = { high: '#ef4444', medium: '#f59e0b', low: '#22c55e' }
 const EOL_COLOR  = { 'end-of-life': '#ef4444', 'approaching-eol': '#f59e0b', supported: '#22c55e', unknown: 'var(--c-64748b)' }
@@ -418,7 +419,7 @@ function Findings({ title, color, icon: Icon, items, empty }) {
       </div>
       {items.length === 0
         ? <div style={{ color: '#22c55e', fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}><CheckCircle2 size={12} /> {empty}</div>
-        : <ul style={{ margin: 0, paddingLeft: 16, color: 'var(--c-cbd5e1)', fontSize: 11, lineHeight: 1.6 }}>{items.map((it, i) => <li key={i}>{it}</li>)}</ul>}
+        : <ul style={{ margin: 0, paddingLeft: 16, color: 'var(--c-cbd5e1)', fontSize: 11, lineHeight: 1.6 }}>{items.map((it, i) => <li key={i}>{asText(it)}</li>)}</ul>}
     </div>
   )
 }

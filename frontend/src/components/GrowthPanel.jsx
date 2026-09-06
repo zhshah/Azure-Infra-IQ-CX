@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { ResourceIconImg } from "../utils/resourceIcons";
+import { asText } from '../utils/safeText';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -270,7 +271,7 @@ function ACRGapCard({ gap }) {
                   <ol style={{ margin: 0, paddingLeft: 18 }}>
                     {gap.implementation_steps.map((step, i) => (
                       <li key={i} style={{ color: "var(--c-94a3b8)", fontSize: 12, lineHeight: 1.7, marginBottom: 2 }}>
-                        {step}
+                        {asText(step)}
                       </li>
                     ))}
                   </ol>

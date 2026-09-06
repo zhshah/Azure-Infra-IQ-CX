@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { ResourceIconImg } from "../utils/resourceIcons";
+import { asText } from '../utils/safeText';
 
 const COMPLEXITY_COLOR = {
   Low:    "#22c55e",
@@ -208,7 +209,7 @@ function OpportunityCard({ opp, showSteps = false }) {
                   {opp.benefits.map((b, i) => (
                     <li key={i} style={{ color: "var(--c-64748b)", fontSize: 12, marginBottom: 3, display: "flex", gap: 6 }}>
                       <span style={{ color: "#22c55e" }}>✓</span>
-                      {b}
+                      {asText(b)}
                     </li>
                   ))}
                 </ul>
