@@ -636,6 +636,18 @@ def _cache_ttl_hours(default: float = 12.0) -> float:
         return default
 
 
+def _mark_cached(result: dict, analyzed_at: Optional[str] = None) -> dict:
+    """Flag a cache hit so the UI can say so instead of looking suspiciously instant."""
+    if not isinstance(result, dict):
+        return result
+    out = dict(result)
+    out["_cached"] = True
+    stamp = analyzed_at or ((result.get("_meta") or {}).get("generated_at") if isinstance(result.get("_meta"), dict) else None)
+    if stamp:
+        out["_cached_at"] = stamp
+    return out
+
+
 def _get_cached(analysis_type: str, max_age_hours: Optional[float] = None) -> Optional[dict]:
     """Check the in-memory cache first (DB-independent), then the database."""
     max_age_hours = _cache_ttl_hours() if max_age_hours is None else max_age_hours
@@ -646,7 +658,7 @@ def _get_cached(analysis_type: str, max_age_hours: Optional[float] = None) -> Op
     if entry:
         ts, cached_result = entry
         if (time.time() - ts) < max_age_hours * 3600:
-            return cached_result
+            return _mark_cached(cached_result)
     try:
         from services.tagging_service import get_latest_ai_analysis
         cached = get_latest_ai_analysis(analysis_type, None, max_age_hours=max_age_hours)
@@ -659,6 +671,7 @@ def _get_cached(analysis_type: str, max_age_hours: Optional[float] = None) -> Op
                     _register_ai_summary(analysis_type, None, result)
                 except Exception:
                     pass
+                return _mark_cached(result, cached.get("analyzed_at"))
             return result
         return None
     except Exception:
@@ -1866,11 +1879,6 @@ def analyze_security_ai(resources: list, arc_data: dict = None, defender_data: d
     """
     AI-powered security posture analysis across Azure + Arc estate.
     """
-    if not force_refresh:
-        cached = _get_cached("ai_security_posture", max_age_hours=12)
-        if cached:
-            return cached
-
     filtered_resources = _filter_resources_for_category(resources, "security")
     onprem = _load_onprem_ctx()
     fp = _inventory_fingerprint("security", filtered_resources, arc_data, onprem)
@@ -2056,11 +2064,6 @@ def analyze_innovation_ai(resources: list, arc_data: dict = None, force_refresh:
     AI-powered innovation opportunity analysis.
     Identifies what Azure capabilities can transform the business.
     """
-    if not force_refresh:
-        cached = _get_cached("ai_innovation", max_age_hours=12)
-        if cached:
-            return cached
-
     filtered_resources = _filter_resources_for_category(resources, "innovation")
     onprem = _load_onprem_ctx()
     fp = _inventory_fingerprint("innovation", filtered_resources, arc_data, onprem)
@@ -2205,11 +2208,6 @@ def analyze_migration_ai(resources: list, arc_data: dict = None, force_refresh: 
     Covers: Data center migration, IaaS->PaaS, SQL modernization, Storage migration,
     VMware to AVS, and general modernization paths.
     """
-    if not force_refresh:
-        cached = _get_cached("ai_migration", max_age_hours=12)
-        if cached:
-            return cached
-
     filtered_resources = _filter_resources_for_category(resources, "migration")
     onprem = _load_onprem_ctx()
     fp = _inventory_fingerprint("migration", filtered_resources, arc_data, onprem)
@@ -2391,11 +2389,6 @@ def analyze_backup_ai(resources: list, arc_data: dict = None, backup_coverage: d
     AI-powered backup state analysis with recommendations.
     Considers all Azure Backup supported services.
     """
-    if not force_refresh:
-        cached = _get_cached("ai_backup", max_age_hours=12)
-        if cached:
-            return cached
-
     filtered_resources = _filter_resources_for_category(resources, "backup")
     onprem = _load_onprem_ctx()
     fp = _inventory_fingerprint("backup", filtered_resources, arc_data, onprem)
@@ -2608,11 +2601,6 @@ def analyze_generic_ai(module_key: str, role: str, focus: str, resources: list,
         import hashlib as _hl
         scope_suffix = ":scope-" + _hl.sha256(scope.encode("utf-8", "ignore")).hexdigest()[:8]
 
-    if not force_refresh and not scope:
-        cached = _get_cached(f"ai_{module_key}", max_age_hours=12)
-        if cached:
-            return cached
-
     # Scope the resource inventory to ONLY what this category should analyze.
     onprem = _load_onprem_ctx() if cfg.get("estate") else {}
     filtered_resources = _scope_inventory(resources, cfg, module_key)
@@ -2712,11 +2700,6 @@ def analyze_monitoring_ai(resources: list, arc_data: dict = None, monitoring_dat
     resource health, alerting maturity) across native Azure, Arc, and on-prem.
     """
     monitoring_data = monitoring_data or {}
-    if not force_refresh:
-        cached = _get_cached("ai_monitoring", max_age_hours=12)
-        if cached:
-            return cached
-
     filtered_resources = _filter_resources_for_category(resources, "monitoring")
     onprem = _load_onprem_ctx()
     fp = _inventory_fingerprint("monitoring", filtered_resources, arc_data, onprem)
@@ -2851,11 +2834,6 @@ def analyze_resilience_ai(resources: list, arc_data: dict = None, force_refresh:
     """
     AI-powered resilience and high-availability analysis of entire Azure estate.
     """
-    if not force_refresh:
-        cached = _get_cached("ai_resilience", max_age_hours=12)
-        if cached:
-            return cached
-
     filtered_resources = _filter_resources_for_category(resources, "resilience")
     onprem = _load_onprem_ctx()
     fp = _inventory_fingerprint("resilience", filtered_resources, arc_data, onprem)
@@ -3031,11 +3009,6 @@ def analyze_bcdr_avs(resources: list, arc_data: dict = None, force_refresh: bool
     - Cross-regional DR
     - Missing DR warnings for sales opportunities
     """
-    if not force_refresh:
-        cached = _get_cached("ai_bcdr_avs", max_age_hours=12)
-        if cached:
-            return cached
-
     onprem = _load_onprem_ctx()
     fp = _inventory_fingerprint("bcdr_avs", resources, arc_data, onprem)
     cache_key = f"ai_bcdr_avs:{fp}"
@@ -3218,11 +3191,6 @@ def analyze_bcdr_deep(resources: list, arc_data: dict = None, force_refresh: boo
     Service-wise, subscription-wise, and provides comprehensive DR strategies.
     This is the premium BCDR analysis with maximum detail.
     """
-    if not force_refresh:
-        cached = _get_cached("ai_bcdr_deep", max_age_hours=12)
-        if cached:
-            return cached
-
     onprem = _load_onprem_ctx()
     fp = _inventory_fingerprint("bcdr_deep", resources, arc_data, onprem)
     cache_key = f"ai_bcdr_deep:{fp}"
@@ -3482,7 +3450,7 @@ def _build_onprem_context(servers: list, summary: dict) -> str:
 
 def analyze_onprem_ai(servers: list, summary: dict, force_refresh: bool = False) -> dict:
     """Comprehensive AI analysis of on-premises infrastructure."""
-    cache_key = "ai_onprem_analysis"
+    cache_key = f"ai_onprem_analysis:{_inventory_fingerprint('onprem', [], None, {'servers': servers or [], 'total_servers': len(servers or [])})}"
 
     if not force_refresh:
         cached = _get_cached(cache_key)

@@ -37,6 +37,33 @@ logger = logging.getLogger(__name__)
 BCDR_GROUNDING_VERSION = "2"
 _BCDR_ENV_CACHE_KEY = f"bcdr_environment:v{BCDR_GROUNDING_VERSION}"
 
+# Bump when the grounding inputs or prompts in this module change materially.
+INFRA_GROUNDING_VERSION = "1"
+
+
+def _scope_key(base: str, resources: Optional[List[Any]] = None,
+               extra: Optional[List[str]] = None) -> str:
+    """Cache key bound to the exact estate slice the analysis is grounded on.
+
+    These caches were keyed on a bare module name ("networking", "cloud_adoption", …),
+    so an analysis scoped to one subscription returned the full-estate answer cached
+    earlier — instantly, and identical for every scope. Hashing the resource ids makes
+    each scope cache independently, so a cached hit can only ever be a hit for the same
+    inventory the model actually saw.
+    """
+    import hashlib
+
+    ids = sorted(
+        str(
+            (r.get("resource_id") or r.get("id") or "") if isinstance(r, dict)
+            else (getattr(r, "resource_id", None) or getattr(r, "id", None) or "")
+        )
+        for r in (resources or [])
+    )
+    payload = "|".join([INFRA_GROUNDING_VERSION, str(len(ids)), *(extra or [])] + ids)
+    return f"{base}:{hashlib.sha1(payload.encode('utf-8')).hexdigest()[:12]}"
+
+
 # ── Model config ──────────────────────────────────────────────────────────────
 
 CLAUDE_MODEL_PRIMARY   = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250514")
@@ -788,8 +815,9 @@ def analyze_workload(
     """
     import services.tagging_service as tag_svc
 
+    cache_key = _scope_key("workload", resources)
     if not force_refresh:
-        cached = tag_svc.get_latest_ai_analysis("workload", None, max_age_hours=6)
+        cached = tag_svc.get_latest_ai_analysis(cache_key, None, max_age_hours=6)
         if cached:
             logger.info("Returning cached workload analysis (age < 6h)")
             return {**cached["result"], "_cached": True, "_cached_at": cached["analyzed_at"]}
@@ -883,7 +911,7 @@ Return a JSON object matching EXACTLY this schema:
 
         # Cache result
         tag_svc.save_ai_analysis(
-            "workload", None, model, result,
+            cache_key, None, model, result,
             prompt_tokens=0,
         )
         return result
@@ -1050,8 +1078,9 @@ def analyze_environment_bcdr(
         logger.warning(f"Could not load BCDR metadata: {e}")
         metadata_map = {}
 
+    cache_key = _scope_key(_BCDR_ENV_CACHE_KEY, resources, extra=sorted(subscriptions or []))
     if not force_refresh:
-        cached = tag_svc.get_latest_ai_analysis(_BCDR_ENV_CACHE_KEY, None, max_age_hours=24)
+        cached = tag_svc.get_latest_ai_analysis(cache_key, None, max_age_hours=24)
         if cached:
             result = cached["result"] or {}
             result["_cached"] = True
@@ -1696,7 +1725,7 @@ Focus on:
             prompt_tokens = getattr(response.usage, "prompt_tokens", 0)
         
         tag_svc.save_ai_analysis(
-            _BCDR_ENV_CACHE_KEY, None, model, result,
+            cache_key, None, model, result,
             prompt_tokens=prompt_tokens,
         )
         
@@ -1732,8 +1761,9 @@ def analyze_resource_bcdr(
     """
     import services.tagging_service as tag_svc
 
+    cache_key = _scope_key("bcdr_ai", resources)
     if not force_refresh:
-        cached = tag_svc.get_latest_ai_analysis("bcdr_ai", None, max_age_hours=12)
+        cached = tag_svc.get_latest_ai_analysis(cache_key, None, max_age_hours=12)
         if cached:
             return cached["result"].get("items", [])
 
@@ -1795,7 +1825,7 @@ Return a JSON object: {{"items": [array of above objects]}}"""
             if "```" in raw:
                 raw = raw.rsplit("```", 1)[0]
         result = json.loads(raw.strip())
-        tag_svc.save_ai_analysis("bcdr_ai", None, model, result, prompt_tokens=0)
+        tag_svc.save_ai_analysis(cache_key, None, model, result, prompt_tokens=0)
         return result.get("items", [])
     except Exception as e:
         logger.error("AI BCDR analysis failed: %s", e)
@@ -1950,8 +1980,9 @@ def generate_optimization_roadmap(
     """
     import services.tagging_service as tag_svc
 
+    cache_key = _scope_key("optimization_roadmap", resources)
     if not force_refresh:
-        cached = tag_svc.get_latest_ai_analysis("optimization_roadmap", None, max_age_hours=6)
+        cached = tag_svc.get_latest_ai_analysis(cache_key, None, max_age_hours=6)
         if cached:
             return {**cached["result"], "_cached": True}
 
@@ -2020,7 +2051,7 @@ Return a JSON object:
         result = json.loads(raw.strip())
         result["model"]    = model
         result["available"] = True
-        tag_svc.save_ai_analysis("optimization_roadmap", None, model, result, prompt_tokens=0)
+        tag_svc.save_ai_analysis(cache_key, None, model, result, prompt_tokens=0)
         return result
     except Exception as e:
         logger.error("Optimization roadmap failed: %s", e)
@@ -2061,8 +2092,9 @@ def analyze_cloud_adoption(
     """
     import services.tagging_service as tag_svc
 
+    cache_key = _scope_key("cloud_adoption", resources)
     if not force_refresh:
-        cached = tag_svc.get_latest_ai_analysis("cloud_adoption", None, max_age_hours=6)
+        cached = tag_svc.get_latest_ai_analysis(cache_key, None, max_age_hours=6)
         if cached:
             return {**cached["result"], "_cached": True}
 
@@ -2181,7 +2213,7 @@ Analyze and return a JSON object:
         result["model"] = model
         result["available"] = True
         result["analysis_timestamp"] = datetime.now(timezone.utc).isoformat()
-        tag_svc.save_ai_analysis("cloud_adoption", None, model, result, prompt_tokens=0)
+        tag_svc.save_ai_analysis(cache_key, None, model, result, prompt_tokens=0)
         return result
     except Exception as e:
         logger.error("Cloud adoption analysis failed: %s", e)
@@ -2232,8 +2264,10 @@ def analyze_licensing_ai(
     """
     import services.tagging_service as tag_svc
 
+    cache_key = _scope_key("licensing", resources,
+                           extra=[str(len(licensing_opps or []))])
     if not force_refresh:
-        cached = tag_svc.get_latest_ai_analysis("licensing", None, max_age_hours=12)
+        cached = tag_svc.get_latest_ai_analysis(cache_key, None, max_age_hours=12)
         if cached:
             return {**cached["result"], "_cached": True, "_cached_at": cached["analyzed_at"]}
 
@@ -2408,7 +2442,7 @@ CRITICAL INSTRUCTIONS:
         result["model"] = model
         result["available"] = True
         result["analysis_timestamp"] = datetime.now(timezone.utc).isoformat()
-        tag_svc.save_ai_analysis("licensing", None, model, result, prompt_tokens=0)
+        tag_svc.save_ai_analysis(cache_key, None, model, result, prompt_tokens=0)
         return result
     except Exception as e:
         logger.error("Licensing AI analysis failed: %s", e)
@@ -2475,7 +2509,7 @@ recommended_next_steps. Be specific about Qatar Central constraints."""
             result["model"] = model
             # Cache it
             import services.tagging_service as tag_svc
-            tag_svc.save_ai_analysis("workload", None, model, result)
+            tag_svc.save_ai_analysis(_scope_key("workload", resources), None, model, result)
             yield f'data: {json.dumps({"type":"done","data":result})}\n\n'
         except json.JSONDecodeError:
             yield f'data: {json.dumps({"type":"done","data":{"raw":buffer[:2000],"model":model}})}\n\n'
@@ -2610,8 +2644,9 @@ def analyze_networking_ai(
     """
     import services.tagging_service as tag_svc
 
+    cache_key = _scope_key("networking", resources)
     if not force_refresh:
-        cached = tag_svc.get_latest_ai_analysis("networking", None, max_age_hours=12)
+        cached = tag_svc.get_latest_ai_analysis(cache_key, None, max_age_hours=12)
         if cached:
             return {**cached["result"], "_cached": True, "_cached_at": cached["analyzed_at"]}
 
@@ -2965,7 +3000,7 @@ CRITICAL INSTRUCTIONS FOR HIGH-QUALITY OUTPUT:
         result["available"] = True
 
         # Cache
-        tag_svc.save_ai_analysis("networking", None, model, result, prompt_tokens=0)
+        tag_svc.save_ai_analysis(cache_key, None, model, result, prompt_tokens=0)
 
         logger.info(
             "Networking AI analysis complete — Score: %d/100, Findings: %d, ACR opps: %d",
