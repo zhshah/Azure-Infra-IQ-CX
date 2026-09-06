@@ -1071,7 +1071,7 @@ export default function BackupResiliencePanel({ backupCoverage }) {
                 <div style={{ marginBottom: 12 }}>
                   <div style={{ color: "var(--c-64748b)", fontSize: 10, fontWeight: 700, textTransform: "uppercase", marginBottom: 6 }}>RoC Migration Steps</div>
                   <ol style={{ margin: 0, paddingLeft: 18, color: "var(--c-94a3b8)", fontSize: 11, lineHeight: 2 }}>
-                    {(roc.migration_steps || []).map((step, i) => <li key={i}>{step}</li>)}
+                    {(roc.migration_steps || []).map((step, i) => <li key={i}>{asText(step)}</li>)}
                   </ol>
                 </div>
 
@@ -1501,13 +1501,17 @@ export default function BackupResiliencePanel({ backupCoverage }) {
             (timeline.phases || []).map((p, i) => (
               <div key={i} style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 10, padding: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-60a5fa)' }}>Phase {p.phase}: {p.name}</span>
-                  <span style={{ fontSize: 10, color: "var(--c-64748b)" }}>{p.duration}</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-60a5fa)' }}>{p.name || `Phase ${p.phase}`}</span>
+                  <span style={{ fontSize: 10, color: "var(--c-64748b)" }}>{p.weeks || p.duration}</span>
                 </div>
-                <div style={{ fontSize: 11, color: "var(--c-94a3b8)", marginBottom: 8 }}>{p.objective}</div>
+                {(p.objective || p.goal) && (
+                  <div style={{ fontSize: 11, color: "var(--c-94a3b8)", marginBottom: 8 }}>{asText(p.objective || p.goal)}</div>
+                )}
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {/* actions arrive as {id, action, notes} objects - asText flattens them;
+                      rendering the raw object threw React #31 and killed the whole tab. */}
                   {(p.actions || []).map((a, j) => (
-                    <div key={j} style={{ fontSize: 11, color: "var(--c-cbd5e1)", paddingLeft: 12, borderLeft: "2px solid var(--c-1e293b)" }}>{a}</div>
+                    <div key={j} style={{ fontSize: 11, color: "var(--c-cbd5e1)", paddingLeft: 12, borderLeft: "2px solid var(--c-1e293b)" }}>{asText(a)}</div>
                   ))}
                 </div>
               </div>
@@ -1521,15 +1525,16 @@ export default function BackupResiliencePanel({ backupCoverage }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {!testingPlan ? <div style={{ color: "var(--c-64748b)", padding: 24 }}>Loading DR testing plan…</div> : (
             <>
-              {testingPlan.test_types?.length > 0 && (
+              {(testingPlan.test_types || testingPlan.purpose?.test_types || []).length > 0 && (
                 <div style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 10, padding: 16 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: "var(--c-f1f5f9)", marginBottom: 10 }}>Test Types</div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
-                    {testingPlan.test_types.map((t, i) => (
+                    {/* API returns plain strings here; older shape was {name,description,frequency}. */}
+                    {(testingPlan.test_types || testingPlan.purpose?.test_types || []).map((t, i) => (
                       <div key={i} style={{ background: "var(--c-1e293b)", borderRadius: 8, padding: 12 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-60a5fa)' }}>{t.name}</div>
-                        <div style={{ fontSize: 10, color: "var(--c-94a3b8)", marginTop: 4 }}>{t.description}</div>
-                        <div style={{ fontSize: 10, color: "var(--c-64748b)", marginTop: 4 }}>Frequency: {t.frequency}</div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-60a5fa)' }}>{asText(t?.name || t)}</div>
+                        {t?.description && <div style={{ fontSize: 10, color: "var(--c-94a3b8)", marginTop: 4 }}>{asText(t.description)}</div>}
+                        {t?.frequency && <div style={{ fontSize: 10, color: "var(--c-64748b)", marginTop: 4 }}>Frequency: {asText(t.frequency)}</div>}
                       </div>
                     ))}
                   </div>
@@ -1539,7 +1544,11 @@ export default function BackupResiliencePanel({ backupCoverage }) {
                 <div style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 10, padding: 16 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: "var(--c-f1f5f9)", marginBottom: 10 }}>Success Criteria</div>
                   {testingPlan.success_criteria.map((c, i) => (
-                    <div key={i} style={{ fontSize: 11, color: "var(--c-cbd5e1)", marginBottom: 4, paddingLeft: 12, borderLeft: "2px solid #22c55e" }}>{c}</div>
+                    <div key={i} style={{ fontSize: 11, color: "var(--c-cbd5e1)", marginBottom: 4, paddingLeft: 12, borderLeft: "2px solid #22c55e" }}>
+                      {c && typeof c === 'object'
+                        ? `${asText(c.criterion || c)}${c.threshold ? ` — ${c.threshold}` : ''}`
+                        : asText(c)}
+                    </div>
                   ))}
                 </div>
               )}
@@ -1554,7 +1563,7 @@ export default function BackupResiliencePanel({ backupCoverage }) {
           {!compliance ? <div style={{ color: "var(--c-64748b)", padding: 24 }}>Loading compliance checklist…</div> : (
             (compliance.categories || []).map((cat, i) => (
               <div key={i} style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 10, padding: 16 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-a78bfa)', marginBottom: 8 }}>{cat.category}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-a78bfa)', marginBottom: 8 }}>{cat.name || cat.category}</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {(cat.items || []).map((item, j) => (
                     <div key={j} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
@@ -1577,14 +1586,14 @@ export default function BackupResiliencePanel({ backupCoverage }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {!strategyRef ? <div style={{ color: "var(--c-64748b)", padding: 24 }}>Loading strategy reference…</div> : (
             <>
-              {(strategyRef.dr_patterns || []).map((p, i) => (
+              {(strategyRef.patterns || strategyRef.dr_patterns || []).map((p, i) => (
                 <div key={i} style={{ background: "var(--c-0f172a)", border: "1px solid var(--c-1e293b)", borderRadius: 10, padding: 16 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
                     <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-60a5fa)' }}>{p.name}</span>
                     <span style={{ fontSize: 10, color: "var(--c-64748b)" }}>RTO: {p.rto} | RPO: {p.rpo}</span>
                   </div>
                   <div style={{ fontSize: 11, color: "var(--c-94a3b8)" }}>{p.description}</div>
-                  {p.use_cases && <div style={{ fontSize: 10, color: "var(--c-475569)", marginTop: 6 }}>Use cases: {p.use_cases}</div>}
+                  {(p.when_to_use || p.use_cases) && <div style={{ fontSize: 10, color: "var(--c-475569)", marginTop: 6 }}>Use cases: {asText(p.when_to_use || p.use_cases)}</div>}
                 </div>
               ))}
               {strategyRef.decision_matrix && (
@@ -1603,7 +1612,7 @@ export default function BackupResiliencePanel({ backupCoverage }) {
                         {strategyRef.decision_matrix.map((row, i) => (
                           <tr key={i}>
                             {Object.values(row).map((v, j) => (
-                              <td key={j} style={{ padding: "6px 10px", color: "var(--c-cbd5e1)", borderBottom: "1px solid var(--c-0f172a)" }}>{v}</td>
+                              <td key={j} style={{ padding: "6px 10px", color: "var(--c-cbd5e1)", borderBottom: "1px solid var(--c-0f172a)" }}>{asText(v)}</td>
                             ))}
                           </tr>
                         ))}
