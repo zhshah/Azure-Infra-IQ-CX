@@ -199,7 +199,7 @@ function ExecutiveBriefing({ briefing, loading, error, canGenerate, analyzedCoun
             <div>
               <div style={{ color: 'var(--c-94a3b8)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Top cross-cutting risks</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {briefing.top_cross_cutting_risks.slice(0, 5).map((r, i) => (
+                {(briefing?.top_cross_cutting_risks || []).slice(0, 5).map((r, i) => (
                   <div key={i} style={{ background: 'var(--c-0b1220)', border: '1px solid var(--c-1e293b)', borderLeft: `3px solid ${riskColor(r.severity)}`, borderRadius: 8, padding: '8px 12px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 9.5, fontWeight: 700, color: riskColor(r.severity), textTransform: 'uppercase' }}>{r.severity}</span>

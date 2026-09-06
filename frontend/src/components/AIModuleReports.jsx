@@ -86,8 +86,8 @@ function MaturityAIReport({ data, onResourceClick }) {
       {/* Dimension Scores */}
       {data.dimension_scores?.length > 0 && (
         <>
-          <SectionHeader icon="📊" title="Dimension Analysis" count={data.dimension_scores.length} />
-          {data.dimension_scores.map((dim, i) => {
+          <SectionHeader icon="📊" title="Dimension Analysis" count={(data?.dimension_scores || []).length} />
+          {(data?.dimension_scores || []).map((dim, i) => {
             const color = dim.score >= 80 ? '#22c55e' : dim.score >= 60 ? '#84cc16' : dim.score >= 40 ? '#eab308' : '#f97316';
             return (
               <ExpandableCard key={i} title={`${dim.name} — ${dim.score}% (${dim.grade || ''})`} severity={dim.grade === 'F' ? 'critical' : dim.grade === 'D' ? 'high' : dim.grade === 'C' ? 'medium' : 'low'}>
@@ -106,7 +106,7 @@ function MaturityAIReport({ data, onResourceClick }) {
       {/* Cross-cutting Insights */}
       {data.cross_cutting_insights?.length > 0 && (
         <>
-          <SectionHeader icon="🔗" title="Cross-Cutting Insights" count={data.cross_cutting_insights.length} />
+          <SectionHeader icon="🔗" title="Cross-Cutting Insights" count={(data?.cross_cutting_insights || []).length} />
           <FindingsList findings={data.cross_cutting_insights} onResourceClick={onResourceClick} />
         </>
       )}
@@ -114,7 +114,7 @@ function MaturityAIReport({ data, onResourceClick }) {
       {/* Strategic Recommendations */}
       {data.strategic_recommendations?.length > 0 && (
         <>
-          <SectionHeader icon="🎯" title="Strategic Recommendations" count={data.strategic_recommendations.length} />
+          <SectionHeader icon="🎯" title="Strategic Recommendations" count={(data?.strategic_recommendations || []).length} />
           <RecommendationList recommendations={data.strategic_recommendations} />
         </>
       )}
@@ -146,7 +146,7 @@ function SecurityAIReport({ data, onResourceClick }) {
       {/* Critical Findings */}
       {data.critical_findings?.length > 0 && (
         <>
-          <SectionHeader icon="🚨" title="Critical Findings" count={data.critical_findings.length} />
+          <SectionHeader icon="🚨" title="Critical Findings" count={(data?.critical_findings || []).length} />
           <FindingsList findings={data.critical_findings} onResourceClick={onResourceClick} />
         </>
       )}
@@ -154,8 +154,8 @@ function SecurityAIReport({ data, onResourceClick }) {
       {/* Category Analysis */}
       {data.category_analysis?.length > 0 && (
         <>
-          <SectionHeader icon="📂" title="Category Analysis" count={data.category_analysis.length} />
-          {data.category_analysis.map((cat, i) => (
+          <SectionHeader icon="📂" title="Category Analysis" count={(data?.category_analysis || []).length} />
+          {(data?.category_analysis || []).map((cat, i) => (
             <ExpandableCard key={i} title={`${cat.category} — ${cat.score ?? ''}%`}>
               {cat.findings?.map((f, j) => (
                 <div key={j} style={{ color: 'var(--c-94a3b8)', fontSize: 12, lineHeight: 1.6, marginTop: 6 }}>
@@ -170,8 +170,8 @@ function SecurityAIReport({ data, onResourceClick }) {
       {/* Compliance Gaps */}
       {data.compliance_gaps?.length > 0 && (
         <>
-          <SectionHeader icon="📋" title="Compliance Gaps" count={data.compliance_gaps.length} />
-          {data.compliance_gaps.map((g, i) => (
+          <SectionHeader icon="📋" title="Compliance Gaps" count={(data?.compliance_gaps || []).length} />
+          {(data?.compliance_gaps || []).map((g, i) => (
             <ExpandableCard key={i} title={`${g.framework}: ${g.gap}`}>
               <div style={{ color: 'var(--c-7dd3fc)', fontSize: 12, marginTop: 6 }}>Fix: {g.remediation}</div>
             </ExpandableCard>
@@ -182,7 +182,7 @@ function SecurityAIReport({ data, onResourceClick }) {
       {/* Recommendations */}
       {data.recommendations?.length > 0 && (
         <>
-          <SectionHeader icon="🎯" title="Recommendations" count={data.recommendations.length} />
+          <SectionHeader icon="🎯" title="Recommendations" count={(data?.recommendations || []).length} />
           <RecommendationList recommendations={data.recommendations} />
         </>
       )}
@@ -217,8 +217,8 @@ function MonitoringAIReport({ data, onResourceClick }) {
       )}
       {data.categories?.length > 0 && (
         <>
-          <SectionHeader icon="📡" title="Observability Categories" count={data.categories.length} />
-          {data.categories.map((cat, i) => (
+          <SectionHeader icon="📡" title="Observability Categories" count={(data?.categories || []).length} />
+          {(data?.categories || []).map((cat, i) => (
             <ExpandableCard key={i} title={`${cat.name} — ${cat.score ?? ''}%`}>
               {cat.assessment && <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>{cat.assessment}</div>}
               {cat.findings?.length > 0 && <FindingsList findings={cat.findings} onResourceClick={onResourceClick} />}
@@ -228,7 +228,7 @@ function MonitoringAIReport({ data, onResourceClick }) {
       )}
       {data.top_recommendations?.length > 0 && (
         <>
-          <SectionHeader icon="🎯" title="Top Recommendations" count={data.top_recommendations.length} />
+          <SectionHeader icon="🎯" title="Top Recommendations" count={(data?.top_recommendations || []).length} />
           <RecommendationList recommendations={data.top_recommendations} />
         </>
       )}
@@ -253,8 +253,8 @@ function InnovationAIReport({ data }) {
       {/* Gap Analysis */}
       {data.gap_analysis?.length > 0 && (
         <>
-          <SectionHeader icon="🔍" title="Innovation Gap Analysis" count={data.gap_analysis.length} />
-          {data.gap_analysis.map((g, i) => (
+          <SectionHeader icon="🔍" title="Innovation Gap Analysis" count={(data?.gap_analysis || []).length} />
+          {(data?.gap_analysis || []).map((g, i) => (
             <ExpandableCard key={i} title={g.category} severity={g.priority}>
               <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8 }}>
                 <div><span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Current: </span><span style={{ color: 'var(--c-94a3b8)', fontSize: 12 }}>{g.current_state}</span></div>
@@ -263,7 +263,7 @@ function InnovationAIReport({ data }) {
               <p style={{ color: 'var(--c-94a3b8)', fontSize: 12, lineHeight: 1.6, marginTop: 6 }}>{g.gap_description}</p>
               {g.azure_services?.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
-                  {g.azure_services.map((s, j) => (
+                  {(g?.azure_services || []).map((s, j) => (
                     <span key={j} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', border: '1px solid #0369a150', color: 'var(--c-38bdf8)' }}>{s}</span>
                   ))}
                 </div>
@@ -276,8 +276,8 @@ function InnovationAIReport({ data }) {
       {/* Quick Wins */}
       {data.quick_wins?.length > 0 && (
         <>
-          <SectionHeader icon="⚡" title="Quick Wins" count={data.quick_wins.length} />
-          {data.quick_wins.map((w, i) => (
+          <SectionHeader icon="⚡" title="Quick Wins" count={(data?.quick_wins || []).length} />
+          {(data?.quick_wins || []).map((w, i) => (
             <div key={i} style={{ background: 'var(--c-0f172a)', border: '1px solid #16a34a30', borderRadius: 8, padding: '10px 14px', marginBottom: 6 }}>
               <div style={{ color: 'var(--c-e2e8f0)', fontSize: 13, fontWeight: 600 }}>{w.title}</div>
               <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, marginTop: 4 }}>{w.description}</div>
@@ -305,7 +305,7 @@ function InnovationAIReport({ data }) {
       {/* Strategic Recommendations */}
       {data.strategic_recommendations?.length > 0 && (
         <>
-          <SectionHeader icon="🎯" title="Strategic Recommendations" count={data.strategic_recommendations.length} />
+          <SectionHeader icon="🎯" title="Strategic Recommendations" count={(data?.strategic_recommendations || []).length} />
           <RecommendationList recommendations={data.strategic_recommendations} />
         </>
       )}
@@ -368,8 +368,8 @@ function MigrationAIReport({ data }) {
       {/* Workload Analysis */}
       {data.workload_analysis?.length > 0 && (
         <>
-          <SectionHeader icon="📋" title="Workload Analysis" count={data.workload_analysis.length} />
-          {data.workload_analysis.map((w, i) => (
+          <SectionHeader icon="📋" title="Workload Analysis" count={(data?.workload_analysis || []).length} />
+          {(data?.workload_analysis || []).map((w, i) => (
             <ExpandableCard key={i} title={w.workload_name || w.name} severity={w.complexity === 'High' ? 'high' : w.complexity === 'Medium' ? 'medium' : 'low'}>
               <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8 }}>
                 <div><span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Current: </span><span style={{ color: 'var(--c-94a3b8)', fontSize: 12 }}>{w.current_state}</span></div>
@@ -379,7 +379,7 @@ function MigrationAIReport({ data }) {
               </div>
               {w.risks?.length > 0 && (
                 <div style={{ marginTop: 8 }}>
-                  {w.risks.map((r, j) => (
+                  {(w?.risks || []).map((r, j) => (
                     <div key={j} style={{ color: 'var(--c-fca5a5)', fontSize: 11, marginTop: 2 }}>△ {typeof r === 'string' ? r : r.title || r.description}</div>
                   ))}
                 </div>
@@ -392,7 +392,7 @@ function MigrationAIReport({ data }) {
       {/* Strategic Recommendations */}
       {data.strategic_recommendations?.length > 0 && (
         <>
-          <SectionHeader icon="🎯" title="Strategic Recommendations" count={data.strategic_recommendations.length} />
+          <SectionHeader icon="🎯" title="Strategic Recommendations" count={(data?.strategic_recommendations || []).length} />
           <RecommendationList recommendations={data.strategic_recommendations} />
         </>
       )}
@@ -524,7 +524,7 @@ function ResilienceAIReport({ data, onResourceClick }) {
       {/* Findings */}
       {data.findings?.length > 0 && (
         <>
-          <SectionHeader icon="🔍" title="Resilience Findings" count={data.findings.length} />
+          <SectionHeader icon="🔍" title="Resilience Findings" count={(data?.findings || []).length} />
           <FindingsList findings={data.findings} onResourceClick={onResourceClick} />
         </>
       )}
@@ -532,7 +532,7 @@ function ResilienceAIReport({ data, onResourceClick }) {
       {/* Recommendations */}
       {data.recommendations?.length > 0 && (
         <>
-          <SectionHeader icon="🎯" title="Recommendations" count={data.recommendations.length} />
+          <SectionHeader icon="🎯" title="Recommendations" count={(data?.recommendations || []).length} />
           <RecommendationList recommendations={data.recommendations} />
         </>
       )}
@@ -595,7 +595,7 @@ function AVSBCDRAIReport({ data, onResourceClick }) {
       {/* Critical Gaps */}
       {data.critical_gaps?.length > 0 && (
         <>
-          <SectionHeader icon="🚨" title="Critical Gaps" count={data.critical_gaps.length} />
+          <SectionHeader icon="🚨" title="Critical Gaps" count={(data?.critical_gaps || []).length} />
           <FindingsList findings={data.critical_gaps} onResourceClick={onResourceClick} />
         </>
       )}
@@ -603,7 +603,7 @@ function AVSBCDRAIReport({ data, onResourceClick }) {
       {/* Recommendations */}
       {data.recommendations?.length > 0 && (
         <>
-          <SectionHeader icon="🎯" title="AVS DR Recommendations" count={data.recommendations.length} />
+          <SectionHeader icon="🎯" title="AVS DR Recommendations" count={(data?.recommendations || []).length} />
           <RecommendationList recommendations={data.recommendations} />
         </>
       )}
@@ -636,7 +636,7 @@ function DeepBCDRAIReport({ data, onResourceClick }) {
 
       {data.critical_gaps?.length > 0 && (
         <>
-          <SectionHeader icon="🚨" title="Critical BCDR Gaps" count={data.critical_gaps.length} />
+          <SectionHeader icon="🚨" title="Critical BCDR Gaps" count={(data?.critical_gaps || []).length} />
           <FindingsList findings={data.critical_gaps} onResourceClick={onResourceClick} />
         </>
       )}
@@ -649,7 +649,7 @@ function DeepBCDRAIReport({ data, onResourceClick }) {
             {data.regional_analysis.primary_regions?.length > 0 && (
               <div style={{ marginBottom: 8 }}>
                 <span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Primary Regions: </span>
-                {data.regional_analysis.primary_regions.map((r, i) => (
+                {(data?.regional_analysis?.primary_regions || []).map((r, i) => (
                   <span key={i} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', color: 'var(--c-38bdf8)', marginRight: 4 }}>{r}</span>
                 ))}
               </div>
@@ -657,7 +657,7 @@ function DeepBCDRAIReport({ data, onResourceClick }) {
             {data.regional_analysis.recommended_dr_regions?.length > 0 && (
               <div>
                 <span style={{ color: 'var(--c-64748b)', fontSize: 11 }}>Recommended DR: </span>
-                {data.regional_analysis.recommended_dr_regions.map((r, i) => (
+                {(data?.regional_analysis?.recommended_dr_regions || []).map((r, i) => (
                   <span key={i} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#16a34a20', color: 'var(--c-86efac)', marginRight: 4 }}>{r}</span>
                 ))}
               </div>
@@ -680,7 +680,7 @@ function DeepBCDRAIReport({ data, onResourceClick }) {
 
       {data.recommendations?.length > 0 && (
         <>
-          <SectionHeader icon="🎯" title="Recommendations" count={data.recommendations.length} />
+          <SectionHeader icon="🎯" title="Recommendations" count={(data?.recommendations || []).length} />
           <RecommendationList recommendations={data.recommendations} />
         </>
       )}
@@ -722,8 +722,8 @@ function GenericAIReport({ data, onResourceClick }) {
       )}
       {data.categories?.length > 0 && (
         <>
-          <SectionHeader icon="📂" title="Categories" count={data.categories.length} />
-          {data.categories.map((cat, i) => (
+          <SectionHeader icon="📂" title="Categories" count={(data?.categories || []).length} />
+          {(data?.categories || []).map((cat, i) => (
             <ExpandableCard key={i} title={`${cat.name} — ${cat.score ?? ''}%`}>
               {cat.assessment && <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>{cat.assessment}</div>}
               {cat.findings?.length > 0 && <FindingsList findings={cat.findings} onResourceClick={onResourceClick} />}
@@ -733,7 +733,7 @@ function GenericAIReport({ data, onResourceClick }) {
       )}
       {data.top_recommendations?.length > 0 && (
         <>
-          <SectionHeader icon="🎯" title="Top Recommendations" count={data.top_recommendations.length} />
+          <SectionHeader icon="🎯" title="Top Recommendations" count={(data?.top_recommendations || []).length} />
           <RecommendationList recommendations={data.top_recommendations} />
         </>
       )}

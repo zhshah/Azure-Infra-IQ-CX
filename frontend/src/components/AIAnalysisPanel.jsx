@@ -161,7 +161,7 @@ function RecommendationList({ recommendations, onResourceClick }) {
             <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>{r.description}</div>
             {r.azure_services?.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
-                {r.azure_services.map((s, j) => (
+                {(r?.azure_services || []).map((s, j) => (
                   <span key={j} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', border: '1px solid #0369a150', color: 'var(--c-38bdf8)' }}>{s}</span>
                 ))}
               </div>
@@ -456,7 +456,7 @@ export default function AIAnalysisPanel({ endpoint, title, renderReport, resourc
       </div>
       {/* Focus selector — directs the AI at a sub-topic of THIS category's data.
           Only shown for scope-aware generic categories (presets configured). */}
-      {meta.presets.length > 0 && (
+      {(meta?.presets || []).length > 0 && (
       <div style={{
         display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8,
         background: 'var(--c-0b1220)', border: '1px solid var(--c-1e293b)', borderRadius: 10,
@@ -474,7 +474,7 @@ export default function AIAnalysisPanel({ endpoint, title, renderReport, resourc
             color: scope ? 'var(--c-94a3b8)' : '#93c5fd',
           }}
         >Full analysis</button>
-        {meta.presets.map((p) => {
+        {(meta?.presets || []).map((p) => {
           const active = scope === p;
           return (
             <button key={p} onClick={() => applyFocus(p)} style={{

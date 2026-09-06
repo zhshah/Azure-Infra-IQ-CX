@@ -361,7 +361,7 @@ function MigrationSummaryCards({ categories }) {
           </div>
 
           <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-            {card.benefits.map(b => (
+            {(card?.benefits || []).map(b => (
               <span key={b} style={{
                 background: `${card.color}10`, color: `${card.color}cc`,
                 fontSize: 9, fontWeight: 600, padding: "2px 7px",
@@ -546,13 +546,13 @@ function AdoptionCard({ gap }) {
             <div style={{ marginTop: 10, background: "var(--c-1e293b)", borderRadius: 10, padding: "14px 16px", border: "1px solid var(--c-334155)" }}>
 
               {/* Steps */}
-              {gap.implementation_steps && gap.implementation_steps.length > 0 && (
+              {gap.implementation_steps && (gap?.implementation_steps || []).length > 0 && (
                 <div style={{ marginBottom: 14 }}>
                   <div style={{ color: "#22c55e", fontSize: 11, fontWeight: 600, marginBottom: 8 }}>
                     Migration Steps
                   </div>
                   <ol style={{ margin: 0, paddingLeft: 18 }}>
-                    {gap.implementation_steps.map((step, i) => (
+                    {(gap?.implementation_steps || []).map((step, i) => (
                       <li key={i} style={{ color: "var(--c-94a3b8)", fontSize: 12, lineHeight: 1.7, marginBottom: 2 }}>
                         {step}
                       </li>
@@ -764,9 +764,9 @@ function AIAdoptionAnalysis({ data, loading, error, onRun }) {
                       </span>
                     )}
                   </div>
-                  {opp.steps && opp.steps.length > 0 && (
+                  {opp.steps && (opp?.steps || []).length > 0 && (
                     <div style={{ color: "var(--c-64748b)", fontSize: 10, lineHeight: 1.6 }}>
-                      {opp.steps.map((s, j) => <div key={j}>• {s}</div>)}
+                      {(opp?.steps || []).map((s, j) => <div key={j}>• {s}</div>)}
                     </div>
                   )}
                 </div>
@@ -851,9 +851,9 @@ function AIAdoptionAnalysis({ data, loading, error, onRun }) {
                   </div>
                   <div style={{ color: "var(--c-e2e8f0)", fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{rec.title}</div>
                   <div style={{ color: "var(--c-64748b)", fontSize: 11, lineHeight: 1.5 }}>{rec.description}</div>
-                  {rec.affected_resources && rec.affected_resources.length > 0 && (
+                  {rec.affected_resources && (rec?.affected_resources || []).length > 0 && (
                     <div style={{ marginTop: 6, color: "var(--c-475569)", fontSize: 10 }}>
-                      Resources: {rec.affected_resources.slice(0, 3).join(", ")}{rec.affected_resources.length > 3 ? ` +${rec.affected_resources.length - 3} more` : ""}
+                      Resources: {(rec?.affected_resources || []).slice(0, 3).join(", ")}{(rec?.affected_resources || []).length > 3 ? ` +${(rec?.affected_resources || []).length - 3} more` : ""}
                     </div>
                   )}
                 </div>

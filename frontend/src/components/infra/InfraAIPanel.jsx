@@ -113,7 +113,7 @@ function OpportunityRow({ op }) {
           <p className="text-xs text-gray-300 leading-relaxed">{safeTxt(op.explanation)}</p>
           {op.steps?.length > 0 && (
             <ol className="space-y-1">
-              {op.steps.map((s, i) => (
+              {(op?.steps || []).map((s, i) => (
                 <li key={i} className="flex gap-2 text-xs text-gray-400">
                   <span className="shrink-0 w-4 h-4 rounded-full bg-gray-700 flex items-center justify-center text-gray-500">{i + 1}</span>
                   {safeTxt(s)}
@@ -140,7 +140,7 @@ function QuickWinCard({ qw }) {
           )}
           {qw.steps?.length > 0 && (
             <ol className="mt-2 space-y-0.5">
-              {qw.steps.slice(0, 3).map((s, i) => (
+              {(qw?.steps || []).slice(0, 3).map((s, i) => (
                 <li key={i} className="text-xs text-teal-400/70">
                   {i + 1}. {safeTxt(s)}
                 </li>
@@ -507,7 +507,7 @@ export default function InfraAIPanel({ onSearchResults, onOpenSettings }) {
                 <div>
                   <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Gaps</h3>
                   <ul className="space-y-1.5">
-                    {analysis.bcdr_readiness.gaps.map((g, i) => (
+                    {(analysis?.bcdr_readiness?.gaps || []).map((g, i) => (
                       <li key={i} className="flex gap-2 text-xs text-gray-300">
                         <AlertTriangle size={12} className="text-orange-400 shrink-0 mt-0.5" />
                         {safeTxt(g)}
@@ -520,7 +520,7 @@ export default function InfraAIPanel({ onSearchResults, onOpenSettings }) {
                 <div>
                   <h3 className="text-xs font-semibold text-orange-500 uppercase tracking-wider mb-2">Qatar Central Specific</h3>
                   <ul className="space-y-1.5">
-                    {analysis.bcdr_readiness.qatar_specific_issues.map((g, i) => (
+                    {(analysis?.bcdr_readiness?.qatar_specific_issues || []).map((g, i) => (
                       <li key={i} className="flex gap-2 text-xs text-orange-300/90">
                         <AlertTriangle size={12} className="text-orange-400 shrink-0 mt-0.5" />
                         {safeTxt(g)}
@@ -533,7 +533,7 @@ export default function InfraAIPanel({ onSearchResults, onOpenSettings }) {
                 <div>
                   <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Immediate Actions</h3>
                   <ol className="space-y-1.5">
-                    {analysis.bcdr_readiness.immediate_actions.map((a, i) => (
+                    {(analysis?.bcdr_readiness?.immediate_actions || []).map((a, i) => (
                       <li key={i} className="flex gap-2 text-xs text-gray-300">
                         <span className="shrink-0 w-4 h-4 rounded-full bg-blue-900/40 text-blue-400 flex items-center justify-center">{i + 1}</span>
                         {safeTxt(a)}
@@ -552,7 +552,7 @@ export default function InfraAIPanel({ onSearchResults, onOpenSettings }) {
                 <div className="card">
                   <h3 className="text-sm font-semibold text-gray-300 mb-3">Recommended Next Steps</h3>
                   <ol className="space-y-2">
-                    {analysis.recommended_next_steps.map((s, i) => (
+                    {(analysis?.recommended_next_steps || []).map((s, i) => (
                       <li key={i} className="flex gap-3 text-sm text-gray-300">
                         <span className="shrink-0 w-6 h-6 rounded-full bg-indigo-900/40 text-indigo-400 flex items-center justify-center text-xs font-bold">{i + 1}</span>
                         {safeTxt(s)}

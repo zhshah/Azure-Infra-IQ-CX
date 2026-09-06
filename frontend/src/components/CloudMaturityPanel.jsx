@@ -61,7 +61,7 @@ function DimensionBar({ dim }) {
       <div style={{ color: "var(--c-475569)", fontSize: 11, marginBottom: 4 }}>{dim.description}</div>
 
       {/* Gaps / Recs expandable */}
-      {(dim.gaps.length > 0 || dim.recommendations.length > 0) && (
+      {((dim?.gaps || []).length > 0 || (dim?.recommendations || []).length > 0) && (
         <>
           <button onClick={() => setOpen(!open)} style={{
             background: "none", border: "none", color: "var(--c-475569)",
@@ -71,16 +71,16 @@ function DimensionBar({ dim }) {
           </button>
           {open && (
             <div style={{ marginTop: 8, paddingLeft: 8, borderLeft: "2px solid var(--c-1e293b)" }}>
-              {dim.gaps.length > 0 && (
+              {(dim?.gaps || []).length > 0 && (
                 <div style={{ marginBottom: 6 }}>
-                  {dim.gaps.map((g, i) => (
+                  {(dim?.gaps || []).map((g, i) => (
                     <div key={i} style={{ color: "#f97316", fontSize: 11, marginBottom: 2, display: "flex", gap: 5 }}>
                       <span>△</span><span>{g}</span>
                     </div>
                   ))}
                 </div>
               )}
-              {dim.recommendations.map((r, i) => (
+              {(dim?.recommendations || []).map((r, i) => (
                 <div key={i} style={{ color: "var(--c-64748b)", fontSize: 11, marginBottom: 2, display: "flex", gap: 5 }}>
                   <span style={{ color: "#22c55e" }}>→</span><span>{r}</span>
                 </div>
@@ -108,7 +108,17 @@ export default function CloudMaturityPanel({ cloudMaturity, resources = null }) 
     try {
       const res = await fetch(`/api/ai/maturity?refresh=true${q}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setScoped(await res.json());
+      const payload = await res.json();
+      // A failed analysis still returns HTTP 200 carrying {error, available:false}.
+      // Rendering that shape blanked the panel (no dimensions), so surface the message
+      // and keep the estate-wide assessment on screen instead.
+      if (!payload || payload.available === false || payload.error) {
+        throw new Error(payload?.error || 'the model returned no assessment for this scope');
+      }
+      if (!Array.isArray(payload.dimensions) || payload.dimensions.length === 0) {
+        throw new Error('no dimensions were returned for this scope');
+      }
+      setScoped(payload);
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -120,6 +130,7 @@ export default function CloudMaturityPanel({ cloudMaturity, resources = null }) 
   if (!view) return null;
 
   const { overall_score, overall_grade, overall_label, dimensions } = view;
+  const dims = Array.isArray(dimensions) ? dimensions : [];
   const gradeColor  = GRADE_COLOR[overall_grade]  || "var(--c-64748b)";
   const labelColor  = LABEL_COLOR[overall_label]  || "var(--c-64748b)";
   const labelIcon   = LABEL_ICON[overall_label]   || Cloud;
@@ -187,13 +198,19 @@ export default function CloudMaturityPanel({ cloudMaturity, resources = null }) 
       )}
       {err && (
         <div style={{ fontSize: 11, color: "#f87171", marginBottom: 10 }}>
-          Scoped analysis failed: {err}
+          Scoped analysis failed: {err}. Showing the estate-wide assessment.
         </div>
       )}
 
       {/* Dimension bars */}
       <div>
-        {dimensions.map((dim, i) => <DimensionBar key={i} dim={dim} />)}
+        {dims.length > 0
+          ? dims.map((dim, i) => <DimensionBar key={i} dim={dim} />)
+          : (
+            <div style={{ color: "var(--c-64748b)", fontSize: 12, padding: "8px 0" }}>
+              No dimension breakdown available for this view.
+            </div>
+          )}
       </div>
     </div>
   );

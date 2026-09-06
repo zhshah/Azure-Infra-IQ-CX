@@ -363,12 +363,40 @@ def _enrich_findings(findings: list, lookup: dict) -> list:
 # ── Response normalizers ──────────────────────────────────────────────────────
 # These transform AI responses into the exact schema the frontend expects.
 
+def _ai_item_text(item) -> str:
+    """Flatten one AI list item to display text.
+
+    Models return these entries either as plain strings or as objects
+    (title/description, or finding-shaped title/detail). CloudMaturityPanel renders
+    them directly as React children, so an object here throws "Objects are not valid
+    as a React child" — always hand back a string.
+    """
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        head = (item.get("title") or item.get("recommendation") or item.get("name")
+                or item.get("gap") or "")
+        body = item.get("description") or item.get("detail") or ""
+        head, body = str(head).strip(), str(body).strip()
+        if head and body and body != head:
+            return f"{head} — {body}"
+        return head or body
+    return str(item).strip()
+
+
+def _grade_for(score: float) -> str:
+    return ("A" if score >= 85 else "B" if score >= 70 else "C" if score >= 55
+            else "D" if score >= 40 else "F")
+
+
 def _normalize_maturity_response(result: dict) -> dict:
     """Normalize AI maturity response -> frontend expected schema."""
     # Frontend expects: overall_score, overall_label, executive_summary, dimension_scores[]
     oa = result.get("overall_assessment", {})
+    _overall = oa.get("score") or result.get("overall_score", 0)
     out = {
-        "overall_score": oa.get("score") or result.get("overall_score", 0),
+        "overall_score": _overall,
+        "overall_grade": oa.get("grade") or result.get("overall_grade") or _grade_for(_overall or 0),
         "overall_label": oa.get("current_maturity_level") or result.get("overall_label", ""),
         "executive_summary": oa.get("executive_summary") or result.get("executive_summary", ""),
         "key_strengths": oa.get("key_strengths", result.get("key_strengths", [])),
@@ -377,19 +405,44 @@ def _normalize_maturity_response(result: dict) -> dict:
     # Map dimensions -> dimension_scores
     dims = result.get("dimensions", result.get("dimension_scores", []))
     dim_scores = []
+    panel_dims = []
     for d in dims:
+        if not isinstance(d, dict):
+            continue
         score = d.get("score", 0)
-        grade = d.get("grade") or ("A" if score >= 85 else "B" if score >= 70 else "C" if score >= 55 else "D" if score >= 40 else "F")
+        grade = d.get("grade") or _grade_for(score or 0)
+        findings = d.get("findings") or []
+        recs = d.get("recommendations") or []
         dim_scores.append({
             "name": d.get("name", ""),
             "score": score,
             "grade": grade,
             "assessment": d.get("assessment", ""),
-            "findings": d.get("findings", []),
-            "recommendations": d.get("recommendations", []),
+            "findings": findings,
+            "recommendations": recs,
+        })
+        # CloudMaturityPanel renders a DIFFERENT, flatter shape (models.schemas
+        # MaturityDimension): description + gaps/recommendations as plain strings.
+        # It was previously handed the rich shape above, so `gaps` was missing
+        # entirely and `dim.gaps.length` crashed the whole panel under Focus.
+        gaps = [t for t in (_ai_item_text(g) for g in (d.get("gaps") or [])) if t]
+        if not gaps:
+            gaps = [t for t in (_ai_item_text(f) for f in findings
+                                if isinstance(f, dict) and f.get("type") == "gap") if t]
+        panel_dims.append({
+            "key": (d.get("key") or d.get("name", "")).lower().replace(" ", "_"),
+            "name": d.get("name", ""),
+            "score": score,
+            "grade": grade,
+            "description": d.get("description") or d.get("assessment", ""),
+            "gaps": gaps,
+            "recommendations": [t for t in (_ai_item_text(r) for r in recs) if t],
+            "affected_resources": d.get("affected_resources") or [],
+            "affected_count": d.get("affected_count") or 0,
         })
     out["dimension_scores"] = dim_scores
-    out["dimensions"] = dim_scores  # Alias for compatibility with CloudMaturityPanel
+    out["dimensions"] = panel_dims
+
     # Cross-cutting insights: flatten from findings
     cross = []
     for d in dims:
