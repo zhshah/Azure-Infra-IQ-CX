@@ -1377,6 +1377,32 @@ def analyze_environment_bcdr(
         _gt = financial_ground_truth
         _est_count = _gt['total_resources_in_calc'] - _gt['stated_loss_resources']
         _dc = _gt['data_confidence']
+        # Built OUTSIDE the f-string below: these contain backslash escapes and quotes,
+        # which are illegal inside an f-string expression before Python 3.12. The
+        # container runs 3.11, so inlining them crashed the import on startup.
+        if _gt['exposure_is_quantified']:
+            _exposure_block = (
+                "COMPUTED ANNUAL RISK EXPOSURE (100% from customer-stated loss figures):\n"
+                f"  Expected: ${_gt['annual_risk_exposure_expected_usd']:,.2f}/yr\n"
+                f"  Range:    ${_gt['annual_risk_exposure_low_usd']:,.2f} - "
+                f"${_gt['annual_risk_exposure_high_usd']:,.2f}/yr\n"
+                "  The range reflects the spread of the outage-hours ASSUMPTION above, "
+                "not measured variance."
+            )
+        else:
+            _exposure_block = (
+                "ANNUAL RISK EXPOSURE: NOT QUANTIFIED.\n"
+                "  The customer has not supplied a financial_loss_per_hour for any resource, so\n"
+                "  there is NO defensible dollar figure. You MUST set\n"
+                "  cost_benefit_analysis.current_annual_risk_exposure to exactly\n"
+                "  'Not quantified - no financial impact data supplied'. DO NOT invent a number,\n"
+                "  DO NOT estimate from Azure spend, and DO NOT quote an industry average."
+            )
+        if _gt.get('recommended_investment_low_usd') is not None:
+            _invest_line = (f"${_gt['recommended_investment_low_usd']:,.2f} - "
+                            f"${_gt['recommended_investment_high_usd']:,.2f}/year")
+        else:
+            _invest_line = "Not quantified"
         gt_block = f"""
 GROUNDED FINANCIAL CONTEXT (fully data-driven from THIS customer's estate — AUTHORITATIVE, DO NOT INVENT):
 
@@ -1411,21 +1437,10 @@ PER-TIER BREAKDOWN (count, monthly_cost, total_hourly_loss, annual_exposure):
 {json.dumps(_gt['tier_summary'], indent=2)}
 
 EXPOSURE IS QUANTIFIED: {_gt['exposure_is_quantified']}
-{(
-  "COMPUTED ANNUAL RISK EXPOSURE (100% from customer-stated loss figures):\n"
-  f"  Expected: ${_gt['annual_risk_exposure_expected_usd']:,.2f}/yr\n"
-  f"  Range:    ${_gt['annual_risk_exposure_low_usd']:,.2f} - ${_gt['annual_risk_exposure_high_usd']:,.2f}/yr\n"
-  "  The range reflects the spread of the outage-hours ASSUMPTION above, not measured variance."
-) if _gt['exposure_is_quantified'] else (
-  "ANNUAL RISK EXPOSURE: NOT QUANTIFIED.\n"
-  "  The customer has not supplied a financial_loss_per_hour for any resource, so there is\n"
-  "  NO defensible dollar figure. You MUST set cost_benefit_analysis.current_annual_risk_exposure\n"
-  "  to exactly \"Not quantified - no financial impact data supplied\". DO NOT invent a number,\n"
-  "  DO NOT estimate from Azure spend, and DO NOT quote an industry average."
-)}
+{_exposure_block}
 
 RECOMMENDED DR INVESTMENT:
-  {("$%s - $%s/year" % (f"{_gt['recommended_investment_low_usd']:,.2f}", f"{_gt['recommended_investment_high_usd']:,.2f}")) if _gt.get('recommended_investment_low_usd') is not None else "Not quantified"}
+  {_invest_line}
   Basis: {_gt['recommended_investment_basis']}
 
 USE THESE NUMBERS VERBATIM for cost_benefit_analysis.current_annual_risk_exposure and

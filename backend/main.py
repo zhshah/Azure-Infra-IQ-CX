@@ -77,6 +77,12 @@ import services.persistence_service as persistence_svc
 import services.cache_service as cache_svc
 import services.auth_service as auth_svc
 
+# Defined here, not after the optional imports below: those except-handlers log, and a
+# NameError in a handler turns a degraded module into a dead app. A syntax error in
+# ai_infra_service took the whole container down this way (it crashed on `logger` being
+# undefined rather than continuing without the module). basicConfig still runs later.
+logger = logging.getLogger(__name__)
+
 try:
     import services.tagging_service as tagging_svc
 except Exception as _e:
