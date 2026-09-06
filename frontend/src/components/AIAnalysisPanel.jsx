@@ -334,9 +334,24 @@ export default function AIAnalysisPanel({ endpoint, title, renderReport, resourc
       // Business context + resource filter (already url-encoded by the helper).
       const extra = aiControlsQuery({ ...ctlValue, scope: '' });
       const url = `${API}${endpoint}${endpoint.includes('?') ? '&' : '?'}${params.toString()}${extra}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
-      const json = await res.json();
+
+      // A deep analysis can take several minutes - longer than the gateway will hold a
+      // connection open (that is where the 504s came from). The server now returns a
+      // `processing` marker instead of hanging, and we poll until the result lands.
+      const deadline = Date.now() + 15 * 60 * 1000;
+      let json;
+      for (;;) {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+        json = await res.json();
+        if (json.status !== 'processing') break;
+        if (Date.now() > deadline) {
+          throw new Error('Analysis is taking longer than expected. Please try again.');
+        }
+        setLoadingStage(`Still analysing on the server — this can take a few minutes...`);
+        const waitMs = Math.max(5, Number(json.retry_after_seconds) || 10) * 1000;
+        await new Promise(r => setTimeout(r, waitMs));
+      }
       if (json.error) throw new Error(json.error);
       setData(json);
     } catch (e) {

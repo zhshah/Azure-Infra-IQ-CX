@@ -3665,6 +3665,70 @@ from models.schemas import (
 )
 
 
+# ── Long-running AI analyses ──────────────────────────────────────────────────
+# These take 90-450s. Two things were wrong: they ran directly on the event loop, so a
+# single analysis froze the WHOLE server (health probes failed, every other request
+# queued until the ingress returned 504), and one request could outlive the Container
+# Apps ingress limit (~240s) and 504 on its own.
+#
+# _await_ai runs the work in the thread pool and waits only up to a budget that is
+# comfortably inside that limit. If it is still running we return a `processing` marker
+# and the client polls; the SAME job is reused, so polling never starts a second
+# analysis, and the analyzer still writes its own cache when it finishes.
+_AI_REQUEST_BUDGET_S = int(os.getenv("AI_REQUEST_BUDGET_SECONDS", "150") or 150)
+_ai_jobs: Dict[str, Any] = {}
+_ai_jobs_lock = threading.Lock()
+
+
+async def _ai_estate_inputs():
+    """Resources + Arc summary, gathered off the event loop.
+
+    Both are blocking and the Arc call alone is ~20s when cold. Done inline in an async
+    handler they froze the server before the AI work even started.
+    """
+    return await asyncio.to_thread(lambda: (_get_resources_list(), _get_arc_data()))
+
+
+async def _await_ai(key: str, fn, *args, **kwargs):
+    """Run a long AI analysis off the event loop, bounded by the ingress budget."""
+    with _ai_jobs_lock:
+        fut = _ai_jobs.get(key)
+        if fut is not None and fut.done():
+            # Finished while the client was between polls. Hand the result back once and
+            # drop it, otherwise the next poll would kick off a second identical run.
+            _ai_jobs.pop(key, None)
+            try:
+                return fut.result()
+            except Exception as exc:
+                logger.error("AI analysis '%s' failed: %s", key, exc)
+                return {"error": str(exc), "available": True}
+        if fut is None:
+            fut = _pool.submit(fn, *args, **kwargs)
+            _ai_jobs[key] = fut
+    try:
+        result = await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(fut)),
+                                        timeout=_AI_REQUEST_BUDGET_S)
+        with _ai_jobs_lock:
+            _ai_jobs.pop(key, None)
+        return result
+    except asyncio.TimeoutError:
+        # The thread keeps running and will cache its result; the client polls.
+        logger.info("AI analysis '%s' still running after %ss - returning processing marker",
+                    key, _AI_REQUEST_BUDGET_S)
+        return {
+            "status": "processing",
+            "available": True,
+            "message": ("Analysis is still running on the server. "
+                        "This view refreshes automatically when it completes."),
+            "retry_after_seconds": 10,
+        }
+    except Exception as exc:
+        with _ai_jobs_lock:
+            _ai_jobs.pop(key, None)
+        logger.error("AI analysis '%s' failed: %s", key, exc)
+        return {"error": str(exc), "available": True}
+
+
 def _require_finops():
     if not _FINOPS_AVAILABLE:
         raise HTTPException(status_code=503, detail="FinOps module is not available — check backend logs")
@@ -8776,6 +8840,21 @@ async def start_auto_refresh_scheduler() -> None:
     except Exception as _fwse:
         logger.warning("Startup: could not start FinOps warm-cache loop: %s", _fwse)
 
+    # ── Warm the Arc summary ──────────────────────────────────────────────────
+    # ~20s cold and needed by every AI analysis. Warming it here means the first user
+    # request does not pay for it, and it is fetched in a thread so startup and the
+    # event loop stay free.
+    async def _warm_arc():
+        try:
+            await asyncio.to_thread(_get_arc_data)
+            logger.info("Startup: Arc summary warmed")
+        except Exception as _ae:
+            logger.debug("Startup: Arc warm skipped: %s", _ae)
+    try:
+        asyncio.create_task(_warm_arc())
+    except Exception as _awe:
+        logger.debug("Startup: could not schedule Arc warm: %s", _awe)
+
     # ── Start FinOps Warehouse nightly ETL scheduler ──────────────────────────
     # Downloads all Azure cost data into Azure SQL every night at midnight UTC.
     # On first startup, triggers an immediate run if the warehouse is empty.
@@ -12889,7 +12968,8 @@ async def ai_workload_analysis(refresh: bool = False):
     bcdr_summary = build_bcdr_dashboard_summary(_get_bcdr_assessments())
     custom_tags  = tagging_svc.get_all_custom_tags()
 
-    return ai_infra_svc.analyze_workload(
+    return await _await_ai(
+        f"workload:{refresh}", ai_infra_svc.analyze_workload,
         resources    = resources,
         dep_summary  = dep_summary if isinstance(dep_summary, dict) else {},
         bcdr_summary = bcdr_summary,
@@ -12928,7 +13008,8 @@ async def ai_resource_analysis(resource_id: str):
 
     deps        = get_resource_dependencies(resource_id, _cache.get("dependency_graph")) if _cache.get("dependency_graph") else {}
     custom_tags = tagging_svc.get_custom_tags(resource_id)
-    return ai_infra_svc.analyze_single_resource(resource, deps, custom_tags)
+    return await _await_ai(f"resource:{resource_id}", ai_infra_svc.analyze_single_resource,
+                           resource, deps, custom_tags)
 
 
 # ── Networking APIs ───────────────────────────────────────────────────────────
@@ -13076,7 +13157,8 @@ async def ai_licensing_analysis(refresh: bool = False):
     res_analysis = build_reservation_analysis(resource_objects)
 
     # Feed into AI
-    return ai_infra_svc.analyze_licensing_ai(
+    return await _await_ai(
+        f"licensing:{refresh}", ai_infra_svc.analyze_licensing_ai,
         opps_dicts, res_analysis, resources, force_refresh=refresh
     )
 
@@ -13762,7 +13844,8 @@ async def ai_dependency_analysis(resource_id: str):
     dep_summary = get_graph_summary(graph) if graph else {}
     if hasattr(dep_summary, "model_dump"):
         dep_summary = dep_summary.model_dump()
-    return ai_infra_svc.analyze_dependency_impact(resource, blast, dep_summary)
+    return await _await_ai(f"dependency:{resource_id}", ai_infra_svc.analyze_dependency_impact,
+                           resource, blast, dep_summary)
 
 
 @app.get("/api/ai/roadmap")
@@ -13788,7 +13871,8 @@ async def ai_cloud_adoption_analysis(refresh: bool = False):
         if ao:
             acr_opps = ao.dict() if hasattr(ao, "dict") else ao
 
-    return ai_infra_svc.analyze_cloud_adoption(
+    return await _await_ai(
+        f"cloud_adoption:{refresh}", ai_infra_svc.analyze_cloud_adoption,
         resources=resources,
         acr_opportunities=acr_opps,
         force_refresh=refresh,
@@ -13810,13 +13894,17 @@ async def ai_bcdr_analysis(refresh: bool = False, mode: str = "comprehensive"):
     
     if mode == "comprehensive":
         # Full environment analysis with AI
-        report = ai_infra_svc.analyze_environment_bcdr(resources, force_refresh=refresh)
+        report = await _await_ai(f"bcdr_env:{refresh}", ai_infra_svc.analyze_environment_bcdr,
+                                 resources, force_refresh=refresh)
         return report
     else:
         # Legacy mode: individual resource analysis
         assessments = _get_bcdr_assessments()
         zone_dicts  = [a.__dict__ if hasattr(a, "__dict__") else a for a in assessments]
-        items = ai_infra_svc.analyze_resource_bcdr(resources, zone_dicts, force_refresh=refresh)
+        items = await _await_ai(f"bcdr_res:{refresh}", ai_infra_svc.analyze_resource_bcdr,
+                                resources, zone_dicts, force_refresh=refresh)
+        if isinstance(items, dict):          # processing marker or error, not a list
+            return items
         return {"items": items, "total": len(items), "ai_generated": True}
 
 
@@ -13834,32 +13922,45 @@ async def ai_semantic_search(body: dict):
 
 # ── AI Module Analysis Endpoints ──────────────────────────────────────────────
 
+# Arc inventory takes ~20s to collect and is called inline by 20 routes, on the event
+# loop, so every AI analysis froze the server for that long before it even started. Arc
+# machine inventory changes on the order of hours, so a short TTL removes the stall.
+_ARC_CACHE_TTL_SECONDS = int(os.getenv("ARC_SUMMARY_CACHE_SECONDS", "600") or 600)
+_arc_cache: Dict[str, Any] = {"data": None, "ts": 0.0}
+
+
 def _get_arc_data() -> dict:
     """Helper to get Arc summary data for AI analysis."""
+    import time as _t
+    now = _t.monotonic()
+    if (_ARC_CACHE_TTL_SECONDS > 0 and _arc_cache["data"] is not None
+            and (now - _arc_cache["ts"]) < _ARC_CACHE_TTL_SECONDS):
+        return _arc_cache["data"]
     try:
-        return arc_svc.get_arc_summary()
+        data = arc_svc.get_arc_summary()
     except Exception as e:
         logger.warning("Failed to get Arc data for AI analysis: %s", e)
-        return {}
+        return _arc_cache["data"] or {}
+    _arc_cache.update({"data": data, "ts": now})
+    return data
 
 @app.get("/api/ai/maturity")
 async def ai_maturity_analysis(refresh: bool = False):
     """AI-powered cloud maturity analysis across Azure + Arc estate."""
     from services.ai_module_analysis_service import analyze_cloud_maturity_ai
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
-    return analyze_cloud_maturity_ai(resources, arc_data=arc_data, force_refresh=refresh)
+    return await _await_ai(f"maturity:{refresh}", analyze_cloud_maturity_ai,
+                           resources, arc_data=arc_data, force_refresh=refresh)
 
 @app.get("/api/ai/security")
 async def ai_security_analysis(refresh: bool = False):
     """AI-powered security posture analysis across Azure + Arc estate."""
     from services.ai_module_analysis_service import analyze_security_ai
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     # Get Defender data too
     defender_data = None
     try:
@@ -13867,27 +13968,28 @@ async def ai_security_analysis(refresh: bool = False):
         defender_data = get_full_security_posture()
     except Exception as e:
         logger.warning("Defender data unavailable for AI security: %s", e)
-    return analyze_security_ai(resources, arc_data=arc_data, defender_data=defender_data, force_refresh=refresh)
+    return await _await_ai(f"security:{refresh}", analyze_security_ai,
+                           resources, arc_data=arc_data, defender_data=defender_data,
+                           force_refresh=refresh)
 
 @app.get("/api/ai/innovation")
 async def ai_innovation_analysis(refresh: bool = False):
     """AI-powered innovation opportunity analysis across Azure + Arc estate."""
     from services.ai_module_analysis_service import analyze_innovation_ai
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
-    return analyze_innovation_ai(resources, arc_data=arc_data, force_refresh=refresh)
+    return await _await_ai(f"innovation:{refresh}", analyze_innovation_ai,
+                           resources, arc_data=arc_data, force_refresh=refresh)
 
 @app.get("/api/ai/migration")
 async def ai_migration_analysis(refresh: bool = False):
     """AI-powered migration & modernization analysis across Azure + Arc estate."""
     import asyncio
     from services.ai_module_analysis_service import analyze_migration_ai
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     return await asyncio.to_thread(analyze_migration_ai, resources, arc_data=arc_data, force_refresh=refresh)
 
 
@@ -13918,25 +14020,26 @@ async def migration_assessment():
 async def ai_backup_analysis(refresh: bool = False):
     """AI-powered backup state analysis with recommendations."""
     from services.ai_module_analysis_service import analyze_backup_ai
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     backup_coverage = None
     if _cache.get("dashboard_data") and hasattr(_cache["dashboard_data"], "backup_coverage"):
         bc = _cache["dashboard_data"].backup_coverage
         backup_coverage = bc.dict() if hasattr(bc, "dict") else bc
-    return analyze_backup_ai(resources, arc_data=arc_data, backup_coverage=backup_coverage, force_refresh=refresh)
+    return await _await_ai(f"backup:{refresh}", analyze_backup_ai,
+                           resources, arc_data=arc_data, backup_coverage=backup_coverage,
+                           force_refresh=refresh)
 
 @app.get("/api/ai/resilience")
 async def ai_resilience_analysis(refresh: bool = False):
     """AI-powered resilience analysis of entire Azure estate."""
     from services.ai_module_analysis_service import analyze_resilience_ai
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
-    return analyze_resilience_ai(resources, arc_data=arc_data, force_refresh=refresh)
+    return await _await_ai(f"resilience:{refresh}", analyze_resilience_ai,
+                           resources, arc_data=arc_data, force_refresh=refresh)
 
 @app.get("/api/bcdr/avs/inventory")
 async def bcdr_avs_inventory():
@@ -13990,21 +14093,21 @@ async def bcdr_avs_inventory():
 async def ai_bcdr_avs_analysis(refresh: bool = False):
     """AI-powered Azure VMware Solution DR analysis."""
     from services.ai_module_analysis_service import analyze_bcdr_avs
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
-    return analyze_bcdr_avs(resources, arc_data=arc_data, force_refresh=refresh)
+    return await _await_ai(f"bcdr_avs:{refresh}", analyze_bcdr_avs,
+                           resources, arc_data=arc_data, force_refresh=refresh)
 
 @app.get("/api/ai/bcdr/deep")
 async def ai_bcdr_deep_analysis(refresh: bool = False):
     """Deep AI-powered BCDR analysis covering entire Azure estate with maximum detail."""
     from services.ai_module_analysis_service import analyze_bcdr_deep
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
-    return analyze_bcdr_deep(resources, arc_data=arc_data, force_refresh=refresh)
+    return await _await_ai(f"bcdr_deep:{refresh}", analyze_bcdr_deep,
+                           resources, arc_data=arc_data, force_refresh=refresh)
 
 
 # ── Resource Snapshots API ────────────────────────────────────────────────────
@@ -15240,10 +15343,9 @@ async def ai_monitoring_analysis(refresh: bool = False):
     import asyncio
     from services.ai_module_analysis_service import analyze_monitoring_ai
     from services import monitoring_service
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     overview = await asyncio.to_thread(monitoring_service.get_monitoring_overview)
     coverage = await asyncio.to_thread(monitoring_service.get_monitoring_coverage)
     alerts = await asyncio.to_thread(monitoring_service.get_fired_alerts)
@@ -15340,10 +15442,9 @@ async def ai_governance_analysis(refresh: bool = False, scope: str = None):
     import asyncio
     from services.ai_module_analysis_service import analyze_generic_ai
     from services import governance_service, identity_service
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     policy = await asyncio.to_thread(governance_service.get_policy_compliance)
     identity = await asyncio.to_thread(identity_service.get_access_overview)
     ctx = {
@@ -15373,10 +15474,9 @@ async def ai_advisor_analysis(refresh: bool = False, category: str = None, scope
     import asyncio
     from services.ai_module_analysis_service import analyze_generic_ai
     from services.advisor_service import get_advisor_overview
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     adv = await asyncio.to_thread(get_advisor_overview)
     items = adv.get("items", [])
     cat = (category or "").strip()
@@ -15422,10 +15522,9 @@ async def ai_service_health_analysis(refresh: bool = False, scope: str = None):
     import asyncio
     from services.ai_module_analysis_service import analyze_generic_ai
     from services import service_health_service
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     sh = await asyncio.to_thread(service_health_service.get_service_health)
     ctx = {
         "active_events": sh.get("active_events"),
@@ -15451,10 +15550,9 @@ async def ai_lifecycle_analysis(refresh: bool = False, scope: str = None):
     import asyncio
     from services.ai_module_analysis_service import analyze_generic_ai
     from services import service_health_service
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     radar = await asyncio.to_thread(service_health_service.get_lifecycle_radar, None, resources)
     sm = radar.get("summary", {})
     ctx = {
@@ -15490,10 +15588,9 @@ async def ai_quota_analysis(refresh: bool = False, scope: str = None):
     import asyncio
     from services.ai_module_analysis_service import analyze_generic_ai
     from services import quota_service
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     q = await asyncio.to_thread(quota_service.get_quota_usage, None, resources)
     ctx = {
         "regions": q.get("regions"),
@@ -15559,10 +15656,9 @@ async def ai_sql_modernization(refresh: bool = False, scope: str = None):
     import asyncio
     from services.ai_module_analysis_service import analyze_generic_ai
     from services import modernization_assessment_service as _m
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     sql = await asyncio.to_thread(_m.get_sql_estate)
     ctx = {
         "iaas_sql_vms": sql.get("iaas_sql_vms"),
@@ -15599,10 +15695,9 @@ async def ai_appservice(refresh: bool = False, scope: str = None):
     import asyncio
     from services.ai_module_analysis_service import analyze_generic_ai
     from services import modernization_assessment_service as _m
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     aps = await asyncio.to_thread(_m.get_appservice_estate)
     ctx = {
         "total_plans": aps.get("total_plans"),
@@ -15630,10 +15725,9 @@ async def ai_vm_performance(refresh: bool = False, scope: str = None):
     import asyncio
     from services.ai_module_analysis_service import analyze_generic_ai
     from services import monitoring_service
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     try:
         metrics = await asyncio.to_thread(monitoring_service.get_platform_metrics, resources, 60)
     except Exception:
@@ -15660,10 +15754,9 @@ async def ai_entra(refresh: bool = False, scope: str = None):
     import asyncio
     from services.ai_module_analysis_service import analyze_generic_ai
     from services import identity_service
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     try:
         posture = await asyncio.to_thread(identity_service.get_identity_posture)
     except Exception:
@@ -15708,10 +15801,9 @@ async def ai_waf(refresh: bool = False, scope: str = None):
     """Deep AI Well-Architected Framework assessment across all five pillars."""
     import asyncio
     from services.ai_module_analysis_service import analyze_generic_ai
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     ctx = {"framework": "Azure Well-Architected Framework",
            "pillars": ["Reliability", "Security", "Cost Optimization", "Operational Excellence", "Performance Efficiency"]}
     return await asyncio.to_thread(
@@ -15730,10 +15822,9 @@ async def ai_caf(refresh: bool = False, scope: str = None):
     """Deep AI Cloud Adoption Framework assessment across CAF methodologies."""
     import asyncio
     from services.ai_module_analysis_service import analyze_generic_ai
-    resources = _get_resources_list()
+    resources, arc_data = await _ai_estate_inputs()
     if not resources:
         raise HTTPException(status_code=404, detail="No resource data")
-    arc_data = _get_arc_data()
     ctx = {"framework": "Microsoft Cloud Adoption Framework",
            "methodologies": ["Strategy", "Plan", "Ready", "Migrate", "Innovate", "Govern", "Manage", "Secure"]}
     return await asyncio.to_thread(
