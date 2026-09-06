@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
+import time
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -137,7 +139,14 @@ def get_dimension_breakdown(dimension: str, days: int = 30,
         return []
 
 
-def get_authoritative_spend() -> Dict[str, float]:
+# Five round-trips to Azure SQL (~1.9s) on every call, and this is on the hot path of
+# both /api/finops/summary and /api/metrics/summary. The warehouse is refreshed by the
+# ETL at most hourly, so re-reading it per request buys nothing.
+_SPEND_TTL_SECONDS = int(os.getenv("FINOPS_AUTH_SPEND_CACHE_SECONDS", "600") or 600)
+_spend_cache: Dict[str, Any] = {"data": None, "ts": 0.0, "day": None}
+
+
+def get_authoritative_spend(force_refresh: bool = False) -> Dict[str, float]:
     """Month-to-date and last-month spend from the SUBSCRIPTION-level warehouse.
 
     Subscription-scope totals come back from Cost Management in a single call and are
@@ -150,6 +159,13 @@ def get_authoritative_spend() -> Dict[str, float]:
     if not _DB_AVAILABLE:
         return out
     today = _today()
+    # Bust the cache on a date rollover as well as on the TTL, so month-to-date and the
+    # elapsed-day comparison never serve yesterday's window.
+    if (not force_refresh and _SPEND_TTL_SECONDS > 0
+            and _spend_cache["data"] is not None
+            and _spend_cache["day"] == today
+            and (time.monotonic() - _spend_cache["ts"]) < _SPEND_TTL_SECONDS):
+        return _spend_cache["data"]
     m_start = today.replace(day=1)
     prev_end = m_start - timedelta(days=1)
     prev_start = prev_end.replace(day=1)
@@ -192,6 +208,8 @@ def get_authoritative_spend() -> Dict[str, float]:
                 out["rolling_30d_usd"] = round(float(row[0] or 0), 2)
     except Exception as e:
         logger.warning("authoritative spend lookup failed: %s", e)
+        return out
+    _spend_cache.update({"data": out, "ts": time.monotonic(), "day": today})
     return out
 
 

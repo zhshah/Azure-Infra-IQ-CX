@@ -40,20 +40,62 @@ def _today() -> date:
     return datetime.now(timezone.utc).date()
 
 
+# Cost Management publishes a day late, so the warehouse's newest row is typically
+# yesterday. Anchoring a rolling "last 30 days" window on TODAY therefore slid the
+# window past the data: it dropped a real day off the front and added an empty day at
+# the back, under-reporting the estate by that day's spend (1.7% when this was caught).
+# Anchor rolling windows on the newest date that actually has data instead.
+_ASOF_TTL_SECONDS = 300
+_asof_cache: Dict[str, Any] = {"date": None, "ts": 0.0}
+
+
+def data_asof() -> date:
+    """Newest snapshot_date present in the cost warehouse, or today if unknown."""
+    import time as _t
+    now = _t.monotonic()
+    if _asof_cache["date"] is not None and (now - _asof_cache["ts"]) < _ASOF_TTL_SECONDS:
+        return _asof_cache["date"]
+    asof = _today()
+    if get_raw_connection is not None:
+        try:
+            con = get_raw_connection()
+            try:
+                row = con.cursor().execute(
+                    "SELECT MAX(snapshot_date) FROM finops_daily_dimension_costs "
+                    "WHERE dimension = ? AND cost_type = 'actual'",
+                    (_CANON_PARTITION,)).fetchone()
+                if row and row[0]:
+                    latest = row[0]
+                    if not isinstance(latest, date):
+                        latest = date.fromisoformat(str(latest)[:10])
+                    # Never look into the future, and ignore an absurdly stale warehouse
+                    # (>10 days) so a broken ETL cannot freeze every window in the past.
+                    if latest <= asof and (asof - latest).days <= 10:
+                        asof = latest
+            finally:
+                con.close()
+        except Exception as e:
+            logger.debug("data_asof lookup failed, falling back to today: %s", e)
+    _asof_cache.update({"date": asof, "ts": now})
+    return asof
+
+
 def resolve_period(period: Optional[str], date_from: Optional[str], date_to: Optional[str]) -> Tuple[str, str]:
     """Return (from, to) as YYYY-MM-DD. Explicit date_from/date_to win (custom range)."""
     if date_from and date_to:
         return date_from[:10], date_to[:10]
     t = _today()
     p = (period or "last_30d").lower()
+    # Rolling day-count windows anchor on the newest day of data, not the wall clock.
+    r = data_asof()
     if p in ("today", "1d", "last_1d"):
-        return str(t), str(t)
+        return str(r), str(r)
     if p in ("7d", "last_7d", "last_week"):
-        return str(t - timedelta(days=6 if p != "last_week" else 6)), str(t)
+        return str(r - timedelta(days=6)), str(r)
     if p in ("14d", "last_14d"):
-        return str(t - timedelta(days=13)), str(t)
+        return str(r - timedelta(days=13)), str(r)
     if p in ("30d", "last_30d"):
-        return str(t - timedelta(days=29)), str(t)
+        return str(r - timedelta(days=29)), str(r)
     if p == "this_month":
         return str(t.replace(day=1)), str(t)
     if p == "last_month":
@@ -75,7 +117,7 @@ def resolve_period(period: Optional[str], date_from: Optional[str], date_to: Opt
         for _ in range(11):
             start = (start - timedelta(days=1)).replace(day=1)
         return str(start), str(t)
-    return str(t - timedelta(days=29)), str(t)
+    return str(r - timedelta(days=29)), str(r)   # default is last_30d
 
 
 def _norm_cost_type(ct: Optional[str]) -> str:

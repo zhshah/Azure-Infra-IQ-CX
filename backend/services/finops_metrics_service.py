@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import calendar
 import logging
+import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -96,7 +98,35 @@ def _linear_mtd_forecast(spend_mtd: float, today) -> Dict[str, Any]:
     }
 
 
+# /api/metrics/summary is fetched by every dashboard and by the FinOps summary page, and
+# it costs ~50s cold / ~12s warm because it fans out to budgets, reservations, savings
+# and the idle-resource map. None of those move faster than the hourly ETL behind them,
+# so recomputing per request only bought latency. Cached per (subscriptions, period).
+_SUMMARY_TTL_SECONDS = int(os.getenv("FINOPS_METRICS_CACHE_SECONDS", "600") or 600)
+_summary_cache: Dict[Any, Dict[str, Any]] = {}
+
+
 def get_metrics_summary(
+    subscription_ids: Optional[List[str]] = None,
+    period: Optional[Dict[str, str]] = None,
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
+    """Cached wrapper — see :func:`_get_metrics_summary_uncached` for the real work."""
+    key = (tuple(sorted(subscription_ids)) if subscription_ids else None,
+           tuple(sorted(period.items())) if period else None)
+    now = time.monotonic()
+    hit = _summary_cache.get(key)
+    if (not force_refresh and _SUMMARY_TTL_SECONDS > 0
+            and hit and (now - hit["ts"]) < _SUMMARY_TTL_SECONDS):
+        return hit["data"]
+    started = time.perf_counter()
+    data = _get_metrics_summary_uncached(subscription_ids, period)
+    logger.info("metrics summary rebuilt in %.1fs", time.perf_counter() - started)
+    _summary_cache[key] = {"data": data, "ts": now}
+    return data
+
+
+def _get_metrics_summary_uncached(
     subscription_ids: Optional[List[str]] = None,
     period: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:

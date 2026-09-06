@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
 from contextlib import contextmanager
@@ -308,11 +309,24 @@ def _warehouse_daily_spend(sub_ids: List[str], from_date, to_date) -> Dict[str, 
     return out
 
 
-def compute_budget_variance(budget_id: str) -> Optional[FinOpsBudgetVariance]:
+# One live Cost Management query per budget. Both the FinOps summary and the metrics
+# service loop over every budget, so without a cache a single page load pays for it twice.
+# Month-to-date variance moves slowly, so a short TTL is safe.
+_VARIANCE_TTL_SECONDS = int(os.getenv("FINOPS_BUDGET_VARIANCE_CACHE_SECONDS", "600") or 600)
+_variance_cache: Dict[str, Any] = {}
+
+
+def compute_budget_variance(budget_id: str, force_refresh: bool = False) -> Optional[FinOpsBudgetVariance]:
     """
     Compute live budget vs. actual spend using Azure Cost Management API.
     Returns None if budget not found.
     """
+    now = time.monotonic()
+    hit = _variance_cache.get(budget_id)
+    if (not force_refresh and _VARIANCE_TTL_SECONDS > 0
+            and hit and (now - hit["ts"]) < _VARIANCE_TTL_SECONDS):
+        return hit["data"]
+
     budget = get_budget(budget_id)
     if not budget:
         return None
@@ -404,7 +418,7 @@ def compute_budget_variance(budget_id: str) -> Optional[FinOpsBudgetVariance]:
 
     period_label = from_date.strftime("%B %Y")
 
-    return FinOpsBudgetVariance(
+    result = FinOpsBudgetVariance(
         budget_id=budget.id,
         budget_name=budget.name,
         period_label=period_label,
@@ -421,6 +435,8 @@ def compute_budget_variance(budget_id: str) -> Optional[FinOpsBudgetVariance]:
         daily_breakdown=breakdown,
         data_source=source,
     )
+    _variance_cache[budget_id] = {"data": result, "ts": now}
+    return result
 
 
 # ── Alert checking ────────────────────────────────────────────────────────────

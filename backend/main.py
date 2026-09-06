@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -3025,7 +3026,7 @@ async def _finops_cache_warmup() -> None:
             trend_dates = [str(today_w - timedelta(days=29 - i)) for i in range(30)]
             subs_sorted = sorted(dash_for_warmup.subscriptions or [], key=lambda s: -(s.cost_current or 0))
             by_sub = [{"id": s.subscription_id, "name": s.subscription_name or (s.subscription_id[:8] + "…"), "cost": round(s.cost_current or 0.0, 2)} for s in subs_sorted[:5]]
-            extras = _derive_finops_kpi_extras(dash_for_warmup)
+            extras = _derive_finops_kpi_extras(dash_for_warmup, block_on_budgets=True)
             _sp = _authoritative_spend(k)
             _tag_now = _tag_compliance_now(dash_for_warmup)
             if _sp["mtd"] > 0 and today_w.day > 0:
@@ -3755,10 +3756,13 @@ def _authoritative_spend(k) -> dict:
     return {"mtd": mtd, "last_month": last, "delta": delta, "pct": pct, "source": source}
 
 
-def _derive_finops_kpi_extras(dash: "DashboardData") -> dict:
+def _derive_finops_kpi_extras(dash: "DashboardData", block_on_budgets: bool = False) -> dict:
     """Complete the FinOps summary fast-path: compute RI coverage/utilization and
     budget utilization (which the cache-based fast path otherwise leaves at 0) plus
     empty-state flags so the UI can distinguish "0%" from "no data configured".
+
+    ``block_on_budgets`` is only set by the background warmer. On a request it stays
+    False so the caller never waits on live Cost Management budget queries.
 
     RI coverage is derived from the cached dashboard (resource-level ri_covered +
     billing-derived reservations), so it works even when the Reservations API 403s.
@@ -3803,26 +3807,96 @@ def _derive_finops_kpi_extras(dash: "DashboardData") -> dict:
         logger.debug("FinOps RI KPI derivation failed: %s", e)
     # ── Budget utilization (light Consumption API) ────────────────────────
     try:
-        import services.budget_service as _budget_svc
-        budgets = _budget_svc.list_budgets()
-        out["has_budgets"] = bool(budgets)
-        if budgets:
-            util_total = 0.0
-            for b in budgets:
-                try:
-                    v = _budget_svc.compute_budget_variance(b.id)
-                    if v:
-                        util_total += v.utilization_pct
-                        if v.status == "exceeded":
-                            out["budgets_exceeded"] += 1
-                        elif v.status == "at_risk":
-                            out["budgets_at_risk"] += 1
-                except Exception:
-                    pass
-            out["budget_utilization_pct"] = round(util_total / len(budgets), 1)
+        out.update(_budget_kpis_cached(block=block_on_budgets))
     except Exception as e:
         logger.debug("FinOps budget KPI derivation failed: %s", e)
     return out
+
+
+# Budget KPIs need one live Cost Management query PER budget, which made
+# /api/finops/summary a 7-13s call warm and 4+ MINUTES on a cold container under 429
+# throttling. They are secondary to the headline spend, so a user request never waits
+# for them: it serves the last known values and refreshes in the background.
+_BUDGET_KPI_TTL_SECONDS = int(os.getenv("FINOPS_BUDGET_KPI_CACHE_SECONDS", "600") or 600)
+_budget_kpi_cache: Dict[str, Any] = {"data": None, "ts": 0.0, "refreshing": False}
+_BUDGET_KPI_EMPTY = {"has_budgets": False, "budget_utilization_pct": 0.0,
+                     "budgets_exceeded": 0, "budgets_at_risk": 0}
+
+
+def _compute_budget_kpis() -> dict:
+    import time as _t
+    res = dict(_BUDGET_KPI_EMPTY)
+    started = _t.perf_counter()
+    import services.budget_service as _budget_svc
+    budgets = _budget_svc.list_budgets()
+    res["has_budgets"] = bool(budgets)
+    if budgets:
+        util_total = 0.0
+        for b in budgets:
+            try:
+                v = _budget_svc.compute_budget_variance(b.id)
+                if v:
+                    util_total += v.utilization_pct
+                    if v.status == "exceeded":
+                        res["budgets_exceeded"] += 1
+                    elif v.status == "at_risk":
+                        res["budgets_at_risk"] += 1
+            except Exception:
+                pass
+        res["budget_utilization_pct"] = round(util_total / len(budgets), 1)
+    logger.info("budget KPIs refreshed in %.1fs (%d budget(s))",
+                _t.perf_counter() - started, len(budgets or []))
+    return res
+
+
+def _budget_kpis_cached(force_refresh: bool = False, block: bool = True) -> dict:
+    """has_budgets / utilization / exceeded / at_risk.
+
+    ``block=False`` (the request path) never waits on Azure: it returns the last known
+    values, or zeros with has_budgets=False on a cold start, and refreshes in a thread.
+    ``block=True`` (the background warmer) does the real work.
+    """
+    import time as _t
+    now = _t.monotonic()
+    fresh = (_budget_kpi_cache["data"] is not None
+             and _BUDGET_KPI_TTL_SECONDS > 0
+             and (now - _budget_kpi_cache["ts"]) < _BUDGET_KPI_TTL_SECONDS)
+    if fresh and not force_refresh:
+        return _budget_kpi_cache["data"]
+
+    if not block:
+        if not _budget_kpi_cache["refreshing"]:
+            _budget_kpi_cache["refreshing"] = True
+
+            def _bg():
+                try:
+                    _budget_kpi_cache["data"] = _compute_budget_kpis()
+                    _budget_kpi_cache["ts"] = _t.monotonic()
+                except Exception as exc:
+                    logger.warning("background budget KPI refresh failed: %s", exc)
+                finally:
+                    _budget_kpi_cache["refreshing"] = False
+
+            threading.Thread(target=_bg, name="budget-kpi-refresh", daemon=True).start()
+        return _budget_kpi_cache["data"] or dict(_BUDGET_KPI_EMPTY)
+
+    # Blocking caller (the background warmer). If a refresh is already in flight, wait
+    # for it rather than starting a second identical set of Cost Management queries.
+    if _budget_kpi_cache["refreshing"]:
+        for _ in range(120):
+            _t.sleep(0.5)
+            if not _budget_kpi_cache["refreshing"]:
+                break
+        if _budget_kpi_cache["data"] is not None:
+            return _budget_kpi_cache["data"]
+
+    _budget_kpi_cache["refreshing"] = True
+    try:
+        _budget_kpi_cache["data"] = _compute_budget_kpis()
+        _budget_kpi_cache["ts"] = _t.monotonic()
+    finally:
+        _budget_kpi_cache["refreshing"] = False
+    return _budget_kpi_cache["data"]
 
 
 @app.get("/api/finops/summary", response_model=FinOpsKPI, tags=["FinOps"])
@@ -3834,12 +3908,60 @@ async def finops_summary():
     """
     _require_finops()
     from datetime import datetime, timezone as _tz
+
+    def _warm_hit():
+        """The warm cache, if the background warmer has filled it recently."""
+        wc = _finops_warm_cache.get("summary")
+        ts = _finops_warm_cache.get("summary_ts")
+        if wc and ts:
+            age = datetime.now(tz=_tz.utc).timestamp() - ts
+            if age < 14400:  # 4 hours, same bound as forecast/savings/commitments
+                logger.debug("finops_summary: warm cache hit (age %.0fs)", age)
+                return wc
+        return None
+
+    # ── Fast path: serve from warm cache (populated at boot, refreshed every 30 min) ──
+    # This MUST come first. The dashboard-cache block below rebuilds the same FinOpsKPI
+    # from scratch, and its budget KPIs cost one live Cost Management query per budget
+    # (7-13s warm, 4+ MINUTES cold under 429 throttling). Checking the warm cache after
+    # that block meant the background warmer's work was never used and every single
+    # request paid full price — the root cause of the slow FinOps summary page.
+    _hit = _warm_hit()
+    if _hit is not None:
+        return _hit
+
+    # Cold: only ONE request may do the expensive rebuild. Without this, every user who
+    # lands during the first ~40s of a container start kicks off their own dashboard
+    # rehydrate and they throttle each other into multi-minute responses.
+    async with _finops_summary_lock:
+        _hit = _warm_hit()          # another caller may have filled it while we queued
+        if _hit is not None:
+            return _hit
+        return await asyncio.get_running_loop().run_in_executor(None, _finops_summary_build)
+
+
+_finops_summary_lock = asyncio.Lock()
+
+
+def _finops_summary_build() -> FinOpsKPI:
+    """The expensive path: rebuild the FinOps KPI from the dashboard cache.
+
+    Only runs when the warm cache is empty (i.e. the first request after a restart).
+    It logs its own duration because the cold path is otherwise invisible in the
+    access log, which only records a request once it has already completed.
+    """
+    from datetime import datetime, timezone as _tz
+    import time as _t
+    _t0 = _t.perf_counter()
+    def _lap(stage: str):
+        logger.debug("finops_summary build: %-28s %6.2fs", stage, _t.perf_counter() - _t0)
     # ── Fast path: use already-loaded dashboard cache ─────────────────────
     dash: Optional[DashboardData] = _cache.get("data:*") or _cache.get("data")
     if dash is None:
         # Fresh server (snapshot-first instant load): rehydrate the dashboard from
         # the durable snapshot so the fast path works without a live build.
         dash = _ensure_dashboard_in_cache()
+    _lap("dashboard ready")
     if dash and dash.kpi:
         k = dash.kpi
         resources = dash.resources or []
@@ -3877,8 +3999,13 @@ async def finops_summary():
             for s in subs_sorted[:5]
         ]
         extras = _derive_finops_kpi_extras(dash)
+        _lap("extras")
         _sp = _authoritative_spend(k)
+        _lap("authoritative spend")
         _tag_now = _tag_compliance_now(dash)
+        _lap("tag compliance")
+        logger.info("finops_summary: cold rebuild took %.2fs (warm cache was empty)",
+                    _t.perf_counter() - _t0)
         if _sp["mtd"] > 0 and days_elapsed > 0:
             eom_forecast = _sp["mtd"] / days_elapsed * days_in_month
         return FinOpsKPI(
@@ -3906,19 +4033,15 @@ async def finops_summary():
             data_source="dashboard_cache",
             generated_at=datetime.now(tz=_tz.utc).isoformat(),
         )
-    # ── Warm-cache path: use pre-fetched FinOps data if available ─────────
-    _wc_summary = _finops_warm_cache.get("summary")
-    if _wc_summary and _finops_warm_cache.get("summary_ts"):
-        logger.debug("finops_summary: serving from pre-warmed cache")
-        return _wc_summary
     # ── Slow path: query Azure Cost Management live ────────────────────────
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        _pool,
-        lambda: finops_svc.get_finops_kpi(
-            subscription_ids=finops_data_svc.get_subscription_ids()
-        )
+    # Already on a worker thread (the caller dispatches us via run_in_executor), so
+    # this calls straight through instead of hopping to the pool again.
+    _lap("falling back to LIVE Cost Management")
+    _r = finops_svc.get_finops_kpi(
+        subscription_ids=finops_data_svc.get_subscription_ids()
     )
+    _lap("live Cost Management done")
+    return _r
 
 
 # ── Metrics Service — SINGLE SOURCE OF TRUTH for headline numbers ──────────────
@@ -6115,6 +6238,13 @@ async def finops_analyze_meta():
     return {"dimensions": dims, "coverage": cov}
 
 
+# Built entirely from the cached estate + warehouse, so it only changes when a scan or
+# the ETL does. It was costing the FinOps page 4-7s on EVERY navigation because it fans
+# out over every resource and joins the BCDR assessment table.
+_COST_INSIGHTS_TTL_SECONDS = int(os.getenv("FINOPS_COST_INSIGHTS_CACHE_SECONDS", "600") or 600)
+_cost_insights_cache: Dict[str, Any] = {"data": None, "ts": 0.0}
+
+
 @app.get("/api/finops/cost-insights", tags=["FinOps"])
 async def finops_cost_insights():
     """Grounded, filter-ready per-resource cost dataset for the Cost Insights view.
@@ -6127,6 +6257,11 @@ async def finops_cost_insights():
     so every graph reacts instantly with no Cost Management API call (throttle-immune)."""
     _require_finops()
     from services import finops_insights_service as _ci
+    import time as _t
+
+    if (_COST_INSIGHTS_TTL_SECONDS > 0 and _cost_insights_cache["data"] is not None
+            and (_t.monotonic() - _cost_insights_cache["ts"]) < _COST_INSIGHTS_TTL_SECONDS):
+        return _cost_insights_cache["data"]
 
     data = _ensure_dashboard_in_cache()
     if not data:
@@ -6199,9 +6334,11 @@ async def finops_cost_insights():
     except Exception as exc:
         logger.debug("cost-insights authoritative total skipped: %s", exc)
 
-    return await loop.run_in_executor(
+    _insights = await loop.run_in_executor(
         _pool, lambda: _ci.build_cost_insights(resources, zone_by_id, modern_by_id, sub_names, authoritative_total=auth_total)
     )
+    _cost_insights_cache.update({"data": _insights, "ts": _t.monotonic()})
+    return _insights
 
 
 @app.get("/api/finops/anomalies", tags=["FinOps"])
@@ -7593,13 +7730,61 @@ async def finops_trigger_warmup():
     return {"status": "warmup_started", "message": "Cache warmup triggered — data will be available within ~2 minutes"}
 
 
+def _clear_finops_derived_caches() -> list:
+    """Drop every in-process cache derived from FinOps data.
+
+    These exist purely to keep the FinOps pages fast, so they must be emptied whenever
+    the user explicitly asks for fresh data or a new ETL lands — otherwise "clear cache"
+    would still hand back values up to their TTL old.
+    """
+    cleared = []
+    _budget_kpi_cache.update({"data": None, "ts": 0.0})
+    cleared.append("budget_kpis")
+    _cost_insights_cache.update({"data": None, "ts": 0.0})
+    cleared.append("cost_insights")
+    try:
+        from services import finops_metrics_service as _fm
+        _fm._summary_cache.clear()
+        cleared.append("metrics_summary")
+    except Exception as e:
+        logger.debug("metrics summary cache clear skipped: %s", e)
+    try:
+        import services.budget_service as _bs
+        _bs._variance_cache.clear()
+        cleared.append("budget_variance")
+    except Exception as e:
+        logger.debug("budget variance cache clear skipped: %s", e)
+    try:
+        from services import finops_dashboard_service as _fd
+        _fd._spend_cache.update({"data": None, "ts": 0.0, "day": None})
+        cleared.append("authoritative_spend")
+    except Exception as e:
+        logger.debug("authoritative spend cache clear skipped: %s", e)
+    try:
+        from services import commitment_service as _cs
+        _cs._summary_cache.update({"data": None, "ts": 0.0})
+        cleared.append("commitments")
+    except Exception as e:
+        logger.debug("commitment cache clear skipped: %s", e)
+    try:
+        from services import cost_analytics_service as _ca
+        _ca._asof_cache.update({"date": None, "ts": 0.0})
+        cleared.append("data_asof")
+    except Exception as e:
+        logger.debug("data_asof cache clear skipped: %s", e)
+    return cleared
+
+
 @app.post("/api/finops/cache/clear", tags=["FinOps"])
 async def finops_clear_cache():
     """Force-clear the FinOps query cache so next requests fetch fresh Azure data."""
     _require_finops()
     removed = finops_data_svc.clear_finops_cache()
     _finops_warm_cache.clear()
-    return {"cleared": removed, "message": f"Cleared {removed} cached FinOps query entries + warm cache"}
+    derived = _clear_finops_derived_caches()
+    return {"cleared": removed, "derived_caches_cleared": derived,
+            "message": f"Cleared {removed} cached FinOps query entries + warm cache "
+                       f"+ {len(derived)} derived cache(s)"}
 
 
 @app.get("/api/finops/cache/status", tags=["FinOps"])
@@ -7637,6 +7822,7 @@ async def _run_warehouse_etl_async(triggered_by: str = "manual", initial: bool =
         # Fresh data landed — invalidate the warehouse read caches so the next UI
         # request reflects it immediately instead of a stale cached aggregate.
         _fw_bump_version()
+        _clear_finops_derived_caches()
     except Exception as e:
         logger.error("Warehouse ETL async wrapper error: %s", e)
     finally:
@@ -8961,9 +9147,15 @@ class ResourcesAddRemove(BaseModel):
     resource_ids: List[str]
 
 
-@app.get("/api/projects")
-async def get_projects():
-    """List all saved BCDR projects."""
+def _list_projects_blocking() -> dict:
+    """Blocking project lookup — MUST NOT run on the event loop.
+
+    pyodbc is synchronous, and this makes several Azure SQL round-trips (1.4-5s from
+    outside the DB's region). Running it directly in the async route froze the whole
+    event loop for that long, so every other in-flight request — including responses
+    already served from cache in 0.05s — appeared to take seconds. The FinOps summary
+    page looked slow for exactly this reason long after its own data was cached.
+    """
     from services.database import get_raw_connection, is_azure_sql
     projects = []
     try:
@@ -9026,6 +9218,13 @@ async def get_projects():
         logger.warning("portal project merge failed: %s", e)
 
     return {"projects": projects}
+
+
+@app.get("/api/projects")
+async def get_projects():
+    """List all saved BCDR projects."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, _list_projects_blocking)
 
 
 @app.post("/api/projects", status_code=201)
