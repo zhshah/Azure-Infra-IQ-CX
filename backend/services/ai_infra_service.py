@@ -1167,50 +1167,31 @@ def analyze_environment_bcdr(
     tag_context = _build_tag_summary(compressed_sample)
 
     # ── GROUNDED FINANCIAL CONTEXT ──────────────────────────────────────────────
-    # Fully data-driven baseline that adapts to any customer size from $100/mo
-    # sandboxes to multi-million-$/yr enterprises. Inputs we actually use:
-    #   • per-resource monthly cost (real Azure spend)
-    #   • customer-stated financial_loss_per_hour (authoritative — used as-is)
-    #   • customer-stated criticality (drives tier multipliers + outage hours)
+    # Fully data-driven baseline. ONLY customer-stated numbers produce money here.
+    # Inputs we actually use:
+    #   • customer-stated financial_loss_per_hour (the ONLY source of business loss)
+    #   • customer-stated criticality (selects the published downtime assumption)
     #   • actual backup + zone-redundancy posture (reduces expected outage hours)
-    # Per-resource hourly business loss:
-    #   stated_loss  → customer's tagged financial_loss_per_hour
-    #   else         → max(tier_floor_$/hr, hourly_Azure_spend × tier_multiplier)
     # Per-resource annual exposure:
-    #   per_hr × tier_annual_outage_hours × posture_factor
-    # where posture_factor = 0.25 (backup + zone-redundant), 0.5 (backup only), 1.0 (neither).
+    #   stated_$/hr × tier_annual_outage_hours × posture_factor
+    # A resource with no stated loss contributes NOTHING. Earlier revisions invented a
+    # per-tier dollar floor and a multiple of Azure spend for untagged resources, which
+    # manufactured a six-figure "risk exposure" for estates where the customer had never
+    # supplied a single loss figure. If nothing is stated, no exposure is reported at all.
     financial_ground_truth: dict = {}
     try:
         from services.bcdr_enhanced_service import _parse_money
 
-        # tier_floor_$/hr: minimum hourly loss attributed to a resource at this tier,
-        # regardless of compute spend (covers data / SLA / engineering-time impact).
-        TIER_HOURLY_FLOOR = {
-            "Mission-Critical":     250.0,
-            "Business-Critical":     50.0,
-            "Business-Operational":   5.0,
-            "Low":                    0.0,
-        }
-        # Multiplier applied to per-resource hourly Azure spend (monthly_cost / 730h).
-        TIER_COST_MULTIPLIER = {
-            "Mission-Critical":     50.0,
-            "Business-Critical":    20.0,
-            "Business-Operational":  5.0,
-            "Low":                   2.0,
-        }
-        # Estimated annual unmitigated downtime hours per tier (current posture, before
-        # the posture_factor reduction below). These are conservative midpoints.
+        # The ONE modelling assumption left. It is published in the payload and quoted in
+        # the narrative so the customer can see (and challenge) it, rather than it being
+        # buried in the code.
         ANNUAL_DT_HRS = {
             "Mission-Critical":      8.0,
             "Business-Critical":     4.0,
             "Business-Operational":  2.0,
             "Low":                   1.0,
         }
-        # Untagged resources are treated as Business-Operational — a defensible middle
-        # ground until the customer tags them in BCDR Planning.
-        TIER_HOURLY_FLOOR["Unknown"]   = TIER_HOURLY_FLOOR["Business-Operational"]
-        TIER_COST_MULTIPLIER["Unknown"] = TIER_COST_MULTIPLIER["Business-Operational"]
-        ANNUAL_DT_HRS["Unknown"]        = ANNUAL_DT_HRS["Business-Operational"]
+        ANNUAL_DT_HRS["Unknown"] = ANNUAL_DT_HRS["Business-Operational"]
 
         # Posture multiplier — actual Azure configuration reduces expected outage hours.
         POSTURE_FACTOR = {
@@ -1218,6 +1199,17 @@ def analyze_environment_bcdr(
             "backup":      0.50,   # backup only
             "none":        1.00,   # no backup, no zone redundancy
         }
+
+        # SQL system databases are engine infrastructure, not business workloads. They were
+        # being tagged with the same loss/hr as the real applications on the same instance,
+        # so one VM outage was counted once per database (7 × $10k/hr instead of 3 × $10k/hr).
+        _SYSTEM_DB_NAMES = {"master", "model", "msdb", "tempdb", "distribution", "resource"}
+
+        def _is_system_db(r: dict) -> bool:
+            rid = str(r.get("resource_id") or r.get("id") or "")
+            if "/databases/" not in rid.lower():
+                return False
+            return rid.rsplit("/", 1)[-1].strip().lower() in _SYSTEM_DB_NAMES
 
         def _tier_from_meta(crit: str) -> str:
             c = (crit or "").lower()
@@ -1241,19 +1233,17 @@ def analyze_environment_bcdr(
             return "none"
 
         annual_run_rate    = round(sum(_res_monthly_cost(r) for r in resources) * 12.0, 2)
-        total_hourly_loss  = 0.0
         total_stated_hr    = 0.0
         stated_count       = 0
         tagged_count       = 0
         expected_exposure  = 0.0
-        # Source breakdown: how much of the exposure comes from stated vs cost-derived vs floor-derived
-        exposure_by_source = {"stated": 0.0, "cost_derived": 0.0, "floor_derived": 0.0}
+        excluded_system_db = 0
+        unquantified_count = 0
         tier_breakdown: Dict[str, Dict[str, float]] = {}
         posture_counts = {"backup+zone": 0, "backup": 0, "none": 0}
 
         for r in resources:
             monthly = _res_monthly_cost(r)
-            hourly_az = monthly / 730.0
             um = r.get("user_bcdr_metadata") or {}
             crit = (um.get("criticality") or "").strip() if um else ""
             tier = _tier_from_meta(crit)
@@ -1265,25 +1255,20 @@ def analyze_environment_bcdr(
             posture_factor = POSTURE_FACTOR[posture]
 
             stated_loss = _parse_money((um or {}).get("financial_loss_per_hour"))
-            cost_based  = hourly_az * TIER_COST_MULTIPLIER[tier]
-            floor       = TIER_HOURLY_FLOOR[tier]
 
-            if stated_loss and stated_loss > 0:
-                per_hr = float(stated_loss)
-                source = "stated"
-                total_stated_hr += per_hr
-                stated_count += 1
-            elif cost_based >= floor:
-                per_hr = cost_based
-                source = "cost_derived"
-            else:
-                per_hr = floor
-                source = "floor_derived"
+            if stated_loss and stated_loss > 0 and _is_system_db(r):
+                excluded_system_db += 1
+                continue
+            if not (stated_loss and stated_loss > 0):
+                unquantified_count += 1
+                continue
+
+            per_hr = float(stated_loss)
+            total_stated_hr += per_hr
+            stated_count += 1
 
             annual_loss_for_res = per_hr * ANNUAL_DT_HRS[tier] * posture_factor
-            total_hourly_loss   += per_hr
-            expected_exposure   += annual_loss_for_res
-            exposure_by_source[source] += annual_loss_for_res
+            expected_exposure  += annual_loss_for_res
 
             tb = tier_breakdown.setdefault(tier, {
                 "count": 0, "hourly_loss": 0.0, "annual_exposure": 0.0,
@@ -1294,18 +1279,24 @@ def analyze_environment_bcdr(
             tb["annual_exposure"]  += annual_loss_for_res
             tb["monthly_cost"]     += monthly
 
-        total_hourly_loss = round(total_hourly_loss, 2)
+        total_hourly_loss = round(total_stated_hr, 2)
         expected_exposure = round(expected_exposure, 2)
-        exposure_low  = round(expected_exposure * 0.70, 2)
-        exposure_high = round(expected_exposure * 1.50, 2)
+        has_exposure      = stated_count > 0 and expected_exposure > 0
+        # The band reflects the spread of the downtime assumption, not extra precision.
+        exposure_low  = round(expected_exposure * 0.70, 2) if has_exposure else None
+        exposure_high = round(expected_exposure * 1.50, 2) if has_exposure else None
 
-        # Recommended DR investment scales with the larger of:
-        #   • a percentage of annual Azure run-rate (industry-typical DR uplift)
-        #   • a percentage of computed annual exposure (responds to actual risk)
-        # No artificial floor — small estates get small numbers; high-exposure estates
-        # get investment driven by risk, not by compute spend.
-        invest_low  = round(max(annual_run_rate * 0.10, expected_exposure * 0.15), 2)
-        invest_high = round(max(annual_run_rate * 0.15, expected_exposure * 0.25), 2)
+        # Only quote an investment range when there is a real exposure to size it against.
+        # Otherwise this is a planning heuristic off the Azure bill, and it is labelled as one.
+        if has_exposure:
+            invest_low  = round(max(annual_run_rate * 0.10, expected_exposure * 0.15), 2)
+            invest_high = round(max(annual_run_rate * 0.15, expected_exposure * 0.25), 2)
+            invest_basis = "max(10-15% of annual Azure run-rate, 15-25% of stated-loss exposure)"
+        else:
+            invest_low  = round(annual_run_rate * 0.10, 2) if annual_run_rate > 0 else None
+            invest_high = round(annual_run_rate * 0.15, 2) if annual_run_rate > 0 else None
+            invest_basis = ("industry planning range of 10-15% of annual Azure run-rate - "
+                            "NOT derived from customer loss data, because none was supplied")
 
         # Per-tier summary in the shape the prompt expects
         tier_summary = [
@@ -1321,13 +1312,14 @@ def analyze_environment_bcdr(
                                    key=lambda kv: -kv[1]["annual_exposure"])
         ]
 
-        # Data confidence — how grounded the exposure is in customer-stated data
-        total_for_conf = max(expected_exposure, 1e-9)
+        # Every dollar now originates from a customer-stated figure, by construction.
         data_confidence = {
-            "stated_pct":        round(exposure_by_source["stated"]        / total_for_conf * 100, 1),
-            "cost_derived_pct":  round(exposure_by_source["cost_derived"]  / total_for_conf * 100, 1),
-            "floor_derived_pct": round(exposure_by_source["floor_derived"] / total_for_conf * 100, 1),
+            "stated_pct":        100.0 if has_exposure else 0.0,
+            "cost_derived_pct":  0.0,
+            "floor_derived_pct": 0.0,
         }
+        exposure_by_source = {"stated": expected_exposure, "cost_derived": 0.0, "floor_derived": 0.0}
+
 
         # Only a fraction of spend is attributable to individual resources (Cost Management
         # throttles the per-resource grain), so publish the authoritative estate figure next
@@ -1348,31 +1340,32 @@ def analyze_environment_bcdr(
             "total_hourly_loss_usd":             total_hourly_loss,
             "total_stated_hourly_loss_usd":      round(total_stated_hr, 2),
             "stated_loss_resources":             stated_count,
+            "unquantified_resources":            unquantified_count,
+            "excluded_system_databases":         excluded_system_db,
             "tagged_resources":                  tagged_count,
             "total_resources_in_calc":           len(resources),
             "tier_summary":                      tier_summary,
             "posture_counts":                    posture_counts,
             "posture_factor":                    POSTURE_FACTOR,
             "annual_downtime_hrs_by_tier":       ANNUAL_DT_HRS,
-            "tier_hourly_floor_usd":             TIER_HOURLY_FLOOR,
-            "tier_cost_multiplier":              TIER_COST_MULTIPLIER,
+            "exposure_is_quantified":            has_exposure,
             "exposure_by_source_usd":            {k: round(v, 2) for k, v in exposure_by_source.items()},
             "data_confidence":                   data_confidence,
-            "annual_risk_exposure_expected_usd": expected_exposure,
+            "annual_risk_exposure_expected_usd": expected_exposure if has_exposure else None,
             "annual_risk_exposure_low_usd":      exposure_low,
             "annual_risk_exposure_high_usd":     exposure_high,
             "recommended_investment_low_usd":    invest_low,
             "recommended_investment_high_usd":   invest_high,
+            "recommended_investment_basis":      invest_basis,
         }
         logger.info(
-            "BCDR ground-truth: run-rate=$%s/yr, hourly-loss=$%s/hr (stated %d / tagged %d / total %d), "
-            "exposure=$%s-$%s (stated %s%%, cost %s%%, floor %s%%), invest=$%s-$%s, "
-            "posture: backup+zone=%d backup=%d none=%d",
+            "BCDR ground-truth: run-rate=$%s/yr, stated-loss=$%s/hr from %d resource(s) "
+            "(tagged %d, unquantified %d, system-DBs excluded %d of %d total), "
+            "exposure=%s, invest=$%s-$%s, posture: backup+zone=%d backup=%d none=%d",
             f"{annual_run_rate:,.0f}", f"{total_hourly_loss:,.0f}",
-            stated_count, tagged_count, len(resources),
-            f"{exposure_low:,.0f}", f"{exposure_high:,.0f}",
-            data_confidence["stated_pct"], data_confidence["cost_derived_pct"], data_confidence["floor_derived_pct"],
-            f"{invest_low:,.0f}", f"{invest_high:,.0f}",
+            stated_count, tagged_count, unquantified_count, excluded_system_db, len(resources),
+            (f"${exposure_low:,.0f}-${exposure_high:,.0f}" if has_exposure else "NOT QUANTIFIED"),
+            f"{invest_low or 0:,.0f}", f"{invest_high or 0:,.0f}",
             posture_counts["backup+zone"], posture_counts["backup"], posture_counts["none"],
         )
     except Exception as _ge:
@@ -1399,42 +1392,50 @@ ESTATE FACTS:
 - Resources with stated financial_loss_per_hour: {_gt['stated_loss_resources']}
 - Actual posture: backup+zone={_gt['posture_counts']['backup+zone']}, backup-only={_gt['posture_counts']['backup']}, neither={_gt['posture_counts']['none']}
 
-METHODOLOGY (per resource, fully scales with customer size and posture):
-  per_hr_loss = customer's stated financial_loss_per_hour, ELSE max(tier_floor_$/hr, hourly_Azure_spend × tier_multiplier)
-  annual_exposure = per_hr_loss × tier_annual_outage_hours × posture_factor
+METHODOLOGY (exposure comes ONLY from figures the customer supplied):
+  annual_exposure = customer's stated financial_loss_per_hour × tier_annual_outage_hours × posture_factor
   where:
-    hourly_Azure_spend  = monthly_cost / 730
-    tier_floor_$/hr     = {json.dumps(_gt['tier_hourly_floor_usd'])}
-    tier_multiplier     = {json.dumps(_gt['tier_cost_multiplier'])}
-    tier_outage_hours/yr = {json.dumps(_gt['annual_downtime_hrs_by_tier'])}
+    tier_outage_hours/yr = {json.dumps(_gt['annual_downtime_hrs_by_tier'])}   <-- PLANNING ASSUMPTION, not measured
     posture_factor      = {json.dumps(_gt['posture_factor'])}  (backup AND zone redundancy reduce expected outage hours)
-  Untagged resources are treated as Business-Operational (defensible middle ground).
+  A resource with NO stated financial_loss_per_hour contributes ZERO. Nothing is inferred
+  from Azure spend, and there is no per-tier dollar floor. SQL system databases
+  (master/model/msdb/tempdb) are excluded because they are engine infrastructure, not
+  business workloads, and would otherwise multiply one host outage across every database.
+
+GROUNDING COUNTS:
+- Resources with a customer-stated loss figure: {_gt['stated_loss_resources']}
+- Resources with NO stated loss (contribute $0): {_gt['unquantified_resources']}
+- SQL system databases excluded from the money: {_gt['excluded_system_databases']}
 
 PER-TIER BREAKDOWN (count, monthly_cost, total_hourly_loss, annual_exposure):
 {json.dumps(_gt['tier_summary'], indent=2)}
 
-DATA CONFIDENCE (how grounded the exposure is):
-- Customer-stated portion:        {_dc['stated_pct']}% of annual exposure
-- Cost-derived portion:           {_dc['cost_derived_pct']}% of annual exposure
-- Tier-floor portion (fallback):  {_dc['floor_derived_pct']}% of annual exposure
-(Higher stated_pct → higher fidelity. Customer can raise this by tagging financial_loss_per_hour in BCDR Planning.)
+EXPOSURE IS QUANTIFIED: {_gt['exposure_is_quantified']}
+{(
+  "COMPUTED ANNUAL RISK EXPOSURE (100% from customer-stated loss figures):\n"
+  f"  Expected: ${_gt['annual_risk_exposure_expected_usd']:,.2f}/yr\n"
+  f"  Range:    ${_gt['annual_risk_exposure_low_usd']:,.2f} - ${_gt['annual_risk_exposure_high_usd']:,.2f}/yr\n"
+  "  The range reflects the spread of the outage-hours ASSUMPTION above, not measured variance."
+) if _gt['exposure_is_quantified'] else (
+  "ANNUAL RISK EXPOSURE: NOT QUANTIFIED.\n"
+  "  The customer has not supplied a financial_loss_per_hour for any resource, so there is\n"
+  "  NO defensible dollar figure. You MUST set cost_benefit_analysis.current_annual_risk_exposure\n"
+  "  to exactly \"Not quantified - no financial impact data supplied\". DO NOT invent a number,\n"
+  "  DO NOT estimate from Azure spend, and DO NOT quote an industry average."
+)}
 
-COMPUTED ANNUAL RISK EXPOSURE:
-  Expected: ${_gt['annual_risk_exposure_expected_usd']:,.2f}/yr
-  Range:    ${_gt['annual_risk_exposure_low_usd']:,.2f} – ${_gt['annual_risk_exposure_high_usd']:,.2f}/yr
+RECOMMENDED DR INVESTMENT:
+  {("$%s - $%s/year" % (f"{_gt['recommended_investment_low_usd']:,.2f}", f"{_gt['recommended_investment_high_usd']:,.2f}")) if _gt.get('recommended_investment_low_usd') is not None else "Not quantified"}
+  Basis: {_gt['recommended_investment_basis']}
 
-COMPUTED RECOMMENDED DR INVESTMENT:
-  ${_gt['recommended_investment_low_usd']:,.2f} – ${_gt['recommended_investment_high_usd']:,.2f}/year
-  Basis: max(10–15% of annual Azure run-rate, 15–25% of computed annual exposure). No artificial floor.
+USE THESE NUMBERS VERBATIM for cost_benefit_analysis.current_annual_risk_exposure and
+cost_benefit_analysis.recommended_investment. Never substitute an industry average, and
+never present an assumption as a measurement.
 
-USE THESE NUMBERS for cost_benefit_analysis.current_annual_risk_exposure and
-cost_benefit_analysis.recommended_investment. Format them as "$LOW - $HIGH" / "$LOW - $HIGH/year"
-using the COMPUTED ranges above EXACTLY. Do NOT replace them with industry averages.
-
-In the `basis` field, write ONE short sentence that:
-  • States the figures are derived from this customer's actual run-rate, posture, and tags.
-  • Mentions the data_confidence breakdown (stated/cost-derived/floor) so the customer knows the fidelity.
-  • If stated_pct is low, briefly recommends tagging financial_loss_per_hour on critical workloads to refine.
+In the `basis` field, write ONE short sentence that states plainly:
+  • how many resources supplied a loss figure (or that none did),
+  • that the outage-hours figure is a planning assumption rather than measured downtime,
+  • and, if coverage is thin, that tagging financial_loss_per_hour in BCDR Planning will refine it.
 """
     else:
         gt_block = "\nGROUNDED FINANCIAL CONTEXT: unavailable (calculation failed).\n"
@@ -1654,6 +1655,10 @@ Focus on:
             "authoritative_estate_annual_usd": (financial_ground_truth or {}).get("authoritative_estate_annual_usd"),
             "cost_attribution_pct":      (financial_ground_truth or {}).get("cost_attribution_pct"),
             "annual_risk_exposure_usd":  (financial_ground_truth or {}).get("annual_risk_exposure_expected_usd"),
+            "exposure_is_quantified":    bool((financial_ground_truth or {}).get("exposure_is_quantified")),
+            "unquantified_resources":    int((financial_ground_truth or {}).get("unquantified_resources") or 0),
+            "excluded_system_databases": int((financial_ground_truth or {}).get("excluded_system_databases") or 0),
+            "annual_downtime_assumption_hrs": (financial_ground_truth or {}).get("annual_downtime_hrs_by_tier"),
             "data_confidence":           (financial_ground_truth or {}).get("data_confidence"),
             "posture_counts":            (financial_ground_truth or {}).get("posture_counts"),
             "ai_latency_seconds":        _latency_s,

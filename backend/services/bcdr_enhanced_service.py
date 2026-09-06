@@ -67,9 +67,6 @@ _TIER_RTO_HOURS = {
 _TIER_COST_MULT: dict[str, float] = {
     "Mission-Critical": 50.0, "Business-Critical": 20.0, "Business-Operational": 5.0, "Low": 2.0,
 }
-_TIER_HOURLY_FLOOR: dict[str, float] = {
-    "Mission-Critical": 250.0, "Business-Critical": 50.0, "Business-Operational": 5.0, "Low": 0.0,
-}
 # Expected ANNUAL outage hours per tier — a realistic availability budget (a few hours
 # a year), NOT a full year of downtime. Used for annualized exposure so nothing is
 # multiplied by 8,760 hours.
@@ -303,11 +300,14 @@ def build_business_impact_analysis(
             stated_downtime_count += 1
             total_stated_downtime += stated_loss
         else:
+            # Derived from the resource's REAL billed run-rate only. The former per-tier
+            # dollar floor invented up to $250/hr for a resource that might cost nothing,
+            # so a test workload could show an enterprise-scale loss. A $0 resource now
+            # shows $0 and the row is explicitly marked as not customer-supplied.
             hourly_spend = cost / 730.0
             mult = _TIER_COST_MULT.get(bia_tier, 5.0)
-            floor = _TIER_HOURLY_FLOOR.get(bia_tier, 5.0)
-            downtime_cost_hr = round(max(floor, hourly_spend * mult), 2)
-            downtime_cost_source = "Estimated"
+            downtime_cost_hr = round(hourly_spend * mult, 2)
+            downtime_cost_source = "Estimated from spend"
 
         matrix.append({
             "resource_id":          rid,

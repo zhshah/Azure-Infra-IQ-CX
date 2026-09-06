@@ -2970,17 +2970,20 @@ function AIBCDRPanel() {
             </span>
           </div>
           {data.grounding_metrics && (
-            <div className="flex items-center gap-3 text-[11px] opacity-90">
+            <div className="flex items-center gap-3 text-[11px] opacity-90 flex-wrap">
               <span>Sample: <strong>{data.grounding_metrics.sample_size}</strong> of {data.grounding_metrics.total_resources}</span>
               <span>Phase-1 tagged: <strong>{data.grounding_metrics.tagged_resources}</strong></span>
               <span>Stated $-loss: <strong>{data.grounding_metrics.stated_loss_resources}</strong></span>
-              {data.grounding_metrics.data_confidence && (
-                <span title="How grounded the exposure is. Higher stated% = higher fidelity.">
-                  Fidelity: stated <strong>{data.grounding_metrics.data_confidence.stated_pct}%</strong>
-                  {' '}/ cost-derived <strong>{data.grounding_metrics.data_confidence.cost_derived_pct}%</strong>
-                  {' '}/ floor <strong>{data.grounding_metrics.data_confidence.floor_derived_pct}%</strong>
+              {data.grounding_metrics.excluded_system_databases > 0 && (
+                <span title="SQL system databases (master/model/msdb/tempdb) are engine infrastructure, so their tagged loss is not counted as business impact.">
+                  System DBs excluded: <strong>{data.grounding_metrics.excluded_system_databases}</strong>
                 </span>
               )}
+              <span title="Exposure is computed ONLY from financial_loss_per_hour values you entered in BCDR Planning. Resources without one contribute nothing.">
+                {data.grounding_metrics.exposure_is_quantified === false
+                  ? <span className="text-amber-400">Exposure: not quantified — no $ impact supplied</span>
+                  : <>Exposure basis: <strong>100% customer-stated</strong></>}
+              </span>
             </div>
           )}
         </div>
