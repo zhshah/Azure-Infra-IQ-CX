@@ -1548,6 +1548,13 @@ def build_estate_breakdown(resources: list, arc_data: dict = None, onprem: dict 
     }
 
 
+# Bump when the grounding / financial logic changes. The fingerprint below hashes the
+# ESTATE, so without this a logic fix is invisible to the cache and superseded numbers
+# keep being served for the full TTL - which is exactly how a withdrawn risk-exposure
+# figure reappeared hours after it was fixed.
+GROUNDING_LOGIC_VERSION = "2"
+
+
 def _inventory_fingerprint(category: str, resources: list, arc_data: dict = None, onprem: dict = None) -> str:
     """Short hash of the estate slice so cache auto-invalidates when inventory changes."""
     import hashlib
@@ -1556,6 +1563,7 @@ def _inventory_fingerprint(category: str, resources: list, arc_data: dict = None
     ids = sorted((_rget(r, "resource_id", "id", default="") or "") for r in (resources or []))
     parts = [
         category,
+        GROUNDING_LOGIC_VERSION,
         str(len(ids)),
         str(arc_data.get("total_machines", 0)),
         str(onprem.get("total_servers", 0)),

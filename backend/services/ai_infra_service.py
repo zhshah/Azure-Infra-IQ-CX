@@ -30,6 +30,13 @@ from typing import Any, AsyncGenerator, Dict, Generator, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Bump when the BCDR financial grounding changes. The cache key below is otherwise a
+# fixed string, so a corrected calculation stays hidden behind the previous payload for
+# the full 24h TTL - which is how a withdrawn risk-exposure figure resurfaced after the
+# fix was live.
+BCDR_GROUNDING_VERSION = "2"
+_BCDR_ENV_CACHE_KEY = f"bcdr_environment:v{BCDR_GROUNDING_VERSION}"
+
 # ── Model config ──────────────────────────────────────────────────────────────
 
 CLAUDE_MODEL_PRIMARY   = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250514")
@@ -1044,7 +1051,7 @@ def analyze_environment_bcdr(
         metadata_map = {}
 
     if not force_refresh:
-        cached = tag_svc.get_latest_ai_analysis("bcdr_environment", None, max_age_hours=24)
+        cached = tag_svc.get_latest_ai_analysis(_BCDR_ENV_CACHE_KEY, None, max_age_hours=24)
         if cached:
             result = cached["result"] or {}
             result["_cached"] = True
@@ -1689,7 +1696,7 @@ Focus on:
             prompt_tokens = getattr(response.usage, "prompt_tokens", 0)
         
         tag_svc.save_ai_analysis(
-            "bcdr_environment", None, model, result,
+            _BCDR_ENV_CACHE_KEY, None, model, result,
             prompt_tokens=prompt_tokens,
         )
         
