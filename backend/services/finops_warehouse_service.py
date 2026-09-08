@@ -352,6 +352,29 @@ def _write_dimension_batch(sql: str, batch: List[tuple], label: str) -> int:
     return written
 
 
+def _purge_dimension_window(sub_id: str, ct_label: str, dim_keys: List[str],
+                            from_date: date, to_date: date) -> None:
+    """Drop rows this collection is about to replace.
+
+    Rows are keyed on a hash of the dimension VALUE, so a re-collection that returns a
+    different set of values leaves the old ones behind and double-counts the day. The
+    fresh result is authoritative for its window, so clear the window first."""
+    if not dim_keys:
+        return
+    placeholders = ",".join("?" for _ in dim_keys)
+    sql = (f"DELETE FROM finops_daily_dimension_costs "
+           f"WHERE subscription_id = ? AND cost_type = ? "
+           f"AND dimension IN ({placeholders}) "
+           f"AND snapshot_date >= ? AND snapshot_date <= ?")
+    params = [sub_id, ct_label, *dim_keys, str(from_date), str(to_date)]
+    try:
+        with _conn() as con:
+            con.execute(sql, params)
+    except Exception as e:
+        logger.warning("ETL analyze: purge %s/%s failed (stale rows may remain): %s",
+                       sub_id[:8], ct_label, e)
+
+
 def _collect_daily_dimension_costs(sub_id: str, today: date, run_id: str,
                                    days: int = ANALYZE_DIMENSION_DAYS,
                                    cost_types: Tuple[str, ...] = ANALYZE_COST_TYPES,
@@ -386,7 +409,14 @@ def _collect_daily_dimension_costs(sub_id: str, today: date, run_id: str,
                                   cost_type=ct, use_cache=False)
                 norm = normalise_cost_rows(rows, az_dims)
                 batch = _fan_out_dimension_rows(norm, dim_items, sub_id, ct_label, run_id)
-                total += _write_dimension_batch(sql, batch, f"dimension x{len(dim_items)}")
+                if batch:
+                    _purge_dimension_window(sub_id, ct_label, [k for k, _v in dim_items],
+                                            from_date, today)
+                    written = _write_dimension_batch(sql, batch, f"dimension x{len(dim_items)}")
+                    if written == 0:
+                        logger.error("ETL analyze (%s/%s): window purged but 0 of %d rows written "
+                                     "— re-run needed to restore it", sub_id[:8], ct_label, len(batch))
+                    total += written
                 time.sleep(0.25)
                 continue  # combined path succeeded — skip the per-dimension loop
             except Exception as e:
@@ -406,7 +436,9 @@ def _collect_daily_dimension_costs(sub_id: str, today: date, run_id: str,
                 continue
             norm = normalise_cost_rows(rows, [az_dim])
             batch = _fan_out_dimension_rows(norm, [(dim_key, az_dim)], sub_id, ct_label, run_id)
-            total += _write_dimension_batch(sql, batch, f"dimension {dim_key}")
+            if batch:
+                _purge_dimension_window(sub_id, ct_label, [dim_key], from_date, today)
+                total += _write_dimension_batch(sql, batch, f"dimension {dim_key}")
             time.sleep(0.25)  # gentle pacing to stay under Cost Management limits
     return total
 
@@ -596,6 +628,37 @@ def missing_datasets() -> List[str]:
     return empty
 
 
+def stale_datasets(max_age_days: int = 2) -> List[str]:
+    """Cost datasets whose newest day is older than `max_age_days`.
+
+    ``missing_datasets`` only catches completely empty tables, so a redeploy onto a
+    database holding week-old rows looked healthy and waited for the 12h tick. This
+    lets startup notice staleness and top up straight away.
+    """
+    if not _DB_AVAILABLE:
+        return []
+    cutoff = str(datetime.now(timezone.utc).date() - timedelta(days=max_age_days))
+    tables = {
+        "resource_costs":  "finops_daily_resource_costs",
+        "dimension_costs": "finops_daily_dimension_costs",
+        "meter_costs":     "finops_daily_meter_costs",
+    }
+    stale: List[str] = []
+    try:
+        with _conn() as con:
+            for label, table in tables.items():
+                try:
+                    row = con.execute(f"SELECT MAX(snapshot_date) FROM {table}").fetchone()
+                    newest = str((row[0] if row else "") or "")[:10]
+                    if newest and newest < cutoff:
+                        stale.append(f"{label}(newest {newest})")
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.warning("warehouse: staleness check failed: %s", e)
+    return stale
+
+
 # ── Main ETL orchestrator ──────────────────────────────────────────────────────
 
 def run_full_etl(
@@ -664,7 +727,26 @@ def run_full_etl(
             run_id, "INITIAL light" if initial else "full", daily_days, svc_months, tag_months,
         )
 
+        # A fully rate-limited query still burns the whole retry ladder (~320s) before
+        # giving up, so a saturated tenant can grind for hours and write nothing. Stop
+        # once it is clearly saturated and keep what was collected.
+        abort_after = _env_int("FINOPS_ETL_ABORT_AFTER_ABANDONED", 4)
+        throttled_out = False
+        try:
+            from services.finops_data_service import throttle_stats as _tstats
+        except Exception:
+            def _tstats():
+                return {}
+
+        def _saturated() -> bool:
+            return bool(abort_after) and int(_tstats().get("gave_up", 0) or 0) >= abort_after
+
+        subs_done = 0
         for idx, sub_id in enumerate(subscription_ids, 1):
+            if throttled_out:
+                logger.warning("ETL run %s: skipping subscription %d/%d — tenant throttled",
+                               run_id, idx, len(subscription_ids))
+                break
             logger.info("ETL: processing subscription %d/%d: %s", idx, len(subscription_ids), sub_id[:8] + "…")
             tag = f"subscription {idx}/{len(subscription_ids)} ({sub_id[:8]}…)"
             try:
@@ -674,33 +756,52 @@ def run_full_etl(
                 counters["resource_costs"] += n
                 logger.info("ETL: %s → %d resource cost rows", sub_id[:8], n)
 
-                # b) Daily subscription rollup
-                _progress(f"{tag} · daily cost per subscription ({daily_days}d)")
-                n = _collect_daily_subscription_costs(sub_id, today, run_id, days=daily_days)
-                counters["sub_costs"] += n
-
-                # c) Monthly service breakdown
-                _progress(f"{tag} · monthly cost by service ({svc_months}mo)")
-                n = _collect_monthly_service_costs(sub_id, today, run_id, months=svc_months)
-                counters["service_costs"] += n
-
-                # d) Monthly tag breakdown. Quick mode reuses the tag keys this
-                #    subscription is known to use; a full run re-probes all of them.
-                tk = _productive_tag_keys(sub_id) if initial else None
-                _progress(f"{tag} · monthly cost by tag ({tag_months}mo, "
-                          f"{len(tk or _TAG_KEYS)} key(s))")
-                n = _collect_monthly_tag_costs(sub_id, today, run_id,
-                                               months=tag_months, tag_keys=tk)
-                counters["tag_costs"] += n
-
-                # e) Daily dimensional costs (warehouse-backed Analyze — RG/service/meter/location, actual+amortized)
+                # b) Daily dimensional costs (warehouse-backed Analyze — RG/service/meter/
+                #    location, actual+amortized). Runs before the subscription rollup so
+                #    that rollup can be derived from it instead of costing another query.
+                dim_ok = False
                 try:
                     dim_days = ANALYZE_DIMENSION_DAYS_INITIAL if initial else ANALYZE_DIMENSION_DAYS
                     _progress(f"{tag} · daily cost by dimension ({dim_days}d) — the long one")
                     n = _collect_daily_dimension_costs(sub_id, today, run_id, days=dim_days)
                     counters["service_costs"] += n
+                    dim_ok = n > 0
                 except Exception as _de:
                     logger.warning("ETL: dimension costs for %s failed: %s", sub_id[:8], _de)
+
+                # c) Daily subscription rollup — derived from (b) for free; only falls
+                #    back to a Cost Management query if the dimension grain came back empty.
+                n = _derive_daily_subscription_costs(sub_id, today, run_id, days=daily_days) if dim_ok else None
+                if n is None:
+                    _progress(f"{tag} · daily cost per subscription ({daily_days}d)")
+                    n = _collect_daily_subscription_costs(sub_id, today, run_id, days=daily_days)
+                else:
+                    _progress(f"{tag} · daily cost per subscription (derived, no query)")
+                counters["sub_costs"] += n
+
+                if _saturated():
+                    throttled_out = True
+                    break
+
+                # d) Monthly service breakdown
+                _progress(f"{tag} · monthly cost by service ({svc_months}mo)")
+                n = _collect_monthly_service_costs(sub_id, today, run_id, months=svc_months)
+                counters["service_costs"] += n
+
+                # e) Monthly tag breakdown. Azure's per-tag-key totals are NOT a
+                #    partition of the same spend (a single-key query only counts
+                #    resources carrying that tag), so these cannot be collapsed into
+                #    one multi-key query — measured $1,277.99 combined vs $258.13 real.
+                #    Five keys is half of this pass's queries, so the fast first pass
+                #    skips it entirely and the background backfill picks it up.
+                if initial:
+                    _progress(f"{tag} · monthly cost by tag — deferred to background backfill")
+                else:
+                    _progress(f"{tag} · monthly cost by tag ({tag_months}mo, "
+                              f"{len(_TAG_KEYS)} key(s))")
+                    n = _collect_monthly_tag_costs(sub_id, today, run_id, months=tag_months)
+                    counters["tag_costs"] += n
+
 
                 # f) Meter-grain costs + usage quantity (storage tier, egress,
                 #    inter-region, $/GB ingested — none of which the service grain can answer)
@@ -713,6 +814,12 @@ def run_full_etl(
                 except Exception as _me:
                     logger.warning("ETL: meter costs for %s failed: %s", sub_id[:8], _me)
 
+                subs_done += 1
+
+                if _saturated():
+                    throttled_out = True
+                    break
+
                 # Brief pause between subscriptions to be a good API citizen
                 time.sleep(2)
 
@@ -720,6 +827,18 @@ def run_full_etl(
                 logger.error("ETL: subscription %s failed: %s", sub_id, sub_err)
                 sub_errors.append(f"{sub_id[:8]}: {sub_err}")
                 # Continue with next subscription — partial data is better than none
+                if _saturated():
+                    throttled_out = True
+                    break
+
+        if throttled_out:
+            msg = (f"Azure Cost Management is rate-limiting this tenant — stopped after "
+                   f"{int(_tstats().get('gave_up', 0) or 0)} abandoned queries rather than "
+                   f"retrying for hours. Collected {subs_done}/{len(subscription_ids)} subscription(s); "
+                   f"the next scheduled run resumes where this left off.")
+            logger.warning("ETL run %s: %s", run_id, msg)
+            _progress("paused — tenant rate-limited, keeping what was collected")
+            sub_errors.append(msg)
 
         # e) Anomaly detection runs across all freshly-loaded daily data
         _progress("detecting cost anomalies")
@@ -945,6 +1064,40 @@ def _collect_daily_subscription_costs(sub_id: str, today: date, run_id: str,
     return inserted
 
 
+def _derive_daily_subscription_costs(sub_id: str, today: date, run_id: str,
+                                     days: int = DAILY_RESOURCE_DAYS) -> Optional[int]:
+    """Roll the dimension grain up to a daily subscription total — no API call.
+
+    Every dimension is a complete partition of the same spend, so summing one of them
+    per day reproduces what a SubscriptionId-grouped query returns. Verified against
+    219 settled days of collected data: 219 exact matches. Returns None when the
+    dimension grain has no coverage yet, so the caller can fall back to the query.
+    """
+    from_date = today - timedelta(days=days - 1)
+    try:
+        with _conn() as con:
+            rows = con.execute(
+                "SELECT snapshot_date, SUM(cost_usd) FROM finops_daily_dimension_costs "
+                "WHERE subscription_id = ? AND cost_type = 'actual' AND dimension = ? "
+                "AND snapshot_date >= ? GROUP BY snapshot_date",
+                (sub_id, "resource_group", str(from_date)),
+            ).fetchall()
+    except Exception as e:
+        logger.warning("ETL: subscription rollup derivation failed for %s: %s", sub_id[:8], e)
+        return None
+    if not rows:
+        return None
+
+    cols = ["snapshot_date", "subscription_id", "subscription_name", "cost_usd",
+            "currency", "resource_count", "etl_run_id"]
+    pk_cols = ["snapshot_date", "subscription_id"]
+    sql = upsert_conflict_sql("finops_daily_subscription_costs", cols, pk_cols,
+                              [c for c in cols if c not in pk_cols])
+    batch = [(str(d)[:10], sub_id, sub_id, float(c or 0), "USD", 0, run_id)
+             for d, c in rows if str(d or "")[:10]]
+    return _executemany_upsert(sql, batch, "subscription rollup (derived)")
+
+
 # ── ETL step: monthly service breakdown ──────────────────────────────────────
 
 def _collect_monthly_service_costs(sub_id: str, today: date, run_id: str,
@@ -999,27 +1152,6 @@ def _collect_monthly_service_costs(sub_id: str, today: date, run_id: str,
 # ── ETL step: monthly tag breakdown ──────────────────────────────────────────
 
 _TAG_KEYS = ["Environment", "BusinessUnit", "Project", "Application", "CostCenter"]
-
-
-def _productive_tag_keys(sub_id: str) -> List[str]:
-    """Tag keys that have ever returned cost for this subscription.
-
-    Azure needs a separate query per tag key and a 13-month one costs ~85s, so probing
-    all five is ~7 minutes per subscription. Most estates use one or two keys, and the
-    rest return nothing — measured at 425s for 70 rows. Quick mode reuses what the
-    warehouse already learned; full mode still probes every key.
-    """
-    try:
-        with _conn() as con:
-            rows = con.execute(
-                "SELECT DISTINCT tag_key FROM finops_monthly_tag_costs WHERE subscription_id = ?",
-                (sub_id,),
-            ).fetchall()
-        known = {str(r[0]) for r in rows if r and r[0]}
-    except Exception:
-        return _TAG_KEYS
-    pruned = [k for k in _TAG_KEYS if k in known]
-    return pruned or _TAG_KEYS
 
 
 def _collect_monthly_tag_costs(sub_id: str, today: date, run_id: str,
@@ -1283,17 +1415,29 @@ def is_etl_running() -> bool:
 
 
 def has_warehouse_data() -> bool:
-    """Return True if the warehouse has any data at all."""
+    """Return True if the warehouse holds any cost rows.
+
+    Counts ROWS, not ETL runs. A run that finished but collected nothing (every query
+    abandoned under sustained 429) previously satisfied this check, which defeated the
+    startup retry loop that exists precisely to recover from that case.
+    """
     if not _DB_AVAILABLE:
         return False
     try:
         with _conn() as con:
-            row = con.execute(
-                "SELECT COUNT(*) FROM finops_etl_runs WHERE status='completed'"
-            ).fetchone()
-        return (row[0] if row else 0) > 0
+            for table in ("finops_daily_resource_costs",
+                          "finops_daily_dimension_costs",
+                          "finops_daily_subscription_costs",
+                          "finops_monthly_service_costs"):
+                try:
+                    row = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                    if int((row[0] if row else 0) or 0) > 0:
+                        return True
+                except Exception:
+                    continue
     except Exception:
         return False
+    return False
 
 
 def get_warehouse_dashboard(

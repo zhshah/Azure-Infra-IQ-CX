@@ -3603,8 +3603,10 @@ async def _finops_warehouse_scheduler() -> None:
             # deploy onto an existing database would otherwise leave them blank until the
             # first 12h tick.
             _gaps = finops_warehouse_svc.missing_datasets()
-            if _gaps:
-                logger.info("FinOps Warehouse: empty datasets %s — running gap-fill ETL", _gaps)
+            _stale = finops_warehouse_svc.stale_datasets()
+            if _gaps or _stale:
+                logger.info("FinOps Warehouse: empty=%s stale=%s — running gap-fill ETL",
+                            _gaps, _stale)
                 await _run_warehouse_etl_async("startup_gapfill", initial=True)
     except Exception as exc:
         logger.warning("FinOps Warehouse: startup initial collection failed: %s", exc)
@@ -3621,7 +3623,9 @@ async def _finops_warehouse_scheduler() -> None:
             _deep = (_warehouse_tick % 2) == 1
             _warehouse_tick += 1
             logger.info("FinOps Warehouse: 12h ETL starting (%s window)", "FULL back-fill" if _deep else "incremental")
-            await _run_warehouse_etl_async("scheduler_deep" if _deep else "scheduler", initial=False)
+            # initial=True is the SHORT window. Passing initial=False for both made every
+            # 12h tick a full 13-month pull, doubling Cost Management load for no gain.
+            await _run_warehouse_etl_async("scheduler_deep" if _deep else "scheduler", initial=not _deep)
         except Exception as exc:
             logger.error("FinOps Warehouse scheduler error: %s", exc)
 
