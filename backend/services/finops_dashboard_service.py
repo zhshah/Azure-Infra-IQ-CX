@@ -91,6 +91,36 @@ def _conn():
         yield con
 
 
+def _executemany_upsert(sql: str, batch: List[tuple], label: str) -> int:
+    """One round-trip per batch. Azure SQL sits behind a private endpoint, so a
+    per-row execute() turns a few thousand rows into minutes of pure latency."""
+    if not batch:
+        return 0
+    try:
+        with _conn() as con:
+            cur = con.cursor()
+            try:
+                cur.fast_executemany = True   # pyodbc only
+            except AttributeError:
+                pass
+            cur.executemany(sql, batch)
+        return len(batch)
+    except Exception as e:
+        logger.warning("%s batch upsert failed (%s) — retrying row by row", label, e)
+        written = 0
+        try:
+            with _conn() as con:
+                for params in batch:
+                    try:
+                        con.execute(sql, params)
+                        written += 1
+                    except Exception:
+                        pass
+        except Exception as inner:
+            logger.error("%s row-by-row fallback failed: %s", label, inner)
+        return written
+
+
 def _sub_clause(subscription_ids: Optional[List[str]], col: str = "subscription_id") -> str:
     subs = [s for s in (subscription_ids or []) if s]
     if not subs:
@@ -283,46 +313,42 @@ def snapshot_utilization(resources: List[Any], run_id: str = "") -> int:
             "days_idle", "cost_month_usd", "environment", "etl_run_id"]
     sql = upsert_conflict_sql("finops_resource_utilization", cols, ["id"],
                               [c for c in cols if c != "id"])
-    written = 0
-    try:
-        with _conn() as con:
-            for r in resources:
-                rid = str(getattr(r, "resource_id", "") or "")
-                if not rid:
-                    continue
-                tags = getattr(r, "tags", None) or {}
-                rg = str(getattr(r, "resource_group", "") or "")
-                name = str(getattr(r, "resource_name", "") or "")
-                env = classify_environment(_tag_lookup(tags, "environment", "env"), rg, name)
-                days_idle = int(getattr(r, "days_since_active", 0) or 0)
-                power = str(getattr(r, "power_state", "") or "")
-                util = getattr(r, "primary_utilization_pct", None)
-                is_idle = 1 if (power == "deallocated" or days_idle >= 30
-                                or (util is not None and float(util) < 5)) else 0
-                cost = float(getattr(r, "cost_current_month", 0) or 0)
-                if cost <= 0:
-                    cost = wh_cost.get(rid.lower(), 0.0)
-                key = hashlib.sha256(f"{sd}|{rid}".encode("utf-8")).hexdigest()
-                con.execute(sql, (
-                    key, sd,
-                    str(getattr(r, "subscription_id", "") or ""),
-                    rid, name, rg,
-                    str(getattr(r, "resource_type", "") or "").lower(),
-                    str(getattr(r, "location", "") or ""),
-                    str(getattr(r, "sku", "") or ""),
-                    power,
-                    getattr(r, "avg_cpu_pct", None),
-                    getattr(r, "avg_memory_pct", None),
-                    util,
-                    is_idle,
-                    1 if getattr(r, "is_orphan", False) else 0,
-                    days_idle,
-                    cost,
-                    env, run_id,
-                ))
-                written += 1
-    except Exception as e:
-        logger.error("utilisation snapshot failed: %s", e)
+    batch: List[tuple] = []
+    for r in resources:
+        rid = str(getattr(r, "resource_id", "") or "")
+        if not rid:
+            continue
+        tags = getattr(r, "tags", None) or {}
+        rg = str(getattr(r, "resource_group", "") or "")
+        name = str(getattr(r, "resource_name", "") or "")
+        env = classify_environment(_tag_lookup(tags, "environment", "env"), rg, name)
+        days_idle = int(getattr(r, "days_since_active", 0) or 0)
+        power = str(getattr(r, "power_state", "") or "")
+        util = getattr(r, "primary_utilization_pct", None)
+        is_idle = 1 if (power == "deallocated" or days_idle >= 30
+                        or (util is not None and float(util) < 5)) else 0
+        cost = float(getattr(r, "cost_current_month", 0) or 0)
+        if cost <= 0:
+            cost = wh_cost.get(rid.lower(), 0.0)
+        key = hashlib.sha256(f"{sd}|{rid}".encode("utf-8")).hexdigest()
+        batch.append((
+            key, sd,
+            str(getattr(r, "subscription_id", "") or ""),
+            rid, name, rg,
+            str(getattr(r, "resource_type", "") or "").lower(),
+            str(getattr(r, "location", "") or ""),
+            str(getattr(r, "sku", "") or ""),
+            power,
+            getattr(r, "avg_cpu_pct", None),
+            getattr(r, "avg_memory_pct", None),
+            util,
+            is_idle,
+            1 if getattr(r, "is_orphan", False) else 0,
+            days_idle,
+            cost,
+            env, run_id,
+        ))
+    written = _executemany_upsert(sql, batch, "utilisation snapshot")
     return written
 
 
@@ -337,43 +363,39 @@ def snapshot_storage_capacity(resources: List[Any], run_id: str = "") -> int:
             "capacity_gb", "cost_month_usd", "etl_run_id"]
     sql = upsert_conflict_sql("finops_storage_capacity", cols, ["id"],
                               [c for c in cols if c != "id"])
-    written = 0
-    try:
-        with _conn() as con:
-            for r in resources:
-                rtype = str(getattr(r, "resource_type", "") or "").lower()
-                if not ("storage" in rtype or "disk" in rtype):
-                    continue
-                rid = str(getattr(r, "resource_id", "") or "")
-                if not rid:
-                    continue
-                sku = str(getattr(r, "sku", "") or "")
-                redundancy = ""
-                for tag in ("GZRS", "GRS", "ZRS", "LRS", "RAGRS"):
-                    if tag.lower() in sku.lower():
-                        redundancy = tag
-                        break
-                tags = getattr(r, "tags", None) or {}
-                key = hashlib.sha256(f"{sd}|{rid}".encode("utf-8")).hexdigest()
-                cost = float(getattr(r, "cost_current_month", 0) or 0)
-                if cost <= 0:
-                    cost = wh_cost.get(rid.lower(), 0.0)
-                con.execute(sql, (
-                    key, sd,
-                    str(getattr(r, "subscription_id", "") or ""),
-                    rid,
-                    str(getattr(r, "resource_name", "") or ""),
-                    str(getattr(r, "resource_group", "") or ""),
-                    rtype,
-                    _tag_lookup(tags, "accessTier", "access_tier"),
-                    redundancy,
-                    float(getattr(r, "storage_capacity_gb", 0) or 0),
-                    cost,
-                    run_id,
-                ))
-                written += 1
-    except Exception as e:
-        logger.error("storage capacity snapshot failed: %s", e)
+    batch: List[tuple] = []
+    for r in resources:
+        rtype = str(getattr(r, "resource_type", "") or "").lower()
+        if not ("storage" in rtype or "disk" in rtype):
+            continue
+        rid = str(getattr(r, "resource_id", "") or "")
+        if not rid:
+            continue
+        sku = str(getattr(r, "sku", "") or "")
+        redundancy = ""
+        for tag in ("GZRS", "GRS", "ZRS", "LRS", "RAGRS"):
+            if tag.lower() in sku.lower():
+                redundancy = tag
+                break
+        tags = getattr(r, "tags", None) or {}
+        key = hashlib.sha256(f"{sd}|{rid}".encode("utf-8")).hexdigest()
+        cost = float(getattr(r, "cost_current_month", 0) or 0)
+        if cost <= 0:
+            cost = wh_cost.get(rid.lower(), 0.0)
+        batch.append((
+            key, sd,
+            str(getattr(r, "subscription_id", "") or ""),
+            rid,
+            str(getattr(r, "resource_name", "") or ""),
+            str(getattr(r, "resource_group", "") or ""),
+            rtype,
+            _tag_lookup(tags, "accessTier", "access_tier"),
+            redundancy,
+            float(getattr(r, "storage_capacity_gb", 0) or 0),
+            cost,
+            run_id,
+        ))
+    written = _executemany_upsert(sql, batch, "storage capacity snapshot")
     return written
 
 

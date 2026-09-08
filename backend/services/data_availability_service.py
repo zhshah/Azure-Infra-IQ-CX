@@ -268,8 +268,13 @@ def _last_etl(cur) -> Dict[str, Any]:
         return {"status": "unknown", "error_message": str(exc)[:200]}
 
 
-def get_availability() -> Dict[str, Any]:
-    """Census every dataset: rows, coverage window, freshness and a verdict."""
+def get_availability(row_counts: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+    """Census every dataset: rows, coverage window, freshness and a verdict.
+
+    ``row_counts`` lets a caller supply counts already read from SQL metadata, so the
+    census does not re-run COUNT(*) across every table while an ETL is writing to them.
+    """
+    row_counts = row_counts or {}
     out: Dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "datasets": {},
@@ -286,14 +291,17 @@ def get_availability() -> Dict[str, Any]:
                     "grain": meta["grain"], "modules": meta["modules"], "why": meta["why"],
                     "rows": 0, "earliest": None, "latest": None, "age_hours": None,
                 }
-                try:
-                    cur.execute(f"SELECT COUNT(*) FROM {meta['table']}")
-                    entry["rows"] = int(cur.fetchone()[0] or 0)
-                except Exception as exc:
-                    entry["status"] = "missing"
-                    entry["detail"] = f"table not present: {str(exc)[:120]}"
-                    out["datasets"][key] = entry
-                    continue
+                if meta["table"] in row_counts:
+                    entry["rows"] = int(row_counts[meta["table"]] or 0)
+                else:
+                    try:
+                        cur.execute(f"SELECT COUNT(*) FROM {meta['table']}")
+                        entry["rows"] = int(cur.fetchone()[0] or 0)
+                    except Exception as exc:
+                        entry["status"] = "missing"
+                        entry["detail"] = f"table not present: {str(exc)[:120]}"
+                        out["datasets"][key] = entry
+                        continue
 
                 dcol = meta.get("date_column")
                 if dcol and entry["rows"]:

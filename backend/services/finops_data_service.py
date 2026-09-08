@@ -13,6 +13,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, date, timedelta, timezone
@@ -190,6 +192,56 @@ def _extract_skiptoken(next_link: Optional[str]) -> Optional[str]:
     return None
 
 
+def _retry_after_seconds(exc: Exception) -> Optional[float]:
+    """Azure tells us exactly how long to wait — obey it instead of guessing."""
+    for attr in ("response", "http_response"):
+        resp = getattr(exc, attr, None)
+        headers = getattr(resp, "headers", None)
+        if not headers:
+            continue
+        for key in ("Retry-After", "retry-after", "x-ms-ratelimit-microsoft.costmanagement-retry-after"):
+            try:
+                val = headers.get(key)
+            except Exception:
+                val = None
+            if val:
+                try:
+                    return max(1.0, float(val))
+                except (TypeError, ValueError):
+                    continue
+    return None
+
+
+# Cost Management throttles per-tenant, so concurrency is not the issue — arrival rate is.
+# Spacing calls costs a couple of seconds each but avoids a 429 that costs 110s of backoff.
+_COST_CALL_LOCK = threading.Lock()
+_last_cost_call_at: float = 0.0
+COST_MIN_CALL_INTERVAL = float(os.getenv("FINOPS_MIN_CALL_INTERVAL_SECONDS", "3"))
+
+
+def _pace_cost_call() -> None:
+    global _last_cost_call_at
+    with _COST_CALL_LOCK:
+        wait = COST_MIN_CALL_INTERVAL - (time.monotonic() - _last_cost_call_at)
+        if wait > 0:
+            time.sleep(wait)
+        _last_cost_call_at = time.monotonic()
+
+
+# Throttling is the single biggest cause of both a slow ETL and silent warehouse gaps,
+# so it is counted and surfaced rather than left in the log.
+_THROTTLE_STATS: Dict[str, int] = {"queries": 0, "throttled_queries": 0, "gave_up": 0}
+
+
+def throttle_stats() -> Dict[str, int]:
+    return dict(_THROTTLE_STATS)
+
+
+def reset_throttle_stats() -> None:
+    for k in _THROTTLE_STATS:
+        _THROTTLE_STATS[k] = 0
+
+
 def query_cost(
     scope: str,
     from_date: date,
@@ -284,11 +336,14 @@ def query_cost(
 
     rows: List[Dict[str, Any]] = []
     skiptoken: Optional[str] = None
-    retry_delays = [5, 15, 30, 60]
+    # A 429 costs far more than a pause, so be patient rather than abandoning the query:
+    # giving up silently leaves a permanent hole in the warehouse.
+    retry_delays = [5, 15, 30, 60, 90, 120]
     retry_idx = 0
 
     while True:
         try:
+            _pace_cost_call()
             response = client.query.usage(
                 scope=scope,
                 parameters=query_def,
@@ -310,13 +365,18 @@ def query_cost(
             err_str = str(e)
             if "429" in err_str or "TooManyRequests" in err_str:
                 if retry_idx < len(retry_delays):
-                    wait = retry_delays[retry_idx]
+                    wait = _retry_after_seconds(e) or retry_delays[retry_idx]
                     retry_idx += 1
-                    logger.warning("FinOps: 429 rate limit on %s — waiting %ds", scope, wait)
+                    logger.warning("FinOps: 429 on %s — waiting %.0fs (attempt %d/%d)",
+                                   scope, wait, retry_idx, len(retry_delays))
                     time.sleep(wait)
                     continue
                 else:
-                    logger.error("FinOps: sustained 429 on %s — giving up", scope)
+                    _THROTTLE_STATS["gave_up"] += 1
+                    logger.error(
+                        "FinOps: sustained 429 on %s after %d retries — GIVING UP. "
+                        "This grain will have a gap: group_by=%s type=%s %s..%s",
+                        scope, len(retry_delays), group_by, cost_type, from_date, to_date)
                     break
             elif "403" in err_str or "Forbidden" in err_str or "NotFound" in err_str:
                 logger.warning("FinOps: scope %s not accessible: %s", scope, e)
@@ -324,6 +384,10 @@ def query_cost(
             else:
                 logger.error("FinOps: query_cost error on %s: %s", scope, e)
                 break
+
+    if retry_idx:
+        _THROTTLE_STATS["throttled_queries"] += 1
+    _THROTTLE_STATS["queries"] += 1
 
     if use_cache:
         _set_cached(cache_key, rows)

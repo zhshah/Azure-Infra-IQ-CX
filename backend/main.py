@@ -7960,6 +7960,260 @@ async def warehouse_trigger():
     return {"ok": True, "message": "ETL collection started — data will be available in a few minutes"}
 
 
+# ── Data ingestion: visibility + one-click force collection ──────────────────
+# A fresh deployment fills the warehouse only via a first-run warm-up chained off a
+# scan, and reports nothing while it does. These three endpoints make that explicit:
+# what is in the database, what a run is doing right now, and a way to force one.
+
+_ingestion_task: Optional[asyncio.Task] = None
+
+# Ordered because each step feeds the next: the scan resolves the estate, the ETL
+# prices it, the rest layer usage/utilisation on top. ``typical`` is only a hint for
+# the UI's progress estimate — real duration scales with estate size.
+_INGESTION_STEPS = [
+    {"key": "estate_scan", "label": "Estate scan (inventory, scores, metrics)",
+     "typical": "5-12 min", "weight": 30},
+    {"key": "warehouse_etl", "label": "Cost warehouse ETL (per resource / subscription / service / tag / meter)",
+     "typical": "10-40 min", "weight": 45},
+    {"key": "utilisation", "label": "Utilisation metrics snapshot",
+     "typical": "2-8 min", "weight": 10},
+    {"key": "cost_snapshot", "label": "Cost bundle snapshot",
+     "typical": "1-3 min", "weight": 5},
+    {"key": "log_analytics", "label": "Log Analytics per-table cost",
+     "typical": "1-5 min", "weight": 5},
+    {"key": "recommendations", "label": "Optimisation recommendations + realised savings",
+     "typical": "under 1 min", "weight": 5},
+]
+
+
+async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full") -> None:
+    """Run every collector in order, recording progress so the UI can follow along.
+
+    ``mode='full'`` pulls the maximum history Azure will serve (~13 months on the
+    dimension/meter grains) and takes tens of minutes. ``mode='quick'`` reuses the ETL's
+    first-run windows to top up only the last few days — the same collectors, a fraction
+    of the time — for when the estate just needs to be current.
+    """
+    from services import finops_ingestion_service as _ing
+
+    quick = mode == "quick"
+    loop = asyncio.get_event_loop()
+    run_id = f"ingest-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    _ing.job_start(run_id, f"{triggered_by} ({mode})", _INGESTION_STEPS)
+    failures: List[str] = []
+
+    try:
+        _ing.job_set_counts("before", await loop.run_in_executor(_pool, _ing.table_counts))
+    except Exception:
+        pass
+
+    async def step(key: str, coro_factory, describe):
+        _ing.job_step(key, "running")
+        try:
+            result = await coro_factory()
+            detail, rows = describe(result)
+            _ing.job_step(key, "ok", detail=detail, rows=rows)
+        except Exception as exc:
+            logger.warning("Ingestion step %s failed: %s", key, exc)
+            failures.append(f"{key}: {exc}")
+            _ing.job_step(key, "failed", detail=str(exc))
+
+    # 1) Estate scan — everything downstream keys off the resource inventory.
+    #    A quick top-up is about refreshing COST, and a re-scan of an estate that was
+    #    inventoried hours ago costs ~6-10 minutes for no new rows, so skip it when a
+    #    recent scan already exists.
+    recent_scan_age = None
+    if quick:
+        try:
+            av = await loop.run_in_executor(_pool, _ing.get_inventory, False)
+            scans = next((d for d in av.get("datasets", []) if d.get("key") == "scans"), None)
+            recent_scan_age = (scans or {}).get("age_hours")
+        except Exception:
+            recent_scan_age = None
+
+    if quick and recent_scan_age is not None and recent_scan_age < 24:
+        _ing.job_step("estate_scan", "skipped",
+                      detail=f"reused inventory scanned {round(recent_scan_age, 1)}h ago "
+                             f"— quick mode refreshes cost, not inventory")
+    else:
+        async def _scan():
+            return await _build_dashboard(refresh=True, skip_metrics=quick)
+
+        await step("estate_scan", _scan,
+                   lambda d: (f"{len(getattr(d, 'resources', []) or [])} resources",
+                              len(getattr(d, "resources", []) or [])))
+
+    # 2) Cost warehouse — the spine behind every FinOps chart.
+    async def _etl():
+        if not _FINOPS_WAREHOUSE_AVAILABLE:
+            raise RuntimeError("FinOps warehouse not available (Azure SQL required)")
+        # Surface which subscription / cost grain is in flight; a 30-minute opaque step
+        # is indistinguishable from a hang.
+        finops_warehouse_svc.set_progress_callback(
+            lambda msg: _ing.job_step_progress("warehouse_etl", msg))
+        try:
+            return await loop.run_in_executor(
+                _pool, lambda: finops_warehouse_svc.run_full_etl(
+                    triggered_by=triggered_by, initial=quick))
+        finally:
+            finops_warehouse_svc.set_progress_callback(None)
+
+    def _etl_detail(r):
+        r = r or {}
+        rows = sum(int(r.get(k) or 0) for k in
+                   ("resource_costs", "sub_costs", "service_costs", "tag_costs", "meter_costs"))
+        bits = [f"{k}={r.get(k)}" for k in
+                ("resource_costs", "sub_costs", "service_costs", "tag_costs",
+                 "meter_costs", "anomalies") if r.get(k)]
+        status = r.get("status", "?")
+        if status not in ("completed", "partial"):
+            raise RuntimeError(r.get("message") or f"ETL {status}")
+        detail = f"{status}: " + (", ".join(bits) or "no cost rows returned")
+        # Surface throttling: an abandoned query is a permanent gap, not just slowness.
+        q, thr, gave = (r.get("cost_queries"), r.get("throttled_queries"), r.get("abandoned_queries"))
+        if q:
+            detail += f" · {q} Azure cost queries"
+            if thr:
+                detail += f", {thr} throttled"
+            if gave:
+                detail += f", {gave} ABANDONED after sustained 429 (data gap)"
+        return (detail, rows)
+
+    await step("warehouse_etl", _etl, _etl_detail)
+
+    # 3) Utilisation metrics.
+    await step("utilisation", lambda: _metrics_snapshot_run(),
+               lambda r: ((r or {}).get("message") or f"{(r or {}).get('resources', 0)} resources",
+                          (r or {}).get("resources")))
+
+    # 4) Cost bundle snapshot.
+    await step("cost_snapshot", lambda: _cost_snapshot_run(),
+               lambda r: ((r or {}).get("message") or "captured", None))
+
+    # 5) Log Analytics per-table cost.
+    async def _la():
+        from services import log_analytics_cost_service as _lasvc
+        return await loop.run_in_executor(
+            _pool, lambda: _lasvc.collect_all(_mgmt_subs(None), run_id=run_id, days=days))
+
+    await step("log_analytics", _la,
+               lambda r: (f"{(r or {}).get('rows', 0)} rows from "
+                          f"{(r or {}).get('workspaces', 0)} workspace(s)",
+                          (r or {}).get("rows")))
+
+    # 6) Recommendations + realised savings.
+    async def _recs():
+        from services import finops_savings_service as _sav
+        gen = await loop.run_in_executor(_pool, _sav.generate_warehouse_recommendations)
+        measured = await loop.run_in_executor(_pool, lambda: _sav.measure_realized_savings(run_id))
+        return {"generated": (gen or {}).get("generated", 0),
+                "monthly_usd": (gen or {}).get("monthly_usd", 0),
+                "measured": (measured or {}).get("measured", 0)}
+
+    await step("recommendations", _recs,
+               lambda r: (f"{r['generated']} generated (${r['monthly_usd']}/mo), "
+                          f"{r['measured']} realised", r["generated"]))
+
+    try:
+        _ing.job_set_counts("after", await loop.run_in_executor(_pool, _ing.table_counts))
+    except Exception:
+        pass
+
+    if not failures:
+        _ing.job_finish("completed")
+    else:
+        done = sum(1 for s in _ing.job_snapshot()["steps"] if s["status"] == "ok")
+        _ing.job_finish("partial" if done else "failed", error=" | ".join(failures)[:600])
+    logger.info("Ingestion run %s finished (%d step failure(s))", run_id, len(failures))
+
+
+@app.get("/api/finops/ingestion/inventory", tags=["FinOps Ingestion"])
+async def ingestion_inventory(subscriptions: bool = True, refresh: bool = False):
+    """Everything currently persisted: per dataset, rows, date coverage, freshness,
+    owning subscription, and which modules read it."""
+    from services import finops_ingestion_service as _ing
+    # COUNT(*) across ~24 Azure SQL tables plus the per-subscription GROUP BYs costs
+    # ~13s, so serve a short cache rather than re-running it on every re-render.
+    ck = f"finops:ingestion:inventory:{int(bool(subscriptions))}"
+    if not refresh:
+        cached = cache_svc.get_json(ck)
+        if cached is not None:
+            cached["_cached"] = True
+            return cached
+    loop = asyncio.get_event_loop()
+    data = await loop.run_in_executor(_pool, lambda: _ing.get_inventory(subscriptions))
+    # When the next unattended collection lands — otherwise "empty" reads as "broken"
+    # when it is really "not collected yet".
+    try:
+        interval = int(settings_svc.get_value("auto_refresh_interval_hours", 6) or 0)
+        data["schedule"] = {
+            "auto_refresh_interval_hours": interval,
+            "next_refresh_at": (datetime.fromtimestamp(_next_refresh_ts, tz=timezone.utc).isoformat()
+                                if _next_refresh_ts else None),
+            "scan_running": bool(_is_refreshing),
+        }
+    except Exception:
+        pass
+    # How far back each grain is pulled, so "why does the chart start in June?" has an
+    # answer on the page instead of in the source.
+    try:
+        from services import finops_meter_service as _meter
+        from services import log_analytics_cost_service as _lasvc
+        w = finops_warehouse_svc
+        data["collection_windows"] = [
+            {"grain": "Daily cost per resource", "window": f"{w.DAILY_RESOURCE_DAYS} days",
+             "env": "FINOPS_DAILY_RESOURCE_DAYS",
+             "note": "Deliberately shorter — the per-resource grain is the one Azure throttles hardest."},
+            {"grain": "Daily cost per subscription", "window": f"{w.DAILY_RESOURCE_DAYS} days",
+             "env": "FINOPS_DAILY_RESOURCE_DAYS", "note": ""},
+            {"grain": "Daily cost by dimension", "window": f"{w.ANALYZE_DIMENSION_DAYS} days",
+             "env": "FINOPS_ANALYZE_DIMENSION_DAYS",
+             "note": "~13 months — Azure Cost Management's maximum history."},
+            {"grain": "Cost + usage by meter", "window": f"{_meter.METER_HISTORY_DAYS} days",
+             "env": "FINOPS_METER_HISTORY_DAYS", "note": "~13 months."},
+            {"grain": "Monthly cost by service", "window": f"{w.MONTHLY_SERVICE_MONTHS} months",
+             "env": "FINOPS_MONTHLY_SERVICE_MONTHS", "note": ""},
+            {"grain": "Monthly cost by tag", "window": f"{w.MONTHLY_TAG_MONTHS} months",
+             "env": "FINOPS_MONTHLY_TAG_MONTHS", "note": ""},
+            {"grain": "Log Analytics per-table cost", "window": f"{_lasvc.LA_HISTORY_DAYS} days",
+             "env": "—", "note": "Bounded by each workspace's own retention."},
+        ]
+    except Exception:
+        pass
+    cache_svc.set_json(ck, data, ttl_seconds=90)
+    return data
+
+
+@app.get("/api/finops/ingestion/status", tags=["FinOps Ingestion"])
+async def ingestion_status():
+    """Live progress of the force-ingest run: per-step state and rows written."""
+    from services import finops_ingestion_service as _ing
+    return _ing.job_snapshot()
+
+
+@app.post("/api/finops/ingestion/run", tags=["FinOps Ingestion"])
+async def ingestion_run(days: int = 30, mode: str = "full"):
+    """Force a full collection now — scan, cost warehouse, utilisation, Log Analytics
+    and recommendations — instead of waiting for the scheduler.
+
+    mode=full  : maximum history Azure will serve (~13 months). Tens of minutes.
+    mode=quick : top up the last few days only. Minutes.
+    """
+    global _ingestion_task
+    from services import finops_ingestion_service as _ing
+    if mode not in ("full", "quick"):
+        raise HTTPException(status_code=400, detail="mode must be 'full' or 'quick'")
+    if _ing.job_is_running():
+        return {"ok": False, "message": "A collection is already running.",
+                "job": _ing.job_snapshot()}
+    _ingestion_task = asyncio.create_task(_run_ingestion_async("manual", days, mode))
+    return {"ok": True, "mode": mode,
+            "message": ("Full collection started — maximum history, this takes tens of minutes."
+                        if mode == "full" else
+                        "Quick top-up started — recent days only."),
+            "job": _ing.job_snapshot()}
+
+
 @app.get("/api/finops/warehouse/dashboard", tags=["FinOps Warehouse"])
 async def warehouse_dashboard(
     subscription_id: Optional[str] = None,

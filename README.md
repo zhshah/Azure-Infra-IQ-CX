@@ -1,9 +1,9 @@
-> **Release branch:** [`FinOps-16-Aug`](https://github.com/zhshah/Azure-Infra-IQ-CX/tree/FinOps-16-Aug) - this is the current release.
+> **Release branch:** [`DBGUI-Sep-26`](https://github.com/zhshah/Azure-Infra-IQ-CX/tree/DBGUI-Sep-26) - this is the current release.
 >
 > Clone it with:
 >
 > ```
-> git clone -b FinOps-16-Aug https://github.com/zhshah/Azure-Infra-IQ-CX.git
+> git clone -b DBGUI-Sep-26 https://github.com/zhshah/Azure-Infra-IQ-CX.git
 > ```
 >
 > This README has two parts:
@@ -213,7 +213,7 @@ OpenAI + model, optional SQL/Redis, the Container App with a Managed Identity, a
 ### Step 1 — Clone
 
 ```bash
-git clone -b FinOps-16-Aug https://github.com/zhshah/Azure-Infra-IQ-CX.git
+git clone -b DBGUI-Sep-26 https://github.com/zhshah/Azure-Infra-IQ-CX.git
 cd Azure-Infra-IQ-CX
 ```
 
@@ -608,19 +608,19 @@ Each command should print a version number. If any of them says "not recognised"
 
 ## Step 2 - Download the tool
 
-**Branch to use:** [`FinOps-16-Aug`](https://github.com/zhshah/Azure-Infra-IQ-CX/tree/FinOps-16-Aug) — open that link to browse the code in your browser.
+**Branch to use:** [`DBGUI-Sep-26`](https://github.com/zhshah/Azure-Infra-IQ-CX/tree/DBGUI-Sep-26) — open that link to browse the code in your browser.
 
 To download it, open Command Prompt and run:
 
 ```bat
-git clone -b FinOps-16-Aug https://github.com/zhshah/Azure-Infra-IQ-CX.git
+git clone -b DBGUI-Sep-26 https://github.com/zhshah/Azure-Infra-IQ-CX.git
 cd Azure-Infra-IQ-CX
 install.bat
 ```
 
 `install.bat` sets everything up automatically. It creates a Python environment, installs all packages, and builds the frontend. This takes 2-3 minutes and only needs to be run once.
 
-> **Note:** `-b FinOps-16-Aug` is what selects the branch. Do not paste the browser address ending in `/tree/FinOps-16-Aug` into `git clone`; that is a web page address and git will report "repository not found". Omitting `-b` gives you the default branch, which does not include the latest FinOps modules.
+> **Note:** `-b DBGUI-Sep-26` is what selects the branch. Do not paste the browser address ending in `/tree/DBGUI-Sep-26` into `git clone`; that is a web page address and git will report "repository not found". Omitting `-b` gives you the default branch, which does not include the latest FinOps modules.
 
 ---
 

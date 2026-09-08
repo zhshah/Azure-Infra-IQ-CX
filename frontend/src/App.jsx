@@ -68,6 +68,7 @@ const NAV_SECTIONS = [
     { key: 'finops-log-analytics', label: 'Sentinel & Log Analytics', icon: '/icons/security/10248-icon-service-Azure-Sentinel.svg' },
     { key: 'finops-anomalies', label: 'Anomaly Intelligence', icon: '/icons/ai + machine learning/00814-icon-service-Anomaly-Detector.svg' },
     { key: 'finops-studio',   label: 'Cost Studio',      icon: '/icons/other/01757-icon-service-Dashboard-Hub.svg' },
+    { key: 'finops-ingestion', label: 'Data Ingestion',  icon: '/icons/databases/00036-icon-service-SQL-Data-Warehouses.svg' },
     { key: 'finops-exec',     label: 'Executive Report', icon: '/icons/management + governance/00004-icon-service-Cost-Management-and-Billing.svg' },
   ]},
   // Reporting spans every module, so it sits at the top level rather than inside FinOps.
@@ -442,6 +443,7 @@ import UpdateManagementView   from './components/updates/UpdateManagementView'
 // ── FinOps Module ─────────────────────────────────────────────────────────────
 import FinOpsOverview    from './finops/FinOpsOverview'
 import CostStudio        from './finops/CostStudio'
+import DataIngestion     from './finops/DataIngestion'
 import CostPulse         from './finops/CostPulse'
 import UnitEconomics     from './finops/UnitEconomics'
 import RecommendationStudio from './finops/RecommendationStudio'
@@ -2442,6 +2444,7 @@ function AppInner() {
         {view === 'finops-log-analytics' && <LogAnalyticsCost />}
         {view === 'finops-cost-lens' && <CostLens />}
         {view === 'finops-studio' && <CostStudio />}
+        {view === 'finops-ingestion' && <DataIngestion />}
         {view === 'finops-pulse' && <CostPulse />}
         {view === 'finops' && <FinOpsDashboard />}
         {view === 'cost-explorer' && <AnalyzeHub />}

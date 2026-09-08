@@ -122,6 +122,11 @@ _ANALYZE_DIMS = {
     "meter_category": "MeterCategory",
     "location":       "ResourceLocation",
 }
+# Fetch every dimension in one grouped query and fan it out locally, instead of one
+# query per dimension. Cuts this grain from 10 Cost Management calls per subscription
+# to 2. Set FINOPS_DIMENSION_COMBINED=0 to revert to one query per dimension.
+DIMENSION_COMBINED = os.getenv("FINOPS_DIMENSION_COMBINED", "1").strip().lower() \
+    not in ("0", "false", "no", "off")
 
 
 def _norm_date(v: Any) -> str:
@@ -185,6 +190,60 @@ def classify_collection_error(message: Any) -> str:
     return "error"
 
 
+# The ETL spends tens of minutes inside one call, so a caller (the ingestion job) can
+# register a sink here to surface which subscription and grain is in flight. Optional:
+# the scheduler runs with no callback at all.
+_progress_cb = None
+
+
+def set_progress_callback(cb) -> None:
+    global _progress_cb
+    _progress_cb = cb
+
+
+def _progress(message: str) -> None:
+    logger.info("ETL: %s", message)
+    if _progress_cb:
+        try:
+            _progress_cb(message)
+        except Exception:
+            pass
+
+
+def _executemany_upsert(sql: str, batch: List[tuple], label: str) -> int:
+    """One network round-trip per batch instead of one per row.
+
+    Azure SQL sits behind a private endpoint, so every con.execute() costs a full
+    round-trip. The dimension grain alone writes ~34k rows per run — row-by-row that
+    is ~25 minutes of pure latency, which is what made a collection look hung.
+    """
+    if not batch:
+        return 0
+    try:
+        with _conn() as con:
+            cur = con.cursor()
+            try:
+                cur.fast_executemany = True   # pyodbc only
+            except AttributeError:
+                pass
+            cur.executemany(sql, batch)
+        return len(batch)
+    except Exception as e:
+        logger.warning("ETL: %s batch upsert failed (%s) — retrying row by row", label, e)
+        written = 0
+        try:
+            with _conn() as con:
+                for params in batch:
+                    try:
+                        con.execute(sql, params)
+                        written += 1
+                    except Exception:
+                        pass
+        except Exception as inner:
+            logger.error("ETL: %s row-by-row fallback failed: %s", label, inner)
+        return written
+
+
 def probe_credential() -> Tuple[bool, str]:
     """Can we get an ARM token at all? Cheap, and it turns the most common cause of an
     empty warehouse into a named, actionable failure instead of a silent zero."""
@@ -244,6 +303,55 @@ def _finish_etl_run(run_id: str, counters: dict, error: Optional[str] = None,
 
 # ── ETL step: daily dimensional costs (warehouse-backed Analyze) ────────────────
 
+def _fan_out_dimension_rows(norm_rows: List[Dict[str, Any]],
+                            dim_items: List[Tuple[str, str]],
+                            sub_id: str, ct_label: str, run_id: str) -> List[tuple]:
+    """Re-aggregate one multi-dimension cost result into per-dimension rows.
+
+    Grouping by several dimensions at once returns a *refinement* of the same cost
+    partition, so summing those rows back up per dimension reproduces exactly what a
+    single-dimension query would have returned — at one query instead of N."""
+    agg: Dict[Tuple[str, str, str], float] = {}
+    for row in norm_rows:
+        sd = _norm_date(row.get("date", ""))
+        if not sd:
+            continue
+        dims = row.get("dimensions", {}) or {}
+        cost = float(row.get("cost_usd", 0) or 0)
+        for dim_key, az_dim in dim_items:
+            dv = str(dims.get(az_dim, "") or "") or "(none)"
+            key = (sd, dim_key, dv)
+            agg[key] = agg.get(key, 0.0) + cost
+
+    # Self-check: every dimension is a complete partition of the same spend, so the
+    # grand total must agree across all of them. A mismatch means the API dropped or
+    # duplicated rows for one dimension — surface it rather than silently storing it.
+    totals: Dict[str, float] = {}
+    for (_sd, dim_key, _dv), cost in agg.items():
+        totals[dim_key] = totals.get(dim_key, 0.0) + cost
+    if len(totals) > 1:
+        hi, lo = max(totals.values()), min(totals.values())
+        if hi > 0 and (hi - lo) / hi > 0.005:  # >0.5% spread
+            logger.warning(
+                "ETL analyze (%s/%s): dimension totals disagree by %.2f%% — %s",
+                sub_id[:8], ct_label, (hi - lo) / hi * 100.0,
+                {k: round(v, 2) for k, v in totals.items()})
+
+    return [
+        (hashlib.sha256(f"{sd}|{sub_id}|{dim_key}|{dv}|{ct_label}".encode("utf-8")).hexdigest(),
+         sd, sub_id, dim_key, dv, ct_label, cost, "USD", run_id)
+        for (sd, dim_key, dv), cost in agg.items()
+    ]
+
+
+def _write_dimension_batch(sql: str, batch: List[tuple], label: str) -> int:
+    """Chunked upsert of fanned-out dimension rows."""
+    written = 0
+    for i in range(0, len(batch), 500):
+        written += _executemany_upsert(sql, batch[i:i + 500], label)
+    return written
+
+
 def _collect_daily_dimension_costs(sub_id: str, today: date, run_id: str,
                                    days: int = ANALYZE_DIMENSION_DAYS,
                                    cost_types: Tuple[str, ...] = ANALYZE_COST_TYPES,
@@ -251,7 +359,13 @@ def _collect_daily_dimension_costs(sub_id: str, today: date, run_id: str,
     """Daily cost grouped by RG / service / meter / location for actual + amortized,
     upserted into finops_daily_dimension_costs. Non-throttled dimensions, so this
     populates reliably where the per-resource grain cannot. `dimensions` limits which
-    dimension keys are collected (default all) — used to retry/gap-fill a lagging one."""
+    dimension keys are collected (default all) — used to retry/gap-fill a lagging one.
+
+    By default all dimensions are fetched in ONE query per cost type and fanned out
+    locally (see _fan_out_dimension_rows). On a rate-limited tenant the query count —
+    not the window size — is what makes this step slow, so collapsing 5 queries into 1
+    is the difference between minutes and an hour. Set FINOPS_DIMENSION_COMBINED=0 to
+    fall back to one query per dimension."""
     from_date = today - timedelta(days=days - 1)
     scope = f"/subscriptions/{sub_id}"
     cols = ["id", "snapshot_date", "subscription_id", "dimension", "dim_value",
@@ -260,8 +374,26 @@ def _collect_daily_dimension_costs(sub_id: str, today: date, run_id: str,
                               [c for c in cols if c != "id"])
     dim_items = [(k, v) for k, v in _ANALYZE_DIMS.items() if not dimensions or k in dimensions]
     total = 0
+
     for ct in cost_types:
         ct_label = "amortized" if "amort" in ct.lower() else "actual"
+
+        if DIMENSION_COMBINED and len(dim_items) > 1:
+            az_dims = [az for _k, az in dim_items]
+            try:
+                rows = query_cost(scope=scope, from_date=from_date, to_date=today,
+                                  granularity="Daily", group_by=az_dims,
+                                  cost_type=ct, use_cache=False)
+                norm = normalise_cost_rows(rows, az_dims)
+                batch = _fan_out_dimension_rows(norm, dim_items, sub_id, ct_label, run_id)
+                total += _write_dimension_batch(sql, batch, f"dimension x{len(dim_items)}")
+                time.sleep(0.25)
+                continue  # combined path succeeded — skip the per-dimension loop
+            except Exception as e:
+                logger.warning(
+                    "ETL analyze combined (%s/%s) failed, falling back to per-dimension: %s",
+                    sub_id[:8], ct, e)
+
         for dim_key, az_dim in dim_items:
             try:
                 rows = query_cost(scope=scope, from_date=from_date, to_date=today,
@@ -273,19 +405,8 @@ def _collect_daily_dimension_costs(sub_id: str, today: date, run_id: str,
             if not rows:
                 continue
             norm = normalise_cost_rows(rows, [az_dim])
-            try:
-                with _conn() as con:
-                    for row in norm:
-                        sd = _norm_date(row.get("date", ""))
-                        if not sd:
-                            continue
-                        dv = str((row.get("dimensions", {}) or {}).get(az_dim, "") or "") or "(none)"
-                        cost = float(row.get("cost_usd", 0) or 0)
-                        rid = hashlib.sha256(f"{sd}|{sub_id}|{dim_key}|{dv}|{ct_label}".encode("utf-8")).hexdigest()
-                        con.execute(sql, (rid, sd, sub_id, dim_key, dv, ct_label, cost, "USD", run_id))
-                        total += 1
-            except Exception as e:
-                logger.error("ETL: dimension upsert failed (%s/%s): %s", dim_key, ct, e)
+            batch = _fan_out_dimension_rows(norm, [(dim_key, az_dim)], sub_id, ct_label, run_id)
+            total += _write_dimension_batch(sql, batch, f"dimension {dim_key}")
             time.sleep(0.25)  # gentle pacing to stay under Cost Management limits
     return total
 
@@ -505,6 +626,11 @@ def run_full_etl(
 
     run_id = _start_etl_run(triggered_by)
     logger.info("ETL run %s started for %d subscriptions", run_id, len(subscription_ids))
+    try:
+        from services.finops_data_service import reset_throttle_stats
+        reset_throttle_stats()
+    except Exception:
+        pass
 
     # Fail fast and loudly on a dead credential rather than writing a run that looks
     # successful but collected nothing.
@@ -540,27 +666,37 @@ def run_full_etl(
 
         for idx, sub_id in enumerate(subscription_ids, 1):
             logger.info("ETL: processing subscription %d/%d: %s", idx, len(subscription_ids), sub_id[:8] + "…")
+            tag = f"subscription {idx}/{len(subscription_ids)} ({sub_id[:8]}…)"
             try:
                 # a) Daily resource costs
+                _progress(f"{tag} · daily cost per resource ({daily_days}d)")
                 n = _collect_daily_resource_costs(sub_id, today, run_id, days=daily_days)
                 counters["resource_costs"] += n
                 logger.info("ETL: %s → %d resource cost rows", sub_id[:8], n)
 
                 # b) Daily subscription rollup
+                _progress(f"{tag} · daily cost per subscription ({daily_days}d)")
                 n = _collect_daily_subscription_costs(sub_id, today, run_id, days=daily_days)
                 counters["sub_costs"] += n
 
                 # c) Monthly service breakdown
+                _progress(f"{tag} · monthly cost by service ({svc_months}mo)")
                 n = _collect_monthly_service_costs(sub_id, today, run_id, months=svc_months)
                 counters["service_costs"] += n
 
-                # d) Monthly tag breakdown
-                n = _collect_monthly_tag_costs(sub_id, today, run_id, months=tag_months)
+                # d) Monthly tag breakdown. Quick mode reuses the tag keys this
+                #    subscription is known to use; a full run re-probes all of them.
+                tk = _productive_tag_keys(sub_id) if initial else None
+                _progress(f"{tag} · monthly cost by tag ({tag_months}mo, "
+                          f"{len(tk or _TAG_KEYS)} key(s))")
+                n = _collect_monthly_tag_costs(sub_id, today, run_id,
+                                               months=tag_months, tag_keys=tk)
                 counters["tag_costs"] += n
 
                 # e) Daily dimensional costs (warehouse-backed Analyze — RG/service/meter/location, actual+amortized)
                 try:
                     dim_days = ANALYZE_DIMENSION_DAYS_INITIAL if initial else ANALYZE_DIMENSION_DAYS
+                    _progress(f"{tag} · daily cost by dimension ({dim_days}d) — the long one")
                     n = _collect_daily_dimension_costs(sub_id, today, run_id, days=dim_days)
                     counters["service_costs"] += n
                 except Exception as _de:
@@ -571,6 +707,7 @@ def run_full_etl(
                 try:
                     from services import finops_meter_service as _meter
                     m_days = _meter.METER_HISTORY_DAYS_INITIAL if initial else _meter.METER_HISTORY_DAYS
+                    _progress(f"{tag} · cost + usage by meter ({m_days}d)")
                     n = _meter.collect_meter_costs(sub_id, today, run_id, days=m_days)
                     counters["meter_costs"] = counters.get("meter_costs", 0) + n
                 except Exception as _me:
@@ -585,6 +722,7 @@ def run_full_etl(
                 # Continue with next subscription — partial data is better than none
 
         # e) Anomaly detection runs across all freshly-loaded daily data
+        _progress("detecting cost anomalies")
         n = _detect_anomalies(today, run_id)
         counters["anomalies"] = n
         logger.info("ETL: %d anomalies detected", n)
@@ -618,9 +756,11 @@ def run_full_etl(
             logger.warning("ETL: management group rollup failed: %s", _mge)
 
         # i) Budgets, Sentinel/LA per-table cost, utilisation + storage history.
+        _progress("budgets, utilisation and storage history")
         counters.update(_collect_auxiliary_warehouses(subscription_ids, run_id))
 
         # f) Purge old data beyond retention window
+        _progress("purging data beyond the retention window")
         _purge_old_data(today)
         try:
             from services import finops_meter_service as _meter
@@ -643,6 +783,19 @@ def run_full_etl(
 
         _finish_etl_run(run_id, counters, error=_err_msg, status=_status)
         logger.info("ETL run %s %s: %s", run_id, _status, counters)
+        # A query that exhausted its retries left a permanent hole — say so instead of
+        # reporting a clean "completed" over incomplete data.
+        try:
+            from services.finops_data_service import throttle_stats
+            ts = throttle_stats()
+            counters["cost_queries"] = ts.get("queries", 0)
+            counters["throttled_queries"] = ts.get("throttled_queries", 0)
+            counters["abandoned_queries"] = ts.get("gave_up", 0)
+            if ts.get("gave_up"):
+                logger.warning("ETL run %s: %d cost quer(ies) abandoned after sustained 429 "
+                               "— warehouse has gaps", run_id, ts["gave_up"])
+        except Exception:
+            pass
         return {"status": _status, "run_id": run_id, "cause": _cause, **counters}
 
     except Exception as e:
@@ -779,18 +932,15 @@ def _collect_daily_subscription_costs(sub_id: str, today: date, run_id: str,
     update_cols = [c for c in cols if c not in pk_cols]
     sql = upsert_conflict_sql("finops_daily_subscription_costs", cols, pk_cols, update_cols)
 
-    try:
-        with _conn() as con:
-            for row in norm:
-                snapshot_date = str(row.get("date", ""))[:10]
-                if not snapshot_date:
-                    continue
-                cost = float(row.get("cost_usd", 0) or 0)
-                sub_name = row.get("dimensions", {}).get("SubscriptionId", sub_id)
-                con.execute(sql, (snapshot_date, sub_id, sub_name, cost, "USD", 0, run_id))
-                inserted += 1
-    except Exception as e:
-        logger.error("ETL: subscription rollup upsert failed: %s", e)
+    batch: List[tuple] = []
+    for row in norm:
+        snapshot_date = str(row.get("date", ""))[:10]
+        if not snapshot_date:
+            continue
+        cost = float(row.get("cost_usd", 0) or 0)
+        sub_name = row.get("dimensions", {}).get("SubscriptionId", sub_id)
+        batch.append((snapshot_date, sub_id, sub_name, cost, "USD", 0, run_id))
+    inserted = _executemany_upsert(sql, batch, "subscription rollup")
 
     return inserted
 
@@ -827,32 +977,54 @@ def _collect_monthly_service_costs(sub_id: str, today: date, run_id: str,
     update_cols = [c for c in cols if c not in pk_cols]
     sql = upsert_conflict_sql("finops_monthly_service_costs", cols, pk_cols, update_cols)
 
-    try:
-        with _conn() as con:
-            for row in norm:
-                billing_month = str(row.get("date", ""))[:7]  # "YYYY-MM"
-                if not billing_month:
-                    continue
-                dims = row.get("dimensions", {})
-                cost = float(row.get("cost_usd", 0) or 0)
-                con.execute(sql, (
-                    billing_month, sub_id,
-                    dims.get("ServiceFamily", ""),
-                    dims.get("ServiceName", ""),
-                    dims.get("MeterCategory", ""),
-                    cost, "USD", 0, run_id,
-                ))
-                inserted += 1
-    except Exception as e:
-        logger.error("ETL: service breakdown upsert failed: %s", e)
+    batch: List[tuple] = []
+    for row in norm:
+        billing_month = str(row.get("date", ""))[:7]  # "YYYY-MM"
+        if not billing_month:
+            continue
+        dims = row.get("dimensions", {})
+        cost = float(row.get("cost_usd", 0) or 0)
+        batch.append((
+            billing_month, sub_id,
+            dims.get("ServiceFamily", ""),
+            dims.get("ServiceName", ""),
+            dims.get("MeterCategory", ""),
+            cost, "USD", 0, run_id,
+        ))
+    inserted = _executemany_upsert(sql, batch, "service breakdown")
 
     return inserted
 
 
 # ── ETL step: monthly tag breakdown ──────────────────────────────────────────
 
+_TAG_KEYS = ["Environment", "BusinessUnit", "Project", "Application", "CostCenter"]
+
+
+def _productive_tag_keys(sub_id: str) -> List[str]:
+    """Tag keys that have ever returned cost for this subscription.
+
+    Azure needs a separate query per tag key and a 13-month one costs ~85s, so probing
+    all five is ~7 minutes per subscription. Most estates use one or two keys, and the
+    rest return nothing — measured at 425s for 70 rows. Quick mode reuses what the
+    warehouse already learned; full mode still probes every key.
+    """
+    try:
+        with _conn() as con:
+            rows = con.execute(
+                "SELECT DISTINCT tag_key FROM finops_monthly_tag_costs WHERE subscription_id = ?",
+                (sub_id,),
+            ).fetchall()
+        known = {str(r[0]) for r in rows if r and r[0]}
+    except Exception:
+        return _TAG_KEYS
+    pruned = [k for k in _TAG_KEYS if k in known]
+    return pruned or _TAG_KEYS
+
+
 def _collect_monthly_tag_costs(sub_id: str, today: date, run_id: str,
-                               months: int = MONTHLY_TAG_MONTHS) -> int:
+                               months: int = MONTHLY_TAG_MONTHS,
+                               tag_keys: Optional[List[str]] = None) -> int:
     from_date = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
     for _ in range(months - 1):
         from_date = (from_date - timedelta(days=1)).replace(day=1)
@@ -865,7 +1037,7 @@ def _collect_monthly_tag_costs(sub_id: str, today: date, run_id: str,
     update_cols = [c for c in cols if c not in pk_cols]
     sql = upsert_conflict_sql("finops_monthly_tag_costs", cols, pk_cols, update_cols)
 
-    for tag_key in ["Environment", "BusinessUnit", "Project", "Application", "CostCenter"]:
+    for tag_key in (tag_keys or _TAG_KEYS):
         try:
             rows = query_cost(
                 scope=scope,
@@ -881,15 +1053,15 @@ def _collect_monthly_tag_costs(sub_id: str, today: date, run_id: str,
 
             norm = normalise_cost_rows(rows, [f"TagKey:{tag_key}"])
 
-            with _conn() as con:
-                for row in norm:
-                    billing_month = str(row.get("date", ""))[:7]
-                    if not billing_month:
-                        continue
-                    tag_val = row.get("dimensions", {}).get(f"TagKey:{tag_key}", "") or "untagged"
-                    cost = float(row.get("cost_usd", 0) or 0)
-                    con.execute(sql, (billing_month, sub_id, tag_key, tag_val, cost, "USD", 0, run_id))
-                    inserted += 1
+            batch: List[tuple] = []
+            for row in norm:
+                billing_month = str(row.get("date", ""))[:7]
+                if not billing_month:
+                    continue
+                tag_val = row.get("dimensions", {}).get(f"TagKey:{tag_key}", "") or "untagged"
+                cost = float(row.get("cost_usd", 0) or 0)
+                batch.append((billing_month, sub_id, tag_key, tag_val, cost, "USD", 0, run_id))
+            inserted += _executemany_upsert(sql, batch, f"tag {tag_key}")
 
             time.sleep(1)  # brief pause between tag queries
 
