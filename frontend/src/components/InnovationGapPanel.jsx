@@ -1,5 +1,4 @@
 import React, { useState, useMemo } from "react";
-import { asText } from '../utils/safeText';
 
 const IMPACT_COLOR = { High: "#f97316", Medium: "#eab308", Low: "#22c55e" };
 const EFFORT_COLOR = { Low: "#22c55e", Medium: "#eab308", High: "#f97316" };
@@ -81,7 +80,7 @@ function GapCard({ gap }) {
             </span>
             {gap.status === "partially_adopted" && (
               <span style={{
-                background: "var(--c-1c1a05)", color: "var(--c-fde68a)",
+                background: "var(--c-1c1a05)", color: "#fde68a",
                 fontSize: 9, fontWeight: 700, padding: "2px 7px",
                 borderRadius: 20, border: "1px solid #ca8a0440",
               }}>
@@ -102,7 +101,7 @@ function GapCard({ gap }) {
                 background: "var(--c-0c1a2e)", color: 'var(--c-38bdf8)', fontSize: 10,
                 padding: "2px 8px", borderRadius: 6, border: "1px solid #1e40af40",
               }}>
-                {asText(svc)}
+                {svc}
               </span>
             ))}
             {gap.azure_services.length > 4 && (

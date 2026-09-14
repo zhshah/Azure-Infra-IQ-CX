@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Upload, Download, Server, Database, Globe, Shield, Brain, RefreshCw, ChevronRight, AlertTriangle, CheckCircle, Trash2, FileText, Copy, Settings, BarChart3, ArrowRight, Search, Wifi, Play, Square, Monitor, Clock, Calendar, Save, Power } from 'lucide-react'
 import { api } from '../api/client'
-import { asText } from '../utils/safeText';
 
 /* ── small helpers ─────────────────────────────────────────────────────────── */
 const pill = (bg, text, label) => (
@@ -842,7 +841,7 @@ function UploadTab({ onUploaded }) {
             <div style={{ marginTop: 12 }}>
               {result.warnings.map((w, i) => (
                 <div key={i} style={{ color: 'var(--c-fbbf24)', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <AlertTriangle size={12} /> {asText(w)}
+                  <AlertTriangle size={12} /> {w}
                 </div>
               ))}
             </div>
@@ -850,7 +849,7 @@ function UploadTab({ onUploaded }) {
           {result.errors?.length > 0 && (
             <div style={{ marginTop: 8 }}>
               {result.errors.map((e, i) => (
-                <div key={i} style={{ color: 'var(--c-f87171)', fontSize: 11 }}>❌ {asText(e)}</div>
+                <div key={i} style={{ color: 'var(--c-f87171)', fontSize: 11 }}>❌ {e}</div>
               ))}
             </div>
           )}
@@ -2051,7 +2050,7 @@ function ServerDetail({ server: s, onBack }) {
             {s.server_roles_detected?.length > 0 && <div style={{ marginBottom: 8 }}>
               <div style={{ color: 'var(--c-9ca3af)', fontSize: 11, marginBottom: 4 }}>Detected Roles:</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                {s.server_roles_detected.map((r, i) => <span key={i} style={{ background: 'var(--c-312e81)', border: '1px solid #4338ca', borderRadius: 6, padding: '3px 10px', color: 'var(--c-a78bfa)', fontSize: 11 }}>{asText(r)}</span>)}
+                {s.server_roles_detected.map((r, i) => <span key={i} style={{ background: 'var(--c-312e81)', border: '1px solid #4338ca', borderRadius: 6, padding: '3px 10px', color: 'var(--c-a78bfa)', fontSize: 11 }}>{r}</span>)}
               </div>
             </div>}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>

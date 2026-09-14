@@ -466,8 +466,23 @@ export default function DataIngestion() {
               const max = inv.by_subscription[0].rows || 1
               return (
                 <div key={s.subscription_id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontFamily: 'monospace', fontSize: 10.5, color: 'var(--c-cbd5e1, #cbd5e1)', width: 300, flexShrink: 0 }}>
-                    {s.subscription_id}
+                  <span style={{ width: 300, flexShrink: 0, overflow: 'hidden' }} title={s.subscription_id}>
+                    <span style={{
+                      display: 'block', fontSize: 11.5, fontWeight: 600,
+                      color: 'var(--c-f1f5f9, #f1f5f9)', whiteSpace: 'nowrap',
+                      overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}>
+                      {s.subscription_name || s.subscription_id}
+                    </span>
+                    {s.subscription_name && (
+                      <span style={{
+                        display: 'block', fontFamily: 'monospace', fontSize: 9.5,
+                        color: 'var(--c-64748b, #64748b)', whiteSpace: 'nowrap',
+                        overflow: 'hidden', textOverflow: 'ellipsis',
+                      }}>
+                        {s.subscription_id}
+                      </span>
+                    )}
                   </span>
                   <div style={{ flex: 1, height: 8, background: 'var(--c-1e293b, #1e293b)', borderRadius: 999, overflow: 'hidden' }}>
                     <div style={{ width: `${(s.rows / max) * 100}%`, height: '100%', background: '#3b82f6', borderRadius: 999 }} />
@@ -573,11 +588,13 @@ export default function DataIngestion() {
                             <div style={{ fontSize: 10.5, color: 'var(--c-64748b, #64748b)', marginBottom: 4 }}>Rows by subscription</div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                               {d.by_subscription.map(s => (
-                                <span key={s.subscription_id} style={{
+                                <span key={s.subscription_id} title={s.subscription_id} style={{
                                   background: 'var(--c-1e293b, #1e293b)', border: '1px solid var(--c-334155, #334155)',
                                   borderRadius: 6, padding: '3px 8px', fontSize: 10.5, color: 'var(--c-cbd5e1, #cbd5e1)',
                                 }}>
-                                  <span style={{ fontFamily: 'monospace' }}>{s.subscription_id}</span>
+                                  <span style={s.subscription_name ? undefined : { fontFamily: 'monospace' }}>
+                                    {s.subscription_name || s.subscription_id}
+                                  </span>
                                   {' '}<strong style={{ color: '#22c55e' }}>{fmtNum(s.rows)}</strong>
                                 </span>
                               ))}

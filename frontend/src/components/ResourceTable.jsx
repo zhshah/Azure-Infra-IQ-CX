@@ -643,7 +643,11 @@ export default function ResourceTable({ resources, externalFilter = null, onClea
 
   // Load tag schema + custom tags on mount
   useEffect(() => {
-    fetch('/api/tags/schema').then(r => r.json()).then(s => setTagSchema(s)).catch(() => {})
+    // A 401/500 here returns {"detail": ...}, and storing that object crashed the whole
+    // view on tagSchema.find(...). Keep the state an array whatever comes back.
+    fetch('/api/tags/schema').then(r => r.json())
+      .then(s => setTagSchema(Array.isArray(s) ? s : (Array.isArray(s?.schema) ? s.schema : [])))
+      .catch(() => {})
     fetch('/api/tags/all').then(r => r.json()).then(t => setCustomTagsMap(t || {})).catch(() => {})
     // BCDR Planning metadata — the central record set in BCDR ▸ Planning Phase 1.
     fetch('/api/bcdr/metadata').then(r => (r.ok ? r.json() : {})).then(m => setBcdrMetaMap(m || {})).catch(() => {})

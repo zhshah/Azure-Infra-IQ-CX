@@ -33,3 +33,4 @@ redis>=5.0.0
 python-multipart>=0.0.9
 azure-mgmt-consumption>=10.0.0
 azure-monitor-query>=1.2.0
+azure-storage-blob==12.23.1

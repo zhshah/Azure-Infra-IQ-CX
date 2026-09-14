@@ -3560,6 +3560,46 @@ async def _dashboard_snapshot_catchup() -> None:
         logger.warning("Dashboard snapshot startup catch-up failed: %s", exc)
 
 
+def _export_ingestion_owns_costs() -> bool:
+    """True when Cost Management exports are the configured source of cost data."""
+    try:
+        return bool(_FINOPS_EXPORT_INGESTION_AVAILABLE and finops_export_ingestion_svc.is_configured())
+    except Exception:
+        return False
+
+
+async def _finops_export_ingestion_scheduler() -> None:
+    """Load any new Cost Management export files into Azure SQL, then keep watching.
+
+    Azure republishes the open billing period as charges are restated, so this keeps
+    running rather than stopping once the tables are first populated. Each pass is
+    idempotent: files already loaded are skipped by their ledger entry.
+    """
+    interval = int(os.getenv("FINOPS_EXPORT_POLL_SECONDS", "1800") or 1800)
+    await asyncio.sleep(15)  # let the app finish starting up
+    settled = False
+    while True:
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                _pool, finops_export_ingestion_svc.ingest_available_exports
+            )
+            if result.get("processed") or result.get("failed"):
+                logger.info("Cost export loader: %s (loaded=%d failed=%d rows=%s)",
+                            result.get("status"), len(result.get("processed") or []),
+                            len(result.get("failed") or []), result.get("rows_written"))
+            if result.get("processed"):
+                # Fresh cost data landed, so the cached aggregates are now stale.
+                _fw_bump_version()
+                _clear_finops_derived_caches()
+            settled = settled or result.get("status") in ("completed", "disabled")
+        except Exception as exc:
+            logger.error("Cost export loader pass failed: %s", exc)
+        # On a new deployment the schema migrations and the first exports can still be
+        # running. Retry quickly until one pass succeeds, so the FinOps views fill in
+        # minutes rather than waiting out a full poll interval.
+        await asyncio.sleep(interval if settled else 60)
+
+
 async def _finops_warehouse_scheduler() -> None:
     """
     Background scheduler: run the FinOps Warehouse ETL at midnight UTC every night.
@@ -3655,6 +3695,13 @@ try:
 except Exception as _fwe:
     logger.warning("FinOps Warehouse module unavailable: %s", _fwe)
     _FINOPS_WAREHOUSE_AVAILABLE = False
+
+try:
+    import services.finops_export_ingestion_service as finops_export_ingestion_svc
+    _FINOPS_EXPORT_INGESTION_AVAILABLE = True
+except Exception as _fxe:
+    logger.warning("Cost export loader unavailable: %s", _fxe)
+    _FINOPS_EXPORT_INGESTION_AVAILABLE = False
 
 # Track in-progress warehouse ETL to prevent concurrent runs
 _warehouse_etl_task: Optional[asyncio.Task] = None
@@ -8164,24 +8211,43 @@ async def ingestion_inventory(subscriptions: bool = True, refresh: bool = False)
         from services import finops_meter_service as _meter
         from services import log_analytics_cost_service as _lasvc
         w = finops_warehouse_svc
-        data["collection_windows"] = [
-            {"grain": "Daily cost per resource", "window": f"{w.DAILY_RESOURCE_DAYS} days",
-             "env": "FINOPS_DAILY_RESOURCE_DAYS",
-             "note": "Deliberately shorter — the per-resource grain is the one Azure throttles hardest."},
-            {"grain": "Daily cost per subscription", "window": f"{w.DAILY_RESOURCE_DAYS} days",
-             "env": "FINOPS_DAILY_RESOURCE_DAYS", "note": ""},
-            {"grain": "Daily cost by dimension", "window": f"{w.ANALYZE_DIMENSION_DAYS} days",
-             "env": "FINOPS_ANALYZE_DIMENSION_DAYS",
-             "note": "~13 months — Azure Cost Management's maximum history."},
-            {"grain": "Cost + usage by meter", "window": f"{_meter.METER_HISTORY_DAYS} days",
-             "env": "FINOPS_METER_HISTORY_DAYS", "note": "~13 months."},
-            {"grain": "Monthly cost by service", "window": f"{w.MONTHLY_SERVICE_MONTHS} months",
-             "env": "FINOPS_MONTHLY_SERVICE_MONTHS", "note": ""},
-            {"grain": "Monthly cost by tag", "window": f"{w.MONTHLY_TAG_MONTHS} months",
-             "env": "FINOPS_MONTHLY_TAG_MONTHS", "note": ""},
-            {"grain": "Log Analytics per-table cost", "window": f"{_lasvc.LA_HISTORY_DAYS} days",
-             "env": "—", "note": "Bounded by each workspace's own retention."},
-        ]
+        if finops_warehouse_svc.exports_own_cost_data():
+            # Cost Management exports own every cost grain now, so the old per-grain
+            # query windows no longer describe what is on disk. Reporting them here
+            # contradicts the coverage dates shown directly above.
+            _months = int(os.getenv("FINOPS_EXPORT_HISTORY_MONTHS", "2") or 0)
+            _window = f"{_months} month{'s' if _months != 1 else ''} + current"
+            _note = ("Cost Management exports backfill this many closed months, then the "
+                     "open month is republished daily.")
+            data["collection_windows"] = [
+                {"grain": g, "window": _window,
+                 "env": "FINOPS_EXPORT_HISTORY_MONTHS", "note": _note}
+                for g in ("Daily cost per resource", "Daily cost per subscription",
+                          "Daily cost by dimension", "Cost + usage by meter",
+                          "Monthly cost by service", "Monthly cost by tag")
+            ] + [
+                {"grain": "Log Analytics per-table cost", "window": f"{_lasvc.LA_HISTORY_DAYS} days",
+                 "env": "—", "note": "Bounded by each workspace's own retention."},
+            ]
+        else:
+            data["collection_windows"] = [
+                {"grain": "Daily cost per resource", "window": f"{w.DAILY_RESOURCE_DAYS} days",
+                 "env": "FINOPS_DAILY_RESOURCE_DAYS",
+                 "note": "Deliberately shorter — the per-resource grain is the one Azure throttles hardest."},
+                {"grain": "Daily cost per subscription", "window": f"{w.DAILY_RESOURCE_DAYS} days",
+                 "env": "FINOPS_DAILY_RESOURCE_DAYS", "note": ""},
+                {"grain": "Daily cost by dimension", "window": f"{w.ANALYZE_DIMENSION_DAYS} days",
+                 "env": "FINOPS_ANALYZE_DIMENSION_DAYS",
+                 "note": "~13 months — Azure Cost Management's maximum history."},
+                {"grain": "Cost + usage by meter", "window": f"{_meter.METER_HISTORY_DAYS} days",
+                 "env": "FINOPS_METER_HISTORY_DAYS", "note": "~13 months."},
+                {"grain": "Monthly cost by service", "window": f"{w.MONTHLY_SERVICE_MONTHS} months",
+                 "env": "FINOPS_MONTHLY_SERVICE_MONTHS", "note": ""},
+                {"grain": "Monthly cost by tag", "window": f"{w.MONTHLY_TAG_MONTHS} months",
+                 "env": "FINOPS_MONTHLY_TAG_MONTHS", "note": ""},
+                {"grain": "Log Analytics per-table cost", "window": f"{_lasvc.LA_HISTORY_DAYS} days",
+                 "env": "—", "note": "Bounded by each workspace's own retention."},
+            ]
     except Exception:
         pass
     cache_svc.set_json(ck, data, ttl_seconds=90)
@@ -8247,6 +8313,30 @@ async def warehouse_dashboard(
         "etl_running": finops_warehouse_svc.is_etl_running(),
     }
     return data
+
+
+@app.get("/api/finops/exports/status", tags=["FinOps Warehouse"])
+async def finops_export_status():
+    """Cost-export loader health: which files loaded, and whether totals reconcile."""
+    if not _FINOPS_EXPORT_INGESTION_AVAILABLE:
+        return {"configured": False, "reason": "Cost export loader module unavailable"}
+    return await asyncio.get_running_loop().run_in_executor(
+        _pool, finops_export_ingestion_svc.get_ingestion_status
+    )
+
+
+@app.post("/api/finops/exports/ingest", tags=["FinOps Warehouse"])
+async def finops_export_ingest():
+    """Load any export files that have not been loaded yet."""
+    if not _FINOPS_EXPORT_INGESTION_AVAILABLE or not finops_export_ingestion_svc.is_configured():
+        raise HTTPException(status_code=503, detail="Cost export loader is not configured")
+    result = await asyncio.get_running_loop().run_in_executor(
+        _pool, finops_export_ingestion_svc.ingest_available_exports
+    )
+    if result.get("processed"):
+        _fw_bump_version()
+        _clear_finops_derived_caches()
+    return result
 
 
 @app.get("/api/finops/warehouse/resources", tags=["FinOps Warehouse"])
@@ -9113,13 +9203,27 @@ async def start_auto_refresh_scheduler() -> None:
     except Exception as _awe:
         logger.debug("Startup: could not schedule Arc warm: %s", _awe)
 
+    # ── Start the Cost Management export loader ───────────────────────────────
+    # Azure writes scheduled exports into ADLS Gen2; this loads them into Azure SQL.
+    # When it is configured it is the ONLY writer of cost data, so the query-API
+    # collector below is left idle rather than filling the same tables from a
+    # second source that can disagree with this one.
+    try:
+        if _FINOPS_EXPORT_INGESTION_AVAILABLE and finops_export_ingestion_svc.is_configured():
+            asyncio.create_task(_finops_export_ingestion_scheduler())
+            logger.info("Startup: Cost export loader registered (account=%s)",
+                        finops_export_ingestion_svc.ACCOUNT)
+    except Exception as _xis:
+        logger.warning("Startup: could not start the cost export loader: %s", _xis)
+
     # ── Start FinOps Warehouse nightly ETL scheduler ──────────────────────────
     # Downloads all Azure cost data into Azure SQL every night at midnight UTC.
     # On first startup, triggers an immediate run if the warehouse is empty.
     try:
         if _FINOPS_WAREHOUSE_AVAILABLE:
             asyncio.create_task(_finops_warehouse_scheduler())
-            logger.info("Startup: FinOps Warehouse ETL scheduler registered")
+            logger.info("Startup: FinOps Warehouse ETL scheduler registered (cost tables owned by exports: %s)",
+                        _export_ingestion_owns_costs())
         else:
             logger.warning("Startup: FinOps Warehouse scheduler skipped — module unavailable")
     except Exception as _wse:
@@ -9153,6 +9257,24 @@ async def start_auto_refresh_scheduler() -> None:
         logger.info("Startup: FinOps dashboard v2 schema migration applied")
     except Exception as _mig_err2:
         logger.warning("Startup: FinOps dashboard v2 migration skipped: %s", _mig_err2)
+
+    # ── Cost-export ingestion schema on startup ───────────────────────────────
+    # A fresh customer deployment has neither the ingestion ledger nor the resource
+    # tag column, and the export loader cannot run without them.
+    for _mig_file, _mig_label in (
+        ("007_cost_export_ingestion.py", "cost-export ingestion ledger"),
+        ("008_resource_tags.py", "per-resource tags"),
+    ):
+        try:
+            import importlib.util, os as _os
+            _mig_path3 = _os.path.join(_os.path.dirname(__file__), "migrations", _mig_file)
+            _spec3 = importlib.util.spec_from_file_location(_mig_file.replace(".", "_"), _mig_path3)
+            _mod3 = importlib.util.module_from_spec(_spec3)
+            _spec3.loader.exec_module(_mod3)
+            _mod3.run_migration()
+            logger.info("Startup: %s migration applied", _mig_label)
+        except Exception as _mig_err3:
+            logger.warning("Startup: %s migration skipped: %s", _mig_label, _mig_err3)
 
 
 

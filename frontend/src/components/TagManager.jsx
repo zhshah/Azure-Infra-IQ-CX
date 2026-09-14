@@ -227,10 +227,11 @@ export default function TagManager() {
         fetch('/api/tags/schema').then(r => r.json()),
         fetch('/api/tags/stats').then(r => r.json()),
       ])
-      setSchema(s)
+      const entries = Array.isArray(s) ? s : []
+      setSchema(entries)
       setStats(st)
       // Expand all categories by default
-      const cats = [...new Set(s.map(e => e.category))]
+      const cats = [...new Set(entries.map(e => e.category))]
       setExpandedCat(Object.fromEntries(cats.map(c => [c, true])))
     } catch (e) {
       setError(e.message)

@@ -1,7 +1,5 @@
 import React, { useState } from "react";
-import AIControlsBar, { AffectedResources, EMPTY_AI_CONTROLS, aiControlsQuery } from "./ai/AIAnalysisTools";
 import { Cloud, CloudSun, CloudHail, CloudFog, Landmark, BarChart3 } from "lucide-react";
-import { asText } from '../utils/safeText';
 
 const GRADE_COLOR = { A: "#22c55e", B: "#84cc16", C: "#eab308", D: "#f97316", F: "#ef4444" };
 
@@ -62,7 +60,7 @@ function DimensionBar({ dim }) {
       <div style={{ color: "var(--c-475569)", fontSize: 11, marginBottom: 4 }}>{dim.description}</div>
 
       {/* Gaps / Recs expandable */}
-      {((dim?.gaps || []).length > 0 || (dim?.recommendations || []).length > 0) && (
+      {(dim.gaps.length > 0 || dim.recommendations.length > 0) && (
         <>
           <button onClick={() => setOpen(!open)} style={{
             background: "none", border: "none", color: "var(--c-475569)",
@@ -72,21 +70,20 @@ function DimensionBar({ dim }) {
           </button>
           {open && (
             <div style={{ marginTop: 8, paddingLeft: 8, borderLeft: "2px solid var(--c-1e293b)" }}>
-              {(dim?.gaps || []).length > 0 && (
+              {dim.gaps.length > 0 && (
                 <div style={{ marginBottom: 6 }}>
-                  {(dim?.gaps || []).map((g, i) => (
+                  {dim.gaps.map((g, i) => (
                     <div key={i} style={{ color: "#f97316", fontSize: 11, marginBottom: 2, display: "flex", gap: 5 }}>
-                      <span>△</span><span>{asText(g)}</span>
+                      <span>△</span><span>{g}</span>
                     </div>
                   ))}
                 </div>
               )}
-              {(dim?.recommendations || []).map((r, i) => (
+              {dim.recommendations.map((r, i) => (
                 <div key={i} style={{ color: "var(--c-64748b)", fontSize: 11, marginBottom: 2, display: "flex", gap: 5 }}>
-                  <span style={{ color: "#22c55e" }}>→</span><span>{asText(r)}</span>
+                  <span style={{ color: "#22c55e" }}>→</span><span>{r}</span>
                 </div>
               ))}
-              <AffectedResources items={dim.affected_resources} count={dim.affected_count} />
             </div>
           )}
         </>
@@ -95,43 +92,10 @@ function DimensionBar({ dim }) {
   );
 }
 
-export default function CloudMaturityPanel({ cloudMaturity, resources = null }) {
-  const [controls, setControls] = useState(EMPTY_AI_CONTROLS);
-  const [scoped, setScoped]     = useState(null);   // scoped re-run result
-  const [busy, setBusy]         = useState(false);
-  const [err, setErr]           = useState(null);
+export default function CloudMaturityPanel({ cloudMaturity }) {
+  if (!cloudMaturity) return null;
 
-  const applyControls = async (next) => {
-    setControls(next);
-    const q = aiControlsQuery(next);
-    if (!q) { setScoped(null); setErr(null); return; }   // back to the estate-wide view
-    setBusy(true); setErr(null);
-    try {
-      const res = await fetch(`/api/ai/maturity?refresh=true${q}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const payload = await res.json();
-      // A failed analysis still returns HTTP 200 carrying {error, available:false}.
-      // Rendering that shape blanked the panel (no dimensions), so surface the message
-      // and keep the estate-wide assessment on screen instead.
-      if (!payload || payload.available === false || payload.error) {
-        throw new Error(payload?.error || 'the model returned no assessment for this scope');
-      }
-      if (!Array.isArray(payload.dimensions) || payload.dimensions.length === 0) {
-        throw new Error('no dimensions were returned for this scope');
-      }
-      setScoped(payload);
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const view = scoped || cloudMaturity;
-  if (!view) return null;
-
-  const { overall_score, overall_grade, overall_label, dimensions } = view;
-  const dims = Array.isArray(dimensions) ? dimensions : [];
+  const { overall_score, overall_grade, overall_label, dimensions } = cloudMaturity;
   const gradeColor  = GRADE_COLOR[overall_grade]  || "var(--c-64748b)";
   const labelColor  = LABEL_COLOR[overall_label]  || "var(--c-64748b)";
   const labelIcon   = LABEL_ICON[overall_label]   || Cloud;
@@ -183,35 +147,9 @@ export default function CloudMaturityPanel({ cloudMaturity, resources = null }) 
         </div>
       </div>
 
-      {/* AI controls — scope / context / filter / export */}
-      <AIControlsBar
-        title="Cloud Maturity Index"
-        report={view}
-        resources={resources}
-        value={controls}
-        onApply={applyControls}
-        busy={busy}
-      />
-      {scoped && (
-        <div style={{ fontSize: 11, color: "#93c5fd", marginBottom: 10 }}>
-          Showing a re-run scoped to your selection. Clear the chips above to return to the estate-wide assessment.
-        </div>
-      )}
-      {err && (
-        <div style={{ fontSize: 11, color: "#f87171", marginBottom: 10 }}>
-          Scoped analysis failed: {err}. Showing the estate-wide assessment.
-        </div>
-      )}
-
       {/* Dimension bars */}
       <div>
-        {dims.length > 0
-          ? dims.map((dim, i) => <DimensionBar key={i} dim={dim} />)
-          : (
-            <div style={{ color: "var(--c-64748b)", fontSize: 12, padding: "8px 0" }}>
-              No dimension breakdown available for this view.
-            </div>
-          )}
+        {dimensions.map((dim, i) => <DimensionBar key={i} dim={dim} />)}
       </div>
     </div>
   );

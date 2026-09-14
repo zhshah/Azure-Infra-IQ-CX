@@ -320,11 +320,12 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$AppPublicUrl = "",
 
-    # Bundle Linux (cp311) wheels in the package and SKIP the App Service remote build, so the
-    # deployment needs no outbound access to pypi.org at all. Used automatically as a fallback if
-    # the remote build fails. Requires Python 3 on the machine running this script.
-    [Parameter(Mandatory = $false)]
-    [switch]$OfflineDependencies
+    # Storage account that Azure Cost Management writes its daily cost exports to.
+    # The app reads those files and loads them into SQL; without it the FinOps views
+    # stay empty. Left blank, the script asks for a name.
+    [string]$CostExportStorageAccountName = "",
+
+    [string]$CostExportContainerName = "cost-exports"
 )
 
 # ============================================
@@ -563,6 +564,29 @@ if (-not $PSBoundParameters.ContainsKey('Location')) {
 }
 Write-Success "Location: $Location"
 
+# 3b) Storage account for the FinOps cost exports. Azure Cost Management writes the
+# daily cost files here and the app loads them into SQL, so this is what makes the
+# FinOps dashboards show data. Name rules: 3-24 chars, lowercase letters and digits.
+if ([string]::IsNullOrWhiteSpace($CostExportStorageAccountName)) {
+    Write-Host ""
+    Write-Host "  FinOps cost exports" -ForegroundColor White
+    Write-Host "    Azure Cost Management writes daily cost files to a storage account," -ForegroundColor Gray
+    Write-Host "    and the app loads them into SQL. This is what fills the FinOps views." -ForegroundColor Gray
+    # Derived from subscription + resource group with a stable hash so re-running the
+    # deployment offers the SAME name. String.GetHashCode() is randomised per process
+    # and would suggest a different account every run.
+    $defaultCostSaHash = [System.Security.Cryptography.SHA256]::HashData(
+        [Text.Encoding]::UTF8.GetBytes("$SubscriptionId/$ResourceGroupName"))
+    $defaultCostSa = 'iqcost' + (([BitConverter]::ToString($defaultCostSaHash) -replace '-', '').Substring(0, 14).ToLower())
+    $saInput = Read-Host "  Storage account name for cost exports [default: $defaultCostSa]"
+    $CostExportStorageAccountName = if ([string]::IsNullOrWhiteSpace($saInput)) { $defaultCostSa } else { $saInput.Trim().ToLower() }
+}
+$CostExportStorageAccountName = $CostExportStorageAccountName.ToLower()
+if ($CostExportStorageAccountName -notmatch '^[a-z0-9]{3,24}$') {
+    throw "Cost export storage account name '$CostExportStorageAccountName' is invalid - use 3-24 lowercase letters and digits only."
+}
+Write-Success "Cost export storage: $CostExportStorageAccountName (container '$CostExportContainerName')"
+
 # 3a) Azure OpenAI SOURCE — create a NEW resource, or reuse an EXISTING one (e.g. a PTU /
 # Provisioned deployment the customer already has in Sweden Central). Ask if not pre-supplied.
 if ([string]::IsNullOrWhiteSpace($OpenAIMode)) {
@@ -636,16 +660,11 @@ if ($explicitSubs) {
 } else {
     $ScanSubscriptionsEnv = "auto"   # backend discovers all subs the identity can read
     Write-Host "  Discovering accessible subscriptions (for RBAC grants)..." -ForegroundColor DarkGray
-    # Scope to the DEPLOYMENT tenant only. The local az profile can hold subscriptions from every
-    # tenant the operator has ever signed into, and an unfiltered list would try to grant roles on
-    # subscriptions in unrelated tenants (which fails, is slow, and is not ours to touch).
-    $deployTenantId = az account show --subscription $SubscriptionId --query tenantId -o tsv 2>$null
-    if ([string]::IsNullOrWhiteSpace($deployTenantId)) { $deployTenantId = $EntraTenantId }
-    $allSubs = az account list --query "[?state=='Enabled' && tenantId=='$deployTenantId'].id" -o tsv 2>$null
+    $allSubs = az account list --query "[?state=='Enabled'].id" -o tsv 2>$null
     $subList = @($allSubs -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if ($subList.Count -gt 0) {
         $SubscriptionIds = ($subList -join ',')
-        Write-Success "Found $($subList.Count) enabled subscription(s) in tenant $deployTenantId — granting identity Reader on each; app discovers them at runtime"
+        Write-Success "Found $($subList.Count) enabled subscription(s) — granting identity Reader on each; app discovers them at runtime"
     } else {
         $SubscriptionIds = $SubscriptionId
     }
@@ -920,66 +939,6 @@ if ($DeploymentMode -eq "Private") {
 }
 
 # ============================================
-# ============================================
-# PRIVATE DNS HELPERS
-# ============================================
-# A VNet can be linked to only ONE Private DNS zone per namespace. When several copies of the
-# same zone exist (common with a hub/connectivity subscription), the ONLY correct target is the
-# zone this VNet is ALREADY linked to. Registering the private endpoint's A record in any other
-# copy produces a record the app can never resolve, while the link call fails with
-# "cannot be linked to multiple zones with overlapping namespaces".
-function Resolve-PrivateDnsZoneRg {
-    param([string]$ZoneName, [string]$DnsSubscriptionId, [string]$VNetId, [string]$FallbackRg)
-
-    $raw = az network private-dns zone list --subscription $DnsSubscriptionId `
-        --query "[?name=='$ZoneName'].resourceGroup" -o tsv 2>$null
-    $rgs = @($raw -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-
-    foreach ($rg in $rgs) {
-        $linked = az network private-dns link vnet list --zone-name $ZoneName --resource-group $rg `
-            --subscription $DnsSubscriptionId --query "[].virtualNetwork.id" -o tsv 2>$null
-        if ($linked -and (@($linked -split "`n" | ForEach-Object { $_.Trim() }) -contains $VNetId)) {
-            return [pscustomobject]@{ ResourceGroup = $rg; Exists = $true; Linked = $true }
-        }
-    }
-    if ($rgs.Count -gt 0) { return [pscustomobject]@{ ResourceGroup = $rgs[0]; Exists = $true; Linked = $false } }
-    return [pscustomobject]@{ ResourceGroup = $FallbackRg; Exists = $false; Linked = $false }
-}
-
-# Safety net: the DNS zone group is what normally writes the A record, but it silently targets
-# whatever zone it was given. Verify the record actually exists in the zone the VNet resolves
-# against and create it from the private endpoint's real NIC IP if it doesn't.
-function Confirm-PrivateDnsARecord {
-    param(
-        [string]$RecordName, [string]$ZoneName, [string]$ZoneRg,
-        [string]$DnsSubscriptionId, [string]$PeName, [string]$PeResourceGroup
-    )
-    $have = az network private-dns record-set a show --name $RecordName --zone-name $ZoneName `
-        --resource-group $ZoneRg --subscription $DnsSubscriptionId --query "aRecords[0].ipv4Address" -o tsv 2>$null
-    if (-not [string]::IsNullOrWhiteSpace($have)) {
-        Write-Success "DNS A record OK: $RecordName.$ZoneName -> $have"
-        return
-    }
-    $nicId = az network private-endpoint show --name $PeName --resource-group $PeResourceGroup `
-        --query "networkInterfaces[0].id" -o tsv 2>$null
-    $peIp = if ($nicId) { az network nic show --ids $nicId --query "ipConfigurations[0].privateIPAddress" -o tsv 2>$null } else { $null }
-    if ([string]::IsNullOrWhiteSpace($peIp)) {
-        Write-Host "  WARNING: could not read the private endpoint IP for '$PeName' - add the A record manually." -ForegroundColor Yellow
-        return
-    }
-    Write-Info "A record missing in the VNet-linked zone - creating $RecordName -> $peIp ..."
-    az network private-dns record-set a create --name $RecordName --zone-name $ZoneName `
-        --resource-group $ZoneRg --subscription $DnsSubscriptionId --output none 2>$null
-    az network private-dns record-set a add-record --record-set-name $RecordName --zone-name $ZoneName `
-        --resource-group $ZoneRg --subscription $DnsSubscriptionId --ipv4-address $peIp --output none 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Success "DNS A record created: $RecordName.$ZoneName -> $peIp"
-    } else {
-        Write-Host "  WARNING: failed to create the A record for $RecordName.$ZoneName" -ForegroundColor Yellow
-    }
-}
-
-# ============================================
 # DISCOVER EXISTING PRIVATE DNS ZONES (PRIVATE MODE)
 # ============================================
 $dnsZoneOpenAIFound = $false
@@ -1212,7 +1171,6 @@ if ($OpenAIMode -eq "Existing") {
     $deployedModel   = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --deployment-name $OpenAIDeploymentName --query "properties.model.name" -o tsv 2>$null
     $deployedVersion = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --deployment-name $OpenAIDeploymentName --query "properties.model.version" -o tsv 2>$null
     $deployedSku     = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --deployment-name $OpenAIDeploymentName --query "sku.name" -o tsv 2>$null
-    $deployedCapacity = az cognitiveservices account deployment show --name $OpenAIResourceName --resource-group $oaiRg --subscription $oaiSub --deployment-name $OpenAIDeploymentName --query "sku.capacity" -o tsv 2>$null
     # Preliminary fail-fast: when we CAN read the resource (name-based mode) but the named deployment
     # is absent, stop BEFORE creating any infrastructure — the app would 404 at runtime. This script
     # does not create/alter deployments on an existing resource, so the customer must fix the name.
@@ -1377,30 +1335,6 @@ if ($deployedModel) {
     $modelDisplay = "(deployment name '$OpenAIDeploymentName')"
 }
 Write-Success "Model deployed: $modelDisplay  (deployment name: '$OpenAIDeploymentName')"
-
-# ── Size the app's AI workload to the deployment's REAL throughput ───────────────────
-# A small pay-as-you-go quota (e.g. GlobalStandard capacity 50 = 50K TPM) returns HTTP 429
-# on the large BCDR/assessment prompts. Retrying alone does NOT fix it: the dominant cost is
-# the PROMPT, so a 150-resource context can exceed the entire per-minute window on its own
-# and every retry fails the same way. Shrink the context first, then allow more patience.
-# Provisioned (PTU) capacity is dedicated, so it keeps the full-detail defaults.
-$aiCapacity = 0
-if ($deployedCapacity) { [int]::TryParse($deployedCapacity, [ref]$aiCapacity) | Out-Null }
-$isProvisioned = ($deployedSku -like "*Provisioned*")
-if ($isProvisioned) {
-    $aiMaxRetries = 3; $aiBackoff = 10; $aiMaxTokens = 16384; $aiCtxResources = 400; $aiEffort = "high"
-    $aiTuneNote = "provisioned (PTU) throughput"
-} elseif ($aiCapacity -gt 0 -and $aiCapacity -lt 100) {
-    $aiMaxRetries = 5; $aiBackoff = 20; $aiMaxTokens = 4096; $aiCtxResources = 40; $aiEffort = "low"
-    $aiTuneNote = "low shared quota (${aiCapacity}K TPM)"
-} elseif ($aiCapacity -gt 0 -and $aiCapacity -lt 200) {
-    $aiMaxRetries = 4; $aiBackoff = 15; $aiMaxTokens = 8192; $aiCtxResources = 120; $aiEffort = "medium"
-    $aiTuneNote = "moderate shared quota (${aiCapacity}K TPM)"
-} else {
-    $aiMaxRetries = 3; $aiBackoff = 15; $aiMaxTokens = 16384; $aiCtxResources = 400; $aiEffort = "high"
-    $aiTuneNote = if ($aiCapacity -gt 0) { "ample quota (${aiCapacity}K TPM)" } else { "capacity not readable - using safe defaults" }
-}
-Write-Info "AI throughput tuning: $aiTuneNote -> retries=$aiMaxRetries backoff=${aiBackoff}s maxTokens=$aiMaxTokens contextResources=$aiCtxResources reasoning=$aiEffort"
 
 # ============================================
 # PRIVATE ENDPOINT FOR OPENAI (PRIVATE MODE)
@@ -1645,40 +1579,35 @@ if ($DeploySql) {
             Write-Success "Private Endpoint created: $sqlPeName"
         }
 
-        # Private DNS zone for SQL - target the zone THIS VNet resolves against, not just any copy.
-        $sqlZoneInfo   = Resolve-PrivateDnsZoneRg -ZoneName $sqlDnsZoneName -DnsSubscriptionId $dnsZoneSubscriptionId -VNetId $vnetResourceId -FallbackRg $dnsZoneResourceGroup
-        $sqlDnsZoneRg  = $sqlZoneInfo.ResourceGroup
-        if (-not $sqlZoneInfo.Exists) {
-            Write-Info "Creating Private DNS Zone: $sqlDnsZoneName in RG $sqlDnsZoneRg..."
+        # Private DNS zone for SQL
+        $existingSqlDns = az network private-dns zone list --subscription $dnsZoneSubscriptionId --query "[?name=='$sqlDnsZoneName'].{Name:name, RG:resourceGroup}" -o json 2>$null | ConvertFrom-Json
+        if (-not ($existingSqlDns -and $existingSqlDns.Count -gt 0)) {
+            Write-Info "Creating Private DNS Zone: $sqlDnsZoneName..."
             az network private-dns zone create `
                 --name $sqlDnsZoneName `
-                --resource-group $sqlDnsZoneRg `
+                --resource-group $dnsZoneResourceGroup `
                 --subscription $dnsZoneSubscriptionId `
                 --output none 2>$null
-        } elseif ($sqlZoneInfo.Linked) {
-            Write-Info "Reusing the '$sqlDnsZoneName' zone already linked to '$VNetName' (RG: $sqlDnsZoneRg)"
         } else {
-            Write-Info "Using existing '$sqlDnsZoneName' zone in RG $sqlDnsZoneRg"
+            $dnsZoneResourceGroup = $existingSqlDns[0].RG
         }
 
-        if (-not $sqlZoneInfo.Linked) {
-            $sqlDnsLinkName = "link-$VNetName-sql"
-            az network private-dns link vnet show --name $sqlDnsLinkName --zone-name $sqlDnsZoneName --resource-group $sqlDnsZoneRg --subscription $dnsZoneSubscriptionId 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Info "Linking SQL DNS Zone to VNet..."
-                az network private-dns link vnet create `
-                    --name $sqlDnsLinkName `
-                    --zone-name $sqlDnsZoneName `
-                    --resource-group $sqlDnsZoneRg `
-                    --subscription $dnsZoneSubscriptionId `
-                    --virtual-network $vnetResourceId `
-                    --registration-enabled false `
-                    --output none 2>$null
-            }
+        $sqlDnsLinkName = "link-$VNetName-sql"
+        $sqlLinkExists = az network private-dns link vnet show --name $sqlDnsLinkName --zone-name $sqlDnsZoneName --resource-group $dnsZoneResourceGroup --subscription $dnsZoneSubscriptionId 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Info "Linking SQL DNS Zone to VNet..."
+            az network private-dns link vnet create `
+                --name $sqlDnsLinkName `
+                --zone-name $sqlDnsZoneName `
+                --resource-group $dnsZoneResourceGroup `
+                --subscription $dnsZoneSubscriptionId `
+                --virtual-network $vnetResourceId `
+                --registration-enabled false `
+                --output none
         }
 
         Write-Info "Creating DNS Zone Group for SQL Private Endpoint..."
-        $sqlDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$sqlDnsZoneRg/providers/Microsoft.Network/privateDnsZones/$sqlDnsZoneName"
+        $sqlDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$dnsZoneResourceGroup/providers/Microsoft.Network/privateDnsZones/$sqlDnsZoneName"
         az network private-endpoint dns-zone-group create `
             --name "sql-dns-group" `
             --endpoint-name $sqlPeName `
@@ -1686,11 +1615,6 @@ if ($DeploySql) {
             --private-dns-zone $sqlDnsZoneId `
             --zone-name "sql" `
             --output none 2>$null
-
-        # Without a resolvable A record here every pyodbc call blocks for the full 30s login
-        # timeout, which makes the whole app look hung ("Connecting to backend...").
-        Confirm-PrivateDnsARecord -RecordName $SqlServerName -ZoneName $sqlDnsZoneName -ZoneRg $sqlDnsZoneRg `
-            -DnsSubscriptionId $dnsZoneSubscriptionId -PeName $sqlPeName -PeResourceGroup $ResourceGroupName
 
         Write-Success "Azure SQL Private Endpoint configured"
     } else {
@@ -1987,6 +1911,132 @@ Write-Success "Web App ready: $WebAppName"
 Write-Info "Managed Identity Principal ID: $principalId"
 
 # ============================================
+# FINOPS COST EXPORT STORAGE
+# ============================================
+# Cost data reaches SQL as:
+#     Cost Management --daily export--> ADLS Gen2 --app loader--> Azure SQL
+# The app creates and runs the exports itself, but it cannot create the landing
+# account or grant itself access. Skipping this leaves the FinOps views empty with
+# no error to explain why, so it is provisioned as part of the deployment.
+Write-Step "Step 6b: FinOps Cost Export Storage"
+
+$costExportStorageId = ""
+$costExportSub = $SubscriptionId
+$costExportTargets = @($ScanSubscriptionsEnv -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne 'auto' })
+if ($costExportTargets.Count -eq 0) {
+    # 'auto' means the app discovers subscriptions at runtime, so the exact list is not
+    # known here. Grant on the deployment subscription and flag the rest for review.
+    $costExportTargets = @($SubscriptionId)
+    Write-Host "  NOTE: subscriptions are auto-discovered at runtime. Only '$SubscriptionId' is granted the export role now;" -ForegroundColor Yellow
+    Write-Host "        run 'az role assignment create --assignee $principalId --role \"Cost Management Contributor\" --scope /subscriptions/<id>' for any others." -ForegroundColor Yellow
+}
+
+# Exports fail with "RP Not Registered" unless the provider is registered on the
+# subscription that owns the storage account AND on every exported subscription.
+foreach ($cesub in (@($costExportSub) + $costExportTargets | Select-Object -Unique)) {
+    $ceState = az provider show --namespace Microsoft.CostManagementExports --subscription $cesub --query registrationState -o tsv 2>$null
+    if ($ceState -ne 'Registered') {
+        Write-Info "Registering Microsoft.CostManagementExports on $cesub ..."
+        az provider register --namespace Microsoft.CostManagementExports --subscription $cesub --wait 2>&1 | Out-Null
+    }
+}
+
+$existingCostSa = az storage account show --name $CostExportStorageAccountName --resource-group $ResourceGroupName --query name -o tsv 2>$null
+if ($existingCostSa) {
+    Write-Info "Cost export storage '$CostExportStorageAccountName' already exists - reusing"
+} else {
+    Write-Info "Creating ADLS Gen2 storage account '$CostExportStorageAccountName' in $Location ..."
+    az storage account create `
+        --name $CostExportStorageAccountName `
+        --resource-group $ResourceGroupName `
+        --location $Location `
+        --sku Standard_LRS `
+        --kind StorageV2 `
+        --enable-hierarchical-namespace true `
+        --min-tls-version TLS1_2 `
+        --allow-blob-public-access false `
+        --tags SecurityControl=Ignore purpose=finops-cost-exports `
+        --output none 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  WARNING: Could not create '$CostExportStorageAccountName' (the name may be taken globally) - FinOps cost data will not load." -ForegroundColor Yellow
+        $permIssues += @{ Kind = "FinOps"; Name = "Cost export storage account"; Scope = $ResourceGroupName; Command = "az storage account create --name <unique-name> --resource-group $ResourceGroupName --location $Location --sku Standard_LRS --kind StorageV2 --enable-hierarchical-namespace true" }
+    }
+}
+
+$costExportStorageId = az storage account show --name $CostExportStorageAccountName --resource-group $ResourceGroupName --query id -o tsv 2>$null
+
+if (-not [string]::IsNullOrWhiteSpace($costExportStorageId)) {
+    $costSaKey = az storage account keys list --account-name $CostExportStorageAccountName --resource-group $ResourceGroupName --query "[0].value" -o tsv 2>$null
+    if (-not [string]::IsNullOrWhiteSpace($costSaKey)) {
+        az storage container create --account-name $CostExportStorageAccountName --account-key $costSaKey --name $CostExportContainerName --output none 2>$null
+        Write-Success "Container '$CostExportContainerName' ready"
+    }
+
+    # Cost Management writes through its own managed identity and is a trusted Azure
+    # service, so the firewall must keep that bypass or the export silently produces
+    # no files. Documented requirement for exports to firewalled storage.
+    if ($DeploymentMode -eq "Private") {
+        Write-Info "Restricting cost export storage to the VNet (trusted Azure services still allowed)..."
+        az storage account update --name $CostExportStorageAccountName --resource-group $ResourceGroupName `
+            --default-action Deny --bypass AzureServices --output none 2>$null
+
+        $costPeName = "$CostExportStorageAccountName-pe"
+        az network private-endpoint create `
+            --name $costPeName `
+            --resource-group $ResourceGroupName `
+            --location $Location `
+            --vnet-name $VNetName `
+            --subnet $PrivateEndpointSubnetName `
+            --private-connection-resource-id $costExportStorageId `
+            --group-id "blob" `
+            --connection-name "$CostExportStorageAccountName-blob" `
+            --output none 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $blobDnsZoneName = "privatelink.blob.core.windows.net"
+            az network private-dns zone create --name $blobDnsZoneName --resource-group $dnsZoneResourceGroup --subscription $dnsZoneSubscriptionId --output none 2>$null
+            $blobDnsLinkName = "link-$VNetName-blob"
+            az network private-dns link vnet show --name $blobDnsLinkName --zone-name $blobDnsZoneName --resource-group $dnsZoneResourceGroup --subscription $dnsZoneSubscriptionId 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                az network private-dns link vnet create --name $blobDnsLinkName --zone-name $blobDnsZoneName --resource-group $dnsZoneResourceGroup --subscription $dnsZoneSubscriptionId --virtual-network $vnetResourceId --registration-enabled false --output none 2>$null
+            }
+            $blobDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$dnsZoneResourceGroup/providers/Microsoft.Network/privateDnsZones/$blobDnsZoneName"
+            az network private-endpoint dns-zone-group create --name "blob-dns-group" --endpoint-name $costPeName --resource-group $ResourceGroupName --private-dns-zone $blobDnsZoneId --zone-name "blob" --output none 2>$null
+            Write-Success "Cost export storage Private Endpoint configured"
+        } else {
+            Write-Host "  WARNING: Private Endpoint for '$CostExportStorageAccountName' failed - the app may not reach the export files." -ForegroundColor Yellow
+        }
+    }
+
+    # Reader lets the app read the export files. Cost Management assigns Storage Blob
+    # Data Contributor to each export's own identity, which is why the app also needs
+    # rights to create role assignments on this one account.
+    foreach ($ceRole in @('Storage Blob Data Reader', 'Storage Account Contributor', 'User Access Administrator')) {
+        $ceOut = az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal `
+            --role $ceRole --scope $costExportStorageId --output none 2>&1
+        if ($LASTEXITCODE -eq 0 -or $ceOut -match "already exists") {
+            Write-Success "$ceRole on $CostExportStorageAccountName"
+        } else {
+            Write-Host "  WARNING: Could not assign '$ceRole' on $CostExportStorageAccountName" -ForegroundColor Yellow
+            $permIssues += @{ Kind = "RBAC"; Name = $ceRole; Scope = $costExportStorageId; Command = "az role assignment create --assignee $principalId --role `"$ceRole`" --scope `"$costExportStorageId`"" }
+        }
+    }
+
+    # Creating and running the exports is done by the app at runtime.
+    foreach ($cesub in $costExportTargets) {
+        $ceOut = az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal `
+            --role "Cost Management Contributor" --scope "/subscriptions/$cesub" --output none 2>&1
+        if ($LASTEXITCODE -eq 0 -or $ceOut -match "already exists") {
+            Write-Success "Cost Management Contributor on $cesub"
+        } else {
+            Write-Host "  WARNING: Could not assign 'Cost Management Contributor' on $cesub - that subscription's cost will not export." -ForegroundColor Yellow
+            $permIssues += @{ Kind = "RBAC"; Name = "Cost Management Contributor"; Scope = "/subscriptions/$cesub"; Command = "az role assignment create --assignee $principalId --role `"Cost Management Contributor`" --scope `"/subscriptions/$cesub`"" }
+        }
+    }
+    Write-Success "Cost export pipeline ready - the app creates its exports and loads them within 30 minutes"
+}
+Write-Host ""
+
+# ============================================
 # CONFIGURE WEB APP SETTINGS
 # ============================================
 Write-Step "Step 7: Configuring Web App Settings"
@@ -2009,11 +2059,6 @@ $settings = @(
     "AZURE_OPENAI_USE_MANAGED_IDENTITY=true",
     "AZURE_OPENAI_KEY=$openaiKey",
     "AZURE_OPENAI_DEPLOYMENT=$OpenAIDeploymentName",
-    "AI_MAX_RETRIES=$aiMaxRetries",
-    "AI_RETRY_BACKOFF_SECONDS=$aiBackoff",
-    "AI_MAX_TOKENS_ANALYSIS=$aiMaxTokens",
-    "AI_MAX_RESOURCES_CONTEXT=$aiCtxResources",
-    "AI_REASONING_EFFORT=$aiEffort",
     "AZURE_TENANT_ID=$EntraTenantId",
     "AZURE_SUBSCRIPTION_ID=$SubscriptionId",
     "AZURE_SUBSCRIPTION_IDS=$ScanSubscriptionsEnv",
@@ -2023,13 +2068,7 @@ $settings = @(
     "AUTO_REFRESH_INTERVAL_HOURS=6",
     "SETTINGS_DIR=/home/site/wwwroot/config",
     "WEBSITES_PORT=8000",
-    "SCM_DO_BUILD_DURING_DEPLOYMENT=$(if ($OfflineDependencies) { 'false' } else { 'true' })",
-    "ENABLE_ORYX_BUILD=$(if ($OfflineDependencies) { 'false' } else { 'true' })",
-    # First boot creates the venv and installs packages; the default 230s start limit kills the
-    # container mid-install and shows up as "didn't respond to HTTP pings".
-    "WEBSITES_CONTAINER_START_TIME_LIMIT=1800",
-    # A long pip install can go quiet for minutes; the default idle timeout aborts the build.
-    "SCM_COMMAND_IDLE_TIMEOUT=1800",
+    "SCM_DO_BUILD_DURING_DEPLOYMENT=true",
     "WEBSITE_PYTHON_VERSION=3.11"
 )
 
@@ -2038,6 +2077,16 @@ if ($DeploySql) {
     $settings += @(
         "DATABASE_PROVIDER=azuresql",
         "AZURE_SQL_CONNECTION_STRING=$sqlConnectionString"
+    )
+}
+
+# FinOps cost exports -> the app reads these files and loads them into SQL.
+# Without these three the FinOps views have no cost data and show nothing.
+if (-not [string]::IsNullOrWhiteSpace($costExportStorageId)) {
+    $settings += @(
+        "FINOPS_EXPORT_ACCOUNT=$CostExportStorageAccountName",
+        "FINOPS_EXPORT_CONTAINER=$CostExportContainerName",
+        "FINOPS_EXPORT_STORAGE_ID=$costExportStorageId"
     )
 }
 
@@ -2064,10 +2113,9 @@ if ($LASTEXITCODE -ne 0) {
 # (needed by pyodbc for the managed-identity SQL connection) before launching
 # the app. Otherwise launch uvicorn directly.
 Write-Info "Setting startup command for FastAPI..."
-# Relative command: with an Oryx build the app runs from a /tmp/<id> extract, NOT /home/site/wwwroot,
-# so a hardcoded path fails with "startup.sh: No such file or directory" (container exit 127).
-# 'bash startup.sh' resolves against the app dir; startup.sh is self-locating.
-$startupFile = "bash startup.sh"
+# Always use startup.sh - it installs the ODBC driver (for Azure SQL) and runs
+# uvicorn from the backend/ directory (which serves the API and the built SPA).
+$startupFile = "bash /home/site/wwwroot/startup.sh"
 az webapp config set `
     --name $WebAppName `
     --resource-group $ResourceGroupName `
@@ -2076,54 +2124,55 @@ az webapp config set `
 
 Write-Success "Web App configuration applied"
 
-# Without this the container's stdout is never captured, so a startup failure shows only a bare
-# 502 with no way to see the Python traceback.
-Write-Info "Enabling application and container logging..."
-az webapp log config `
-    --name $WebAppName `
-    --resource-group $ResourceGroupName `
-    --application-logging filesystem `
-    --level information `
-    --docker-container-logging filesystem `
-    --detailed-error-messages true `
-    --output none 2>$null
-if ($LASTEXITCODE -eq 0) { Write-Success "Diagnostic logging enabled (az webapp log tail / log download)" }
-
 # ============================================
-# DEPLOY APPLICATION CODE
-# Runs BEFORE VNet integration and BEFORE the Web App's Private Endpoint. The Oryx
-# remote build (SCM_DO_BUILD_DURING_DEPLOYMENT=true) runs pip install inside the Kudu
-# container, so it needs public egress to pypi.org. Once route-all pushes outbound
-# traffic into a locked-down VNet with no internet path, every wheel download stalls on
-# TCP connect and the build dies after ~15 min with a bare "Build failed".
-# Deploying first also avoids the Private Endpoint DNS trap: a PE makes the app's public
-# .scm hostname CNAME to the privatelink subdomain, which resolves only from inside the
-# linked VNet (NXDOMAIN elsewhere), regardless of the publicNetworkAccess setting.
+# WEB APP VNET INTEGRATION (PRIVATE MODE)
+# Required so the app's OUTBOUND calls reach the PRIVATE Azure OpenAI endpoint
+# (OpenAI public access is disabled). Without this the app deploys but fails at
+# runtime resolving *.openai.azure.com to the blocked public IP.
 # ============================================
-Write-Step "Step 7a: Deploying Application Code"
-
-# Re-run safety: a previous run may have already integrated the app with the VNet, which
-# leaves route-all on and would black-hole the build's pip traffic. Step 7b re-enables it.
 if ($DeploymentMode -eq "Private") {
-    Write-Info "Temporarily routing outbound traffic direct-to-internet so the Oryx build can reach PyPI..."
+    Write-Step "Step 7a: Connecting Web App to VNet (Regional Integration)"
+
+    Write-Info "Adding regional VNet integration into subnet '$AppServiceIntegrationSubnetName'..."
+    az webapp vnet-integration add `
+        --name $WebAppName `
+        --resource-group $ResourceGroupName `
+        --vnet $vnetResourceId `
+        --subnet $AppServiceIntegrationSubnetName `
+        --output none 2>$null
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to add VNet integration for the Web App"
+        Write-Host "  Verify subnet '$AppServiceIntegrationSubnetName' is delegated to Microsoft.Web/serverFarms and has free address space." -ForegroundColor Yellow
+        exit 1
+    }
+
+    # Route ALL outbound traffic (incl. DNS) through the VNet so privatelink zones resolve
+    Write-Info "Enabling route-all so outbound DNS uses the private DNS zones..."
     az webapp config set `
         --name $WebAppName `
         --resource-group $ResourceGroupName `
-        --vnet-route-all-enabled false `
+        --vnet-route-all-enabled true `
         --output none 2>$null
-    az webapp config appsettings set `
-        --name $WebAppName `
-        --resource-group $ResourceGroupName `
-        --settings "WEBSITE_VNET_ROUTE_ALL=0" `
-        --output none 2>$null
+
+    Write-Success "Web App connected to VNet: $VNetName / $AppServiceIntegrationSubnetName"
+    Write-Host ""
 }
+
+# ============================================
+# DEPLOY APPLICATION CODE
+# Moved BEFORE the Web App's Private Endpoint is created (see below). Once a Private
+# Endpoint exists for the app, Azure auto-inserts a public CNAME for the app's default
+# and .scm hostnames pointing at the privatelink subdomain, which only resolves from
+# inside the linked VNet - so the public SCM/Kudu zip-deploy endpoint used here becomes
+# unreachable (DNS NXDOMAIN) from any machine outside the VNet, REGARDLESS of the
+# publicNetworkAccess setting. Deploying first, while the app is still plain public
+# with no Private Endpoint at all, avoids that DNS trap entirely.
+# ============================================
+Write-Step "Step 7b: Deploying Application Code"
 
 # The application root is the REPO ROOT (the parent of this Scripts/ folder).
 $repoRoot = Split-Path -Parent $PSScriptRoot
-# Tolerate a copy of this script sitting at the repo root instead of in Scripts/.
-if (-not (Test-Path (Join-Path $repoRoot "backend/main.py")) -and (Test-Path (Join-Path $PSScriptRoot "backend/main.py"))) {
-    $repoRoot = $PSScriptRoot
-}
 Write-Info "Application root: $repoRoot"
 
 foreach ($req in @("backend/main.py", "backend/requirements.txt", "frontend/package.json", "startup.sh")) {
@@ -2160,206 +2209,67 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
 }
 
 # 2) Stage the real app layout, EXCLUDING secrets / venv / caches / local data.
-#    Packaging is a function because the offline fallback below rebuilds the package
-#    with a bundled wheelhouse.
-$stagingRoot = Join-Path $env:TEMP "costopt-stage-$(Get-Date -Format 'yyyyMMddHHmmss')"
-
-# Locate a local Python only for the offline wheel download; not needed on the normal path.
-$pythonExe = $null
-foreach ($cand in @("python", "python3")) {
-    $found = Get-Command $cand -ErrorAction SilentlyContinue
-    if ($found) { $pythonExe = $found.Source; break }
-}
-
-function New-DeploymentPackage {
-    param([switch]$IncludeWheelhouse)
-
-    if (Test-Path $stagingRoot) { Remove-Item $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue }
-    New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
-
+Write-Info "Creating deployment package..."
+$zipPath = Join-Path $env:TEMP "costopt-deploy-$(Get-Date -Format 'yyyyMMddHHmmss').zip"
+$staging = Join-Path $env:TEMP "costopt-stage-$(Get-Date -Format 'yyyyMMddHHmmss')"
+if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+New-Item -ItemType Directory -Path $staging -Force | Out-Null
+try {
     # backend/ (drop venv, caches, local sqlite data and any .env secrets)
-    robocopy (Join-Path $repoRoot "backend") (Join-Path $stagingRoot "backend") /E `
+    robocopy (Join-Path $repoRoot "backend") (Join-Path $staging "backend") /E `
         /XD ".venv" "__pycache__" ".pytest_cache" "data" `
         /XF ".env" "*.pyc" | Out-Null
     # built SPA
-    robocopy (Join-Path $repoRoot "frontend\dist") (Join-Path $stagingRoot "frontend\dist") /E | Out-Null
+    robocopy (Join-Path $repoRoot "frontend\dist") (Join-Path $staging "frontend\dist") /E | Out-Null
     # Azure service icons (served at /icons)
     if (Test-Path (Join-Path $repoRoot "Icons")) {
-        robocopy (Join-Path $repoRoot "Icons") (Join-Path $stagingRoot "Icons") /E | Out-Null
+        robocopy (Join-Path $repoRoot "Icons") (Join-Path $staging "Icons") /E | Out-Null
     }
     # Complete requirements at wwwroot root (Oryx installs these) + startup.sh
-    Copy-Item (Join-Path $repoRoot "backend\requirements.txt") (Join-Path $stagingRoot "requirements.txt") -Force
-    Copy-Item (Join-Path $repoRoot "startup.sh") (Join-Path $stagingRoot "startup.sh") -Force
+    Copy-Item (Join-Path $repoRoot "backend\requirements.txt") (Join-Path $staging "requirements.txt") -Force
+    Copy-Item (Join-Path $repoRoot "startup.sh") (Join-Path $staging "startup.sh") -Force
 
-    # Force LF on every staged shell script. A Windows checkout (or a customer editing on Windows)
-    # can introduce CRLF, which makes bash fail on Linux App Service with
-    # "Container exited with exit code 127 during startup".
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    Get-ChildItem $stagingRoot -Recurse -Filter *.sh -File | ForEach-Object {
-        $shTxt = [System.IO.File]::ReadAllText($_.FullName)
-        $shTxt = $shTxt -replace "`r`n", "`n" -replace "`r", "`n"
-        [System.IO.File]::WriteAllText($_.FullName, $shTxt, $utf8NoBom)
-    }
-
-    if ($IncludeWheelhouse) {
-        Write-Info "Downloading Linux (cp311) wheels for offline install... this can take a few minutes"
-        $wheelDir = Join-Path $stagingRoot "wheelhouse"
-        New-Item -ItemType Directory -Path $wheelDir -Force | Out-Null
-        & $pythonExe -m pip download -r (Join-Path $stagingRoot "requirements.txt") `
-            --dest $wheelDir --platform manylinux2014_x86_64 --python-version 311 `
-            --implementation cp --abi cp311 --only-binary=:all: --no-cache-dir 2>&1 | Out-Null
-        $wheelCount = @(Get-ChildItem $wheelDir -Filter *.whl -ErrorAction SilentlyContinue).Count
-        if ($LASTEXITCODE -ne 0 -or $wheelCount -eq 0) {
-            Write-Error "Could not download the Linux wheels (needs internet access from THIS machine)."
-            return $null
-        }
-        Write-Success "Bundled $wheelCount wheels for offline installation"
-    }
-
-    $zip = Join-Path $env:TEMP "costopt-deploy-$(Get-Date -Format 'yyyyMMddHHmmssfff').zip"
-    if (Test-Path $zip) { Remove-Item $zip -Force }
-    Compress-Archive -Path (Join-Path $stagingRoot "*") -DestinationPath $zip -Force
-    return $zip
+    Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $zipPath -Force
+    Write-Success "Deployment package created: $zipPath"
+} catch {
+    Write-Error "Failed to create deployment package: $_"
+    exit 1
+} finally {
+    Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-function Invoke-ZipDeploy {
-    param([string]$ZipPath)
-    az webapp deploy `
-        --name $WebAppName `
-        --resource-group $ResourceGroupName `
-        --src-path $ZipPath `
-        --type zip `
-        --async false `
-        --output none
-    if ($LASTEXITCODE -eq 0) { return $true }
-    # Older CLI / transient SCM errors: the legacy endpoint often succeeds where the new one fails.
-    Write-Info "Primary deploy call failed - retrying via 'config-zip'..."
+# Deploy using zip deployment
+Write-Info "Deploying application to Azure App Service..."
+Write-Info "This may take 2-5 minutes (includes pip install)..."
+
+az webapp deploy `
+    --name $WebAppName `
+    --resource-group $ResourceGroupName `
+    --src-path $zipPath `
+    --type zip `
+    --async false `
+    --output none
+
+if ($LASTEXITCODE -ne 0) {
+    # Try alternative deployment method
+    Write-Info "Retrying with alternative deployment method..."
     az webapp deployment source config-zip `
         --name $WebAppName `
         --resource-group $ResourceGroupName `
-        --src $ZipPath `
+        --src $zipPath `
         --output none
-    return ($LASTEXITCODE -eq 0)
-}
-
-Write-Info "Creating deployment package..."
-$deployed = $false
-try {
-    if ($OfflineDependencies) {
-        # Explicitly requested: never rely on the build container reaching pypi.org.
-        if (-not $pythonExe) {
-            Write-Error "-OfflineDependencies needs Python 3 on this machine (to download Linux wheels)."
-            Write-Host "  Install Python 3, or re-run without -OfflineDependencies to use the App Service build." -ForegroundColor Yellow
-            exit 1
-        }
-        Write-Info "Offline mode: bundling dependencies, App Service remote build is disabled."
-        $zipPath = New-DeploymentPackage -IncludeWheelhouse
-        if (-not $zipPath) { exit 1 }
-        Write-Success "Deployment package created: $zipPath"
-        Write-Info "Uploading to Azure App Service..."
-        $deployed = Invoke-ZipDeploy -ZipPath $zipPath
-        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-    } else {
-        # ── Attempt 1: standard remote (Oryx) build. ──
-        $zipPath = New-DeploymentPackage
-        Write-Success "Deployment package created: $zipPath"
-        Write-Info "Deploying application to Azure App Service..."
-        Write-Info "This may take 2-5 minutes (includes pip install)..."
-        foreach ($try in 1..2) {
-            $deployed = Invoke-ZipDeploy -ZipPath $zipPath
-            if ($deployed) { break }
-            if ($try -lt 2) {
-                Write-Info "Deploy attempt $try failed - retrying in 30s..."
-                Start-Sleep -Seconds 30
-            }
-        }
-        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-
-        # ── Attempt 2: the remote build failed. Almost always because the Kudu build container
-        #    could not reach pypi.org. Rebuild the package with the wheels bundled and deploy
-        #    with the remote build switched off, so no internet access is required server-side.
-        if (-not $deployed) {
-            Write-Host ""
-            Write-Host "  The App Service remote build failed. Falling back to an OFFLINE package" -ForegroundColor Yellow
-            Write-Host "  (dependencies bundled in the zip, no server-side internet needed)." -ForegroundColor Yellow
-            if (-not $pythonExe) {
-                Write-Error "Offline fallback needs Python 3 on this machine, which was not found."
-                Write-Host "  Either install Python 3 and re-run, or allow outbound HTTPS from the App Service" -ForegroundColor Yellow
-                Write-Host "  build container to pypi.org, files.pythonhosted.org and oryx-cdn.microsoft.io." -ForegroundColor Yellow
-                exit 1
-            }
-            az webapp config appsettings set `
-                --name $WebAppName `
-                --resource-group $ResourceGroupName `
-                --settings "SCM_DO_BUILD_DURING_DEPLOYMENT=false" "ENABLE_ORYX_BUILD=false" `
-                --output none 2>$null
-            $zipPath = New-DeploymentPackage -IncludeWheelhouse
-            if (-not $zipPath) { exit 1 }
-            Write-Info "Uploading offline package (this is larger, allow a few minutes)..."
-            $deployed = Invoke-ZipDeploy -ZipPath $zipPath
-            Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-        }
-    }
-} catch {
-    Write-Error "Failed to package or deploy the application: $_"
-    exit 1
-} finally {
-    Remove-Item $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
-}
-
-if (-not $deployed) {
-    Write-Error "Failed to deploy application code"
-    Write-Host "  Build log:   https://$WebAppName.scm.azurewebsites.net/api/deployments/latest/log" -ForegroundColor Yellow
-    Write-Host "  Runtime log: az webapp log tail --name $WebAppName --resource-group $ResourceGroupName" -ForegroundColor Yellow
-    exit 1
-}
-
-Write-Success "Application code deployed"
-
-# ============================================
-# WEB APP VNET INTEGRATION (PRIVATE MODE)
-# Required so the app's OUTBOUND calls reach the PRIVATE Azure OpenAI / SQL endpoints
-# (their public access is disabled). Without this the app deploys but fails at runtime
-# resolving *.openai.azure.com to the blocked public IP.
-# Applied AFTER the code deploy so the Oryx build kept its public egress to PyPI.
-# ============================================
-if ($DeploymentMode -eq "Private") {
-    Write-Step "Step 7b: Connecting Web App to VNet (Regional Integration)"
-
-    Write-Info "Adding regional VNet integration into subnet '$AppServiceIntegrationSubnetName'..."
-    az webapp vnet-integration add `
-        --name $WebAppName `
-        --resource-group $ResourceGroupName `
-        --vnet $vnetResourceId `
-        --subnet $AppServiceIntegrationSubnetName `
-        --output none 2>$null
-
+    
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to add VNet integration for the Web App"
-        Write-Host "  Verify subnet '$AppServiceIntegrationSubnetName' is delegated to Microsoft.Web/serverFarms and has free address space." -ForegroundColor Yellow
+        Write-Error "Failed to deploy application code"
+        Write-Host "  Check logs: az webapp log tail --name $WebAppName --resource-group $ResourceGroupName" -ForegroundColor Yellow
         exit 1
     }
-
-    # Route ALL outbound traffic (incl. DNS) through the VNet so privatelink zones resolve
-    Write-Info "Enabling route-all so outbound DNS uses the private DNS zones..."
-    az webapp config set `
-        --name $WebAppName `
-        --resource-group $ResourceGroupName `
-        --vnet-route-all-enabled true `
-        --output none 2>$null
-    # Some az CLI / API versions silently ignore the site-config property above
-    # ("WARNING: vnet_route_all_enabled is not a known attribute ... ignored"), leaving
-    # vnetRouteAllEnabled=false so private DNS never resolves. This app setting is
-    # honored across all versions, so set it too.
-    az webapp config appsettings set `
-        --name $WebAppName `
-        --resource-group $ResourceGroupName `
-        --settings "WEBSITE_VNET_ROUTE_ALL=1" `
-        --output none 2>$null
-
-    Write-Success "Web App connected to VNet: $VNetName / $AppServiceIntegrationSubnetName"
-    Write-Host ""
 }
+
+# Clean up zip file
+Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+
+Write-Success "Application code deployed"
 
 # ============================================
 # PRIVATE ENDPOINT FOR WEB APP (PRIVATE MODE)
@@ -2411,54 +2321,46 @@ if ($DeploymentMode -eq "Private") {
         Write-Success "Private Endpoint created: $webAppPeName"
     }
     
-    # NOTE: Code is already deployed at this point (Step 7a, above), so it's now safe
-    # to attach the Private Endpoint. Public network access stays ENABLED until the very
-    # last step (Step 14) so RBAC, Graph, SQL grant, restart and the health probe all run
-    # against a reachable app.
+    # NOTE: Code is already deployed at this point (Step 7b, above), so it's now safe
+    # to attach the Private Endpoint. Public network access is disabled next, in Step 8c.
     
-    # Create/Configure DNS Zone - target the zone THIS VNet resolves against, not just any copy.
-    $webAppZoneInfo = Resolve-PrivateDnsZoneRg -ZoneName $webAppDnsZoneName -DnsSubscriptionId $dnsZoneSubscriptionId -VNetId $vnetResourceId -FallbackRg $dnsZoneResourceGroup
-    $webAppDnsZoneRg = $webAppZoneInfo.ResourceGroup
-    if (-not $webAppZoneInfo.Exists) {
-        Write-Info "Creating Private DNS Zone: $webAppDnsZoneName in RG $webAppDnsZoneRg..."
+    # Create/Configure DNS Zone
+    if (-not $dnsZoneWebAppFound) {
+        Write-Info "Creating Private DNS Zone: $webAppDnsZoneName..."
         az network private-dns zone create `
             --name $webAppDnsZoneName `
-            --resource-group $webAppDnsZoneRg `
+            --resource-group $dnsZoneResourceGroup `
             --subscription $dnsZoneSubscriptionId `
             --output none 2>$null
         
         if ($LASTEXITCODE -eq 0) {
             Write-Success "Private DNS Zone created: $webAppDnsZoneName"
         }
-    } elseif ($webAppZoneInfo.Linked) {
-        Write-Info "Reusing the '$webAppDnsZoneName' zone already linked to '$VNetName' (RG: $webAppDnsZoneRg)"
     }
     
     # Link DNS Zone to VNet
-    if (-not $webAppZoneInfo.Linked) {
-        $webAppDnsLinkName = "link-$VNetName-webapp"
-        az network private-dns link vnet show `
+    $webAppDnsLinkName = "link-$VNetName-webapp"
+    $linkExists = az network private-dns link vnet show `
+        --name $webAppDnsLinkName `
+        --zone-name $webAppDnsZoneName `
+        --resource-group $dnsZoneResourceGroup `
+        --subscription $dnsZoneSubscriptionId 2>&1
+    
+    if ($LASTEXITCODE -ne 0) {
+        Write-Info "Linking DNS Zone to VNet..."
+        az network private-dns link vnet create `
             --name $webAppDnsLinkName `
             --zone-name $webAppDnsZoneName `
-            --resource-group $webAppDnsZoneRg `
-            --subscription $dnsZoneSubscriptionId 2>&1 | Out-Null
-        
-        if ($LASTEXITCODE -ne 0) {
-            Write-Info "Linking DNS Zone to VNet..."
-            az network private-dns link vnet create `
-                --name $webAppDnsLinkName `
-                --zone-name $webAppDnsZoneName `
-                --resource-group $webAppDnsZoneRg `
-                --subscription $dnsZoneSubscriptionId `
-                --virtual-network $vnetResourceId `
-                --registration-enabled false `
-                --output none 2>$null
-        }
+            --resource-group $dnsZoneResourceGroup `
+            --subscription $dnsZoneSubscriptionId `
+            --virtual-network $vnetResourceId `
+            --registration-enabled false `
+            --output none
     }
     
     # Create DNS Zone Group
     Write-Info "Creating DNS Zone Group for automatic A record registration..."
-    $webAppDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$webAppDnsZoneRg/providers/Microsoft.Network/privateDnsZones/$webAppDnsZoneName"
+    $webAppDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$dnsZoneResourceGroup/providers/Microsoft.Network/privateDnsZones/$webAppDnsZoneName"
     
     az network private-endpoint dns-zone-group create `
         --name "webapp-dns-group" `
@@ -2467,11 +2369,35 @@ if ($DeploymentMode -eq "Private") {
         --private-dns-zone $webAppDnsZoneId `
         --zone-name "webapp" `
         --output none 2>$null
-
-    Confirm-PrivateDnsARecord -RecordName $WebAppName -ZoneName $webAppDnsZoneName -ZoneRg $webAppDnsZoneRg `
-        -DnsSubscriptionId $dnsZoneSubscriptionId -PeName $webAppPeName -PeResourceGroup $ResourceGroupName
     
     Write-Success "Web App Private Endpoint configured"
+    Write-Host ""
+}
+
+# ============================================
+# LOCK DOWN PUBLIC ACCESS (PRIVATE MODE) - after code is deployed
+# ============================================
+if ($DeploymentMode -eq "Private") {
+    Write-Step "Step 8c: Disabling Public Network Access on Web App"
+    Write-Info "Code is deployed - sealing the Web App behind its Private Endpoint..."
+    $webAppResourceIdLockdown = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Web/sites/$WebAppName"
+    az webapp update `
+        --name $WebAppName `
+        --resource-group $ResourceGroupName `
+        --set publicNetworkAccess=Disabled `
+        --output none 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        az resource update `
+            --ids $webAppResourceIdLockdown `
+            --set properties.publicNetworkAccess=Disabled `
+            --output none 2>$null
+    }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "Public network access disabled - Web App is now reachable only via the Private Endpoint"
+    } else {
+        Write-Host "  ⚠️  Could not disable public network access automatically. Disable it manually:" -ForegroundColor Yellow
+        Write-Host "     az webapp update --name $WebAppName --resource-group $ResourceGroupName --set publicNetworkAccess=Disabled" -ForegroundColor Yellow
+    }
     Write-Host ""
 }
 
@@ -2497,18 +2423,14 @@ $mgScope     = "/providers/Microsoft.Management/managementGroups/$EntraTenantId"
 $openaiRgForScope  = if ($OpenAIMode -eq "Existing" -and -not [string]::IsNullOrWhiteSpace($OpenAIResourceGroup))    { $OpenAIResourceGroup    } else { $ResourceGroupName }
 $openaiSubForScope = if ($OpenAIMode -eq "Existing" -and -not [string]::IsNullOrWhiteSpace($OpenAISubscriptionId))   { $OpenAISubscriptionId   } else { $SubscriptionId    }
 $openaiScope = "/subscriptions/$openaiSubForScope/resourceGroups/$openaiRgForScope/providers/Microsoft.CognitiveServices/accounts/$OpenAIResourceName"
-# Reservations Reader accepts EXACTLY this scope - it is not assignable at MG or subscription level.
-$capacityScope = "/providers/Microsoft.Capacity"
 $miRbacRef = @(
     @{ Role = "Reader";                         Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "Resource Graph / inventory reads across all subscriptions" },
     @{ Role = "Cost Management Reader";          Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "Cost analysis, spend trends, budgets" },
-    @{ Role = "Monitoring Reader";               Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "CPU / memory / network metrics for right-sizing" },
-    @{ Role = "Log Analytics Reader";            Scope = $mgScope;     ScopeLabel = "Tenant Root MG (ALL subscriptions)"; Purpose = "Query workspace Usage tables for per-table Sentinel / Log Analytics ingestion cost" },
     @{ Role = "Cognitive Services OpenAI User";  Scope = $openaiScope; ScopeLabel = "Azure OpenAI resource ONLY";         Purpose = "Call the deployed model for chat completions" },
     @{ Role = "Management Group Reader";         Scope = $mgScope;     ScopeLabel = "Tenant Root MG";                     Purpose = "List management groups in the hierarchy dropdown" },
-    @{ Role = "Reservations Reader";            Scope = $capacityScope; ScopeLabel = "/providers/Microsoft.Capacity";     Purpose = "Read Reserved Instances inventory & recommendations" }
+    @{ Role = "Reservations Reader";            Scope = $mgScope;     ScopeLabel = "Tenant Root MG";                     Purpose = "Read Reserved Instances inventory & recommendations" }
 )
-$permIssues = @()   # collects { Kind, Name, Scope, Command } for anything not auto-assigned
+if (-not $permIssues) { $permIssues = @() }   # collects { Kind, Name, Scope, Command } for anything not auto-assigned; the cost-export step above may already have added entries
 $openaiGrantFailed = $false   # set true if the app MI could not be granted OpenAI access (customer must grant it)
 $openaiGrantCmd = ""          # exact command the customer runs to grant that access
 
@@ -2525,18 +2447,6 @@ $roles = @(
         Scope = "/providers/Microsoft.Management/managementGroups/$EntraTenantId"
         ScopeDescription = "Tenant Root Management Group (inherits to ALL subscriptions)"
         Justification = "Required for cost analysis, spending trends, and budget monitoring across ALL subscriptions"
-    },
-    @{
-        Name = "Monitoring Reader"
-        Scope = "/providers/Microsoft.Management/managementGroups/$EntraTenantId"
-        ScopeDescription = "Tenant Root Management Group (inherits to ALL subscriptions)"
-        Justification = "Required for CPU / memory / network metrics behind right-sizing and performance views"
-    },
-    @{
-        Name = "Log Analytics Reader"
-        Scope = "/providers/Microsoft.Management/managementGroups/$EntraTenantId"
-        ScopeDescription = "Tenant Root Management Group (inherits to ALL subscriptions)"
-        Justification = "Required to query each workspace's Usage table for per-table Sentinel / Log Analytics ingestion cost"
     }
 )
 
@@ -2568,9 +2478,9 @@ foreach ($role in $roles) {
 $subList = @($SubscriptionIdsCsv -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($subList.Count -gt 0) {
     Write-Host ""
-    Write-Info "Ensuring Reader + Cost Management Reader + Monitoring Reader + Log Analytics Reader on each target subscription ($($subList.Count))..."
+    Write-Info "Ensuring Reader + Cost Management Reader on each target subscription ($($subList.Count))..."
     foreach ($sid in $subList) {
-        foreach ($roleName in @("Reader", "Cost Management Reader", "Monitoring Reader", "Log Analytics Reader")) {
+        foreach ($roleName in @("Reader", "Cost Management Reader")) {
             $subAssign = az role assignment create --assignee $principalId --role $roleName --scope "/subscriptions/$sid" --output none 2>&1
             if ($LASTEXITCODE -eq 0 -or $subAssign -match "already exists") {
                 Write-Success "$roleName on $sid"
@@ -2645,26 +2555,22 @@ if ($LASTEXITCODE -eq 0 -or $mgResult -match "already exists") {
 # Reservations Reader
 Write-Host ""
 Write-Host "  Role: Reservations Reader" -ForegroundColor Cyan
-Write-Host "    Scope: /providers/Microsoft.Capacity" -ForegroundColor White
+Write-Host "    Scope: Tenant Root Management Group" -ForegroundColor White
 Write-Host "    Purpose: Read Reserved Instances inventory and recommendations" -ForegroundColor Gray
 Write-Host ""
 
-# assignableScopes for this role is EXACTLY ["/providers/Microsoft.Capacity"], so assigning it at
-# management-group or subscription scope always fails. Use the role definition ID to dodge any
-# display-name lookup that is itself scope-bound.
-Write-Info "Assigning 'Reservations Reader' at /providers/Microsoft.Capacity scope..."
+Write-Info "Assigning 'Reservations Reader' at Tenant Root scope..."
 $riResult = az role assignment create `
-    --assignee-object-id $principalId `
-    --assignee-principal-type ServicePrincipal `
-    --role "582fc458-8989-419f-a480-75249bc5db7e" `
-    --scope $capacityScope `
+    --assignee $principalId `
+    --role "Reservations Reader" `
+    --scope "/providers/Microsoft.Management/managementGroups/$EntraTenantId" `
     --output none 2>&1
 
 if ($LASTEXITCODE -eq 0 -or $riResult -match "already exists") {
-    Write-Success "Reservations Reader - Assigned (/providers/Microsoft.Capacity)"
+    Write-Success "Reservations Reader - Assigned (Tenant Root scope)"
 } else {
-    Write-Host "  WARNING: Could not assign Reservations Reader (requires elevated permissions)" -ForegroundColor Yellow
-    $permIssues += @{ Kind = "RBAC"; Name = "Reservations Reader"; Scope = $capacityScope; Command = "az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal --role 582fc458-8989-419f-a480-75249bc5db7e --scope `"$capacityScope`"" }
+    Write-Host "  ⚠️  Could not assign Reservations Reader (requires elevated permissions)" -ForegroundColor Yellow
+    $permIssues += @{ Kind = "RBAC"; Name = "Reservations Reader"; Scope = "Tenant Root MG"; Command = "az role assignment create --assignee $principalId --role `"Reservations Reader`" --scope `"$mgScope`"" }
 }
 
 Write-Host ""
@@ -2683,19 +2589,9 @@ $graphPermissions = @(
     @{ Name = "User.Read.All";        Id = "df021288-bdef-4463-88db-98f22de89214"; Purpose = "Read all user profiles and sign-in activity" },
     @{ Name = "Directory.Read.All";   Id = "7ab1d382-f21e-4acd-a863-ba3e13f7da61"; Purpose = "Read directory data (users, groups, roles)" },
     @{ Name = "Group.Read.All";       Id = "5b567255-7703-4780-807c-7be8301ae99b"; Purpose = "Read all groups and memberships" },
-    @{ Name = "Device.Read.All";      Id = "7438b122-aefc-4978-80ed-43db9fcc7715"; Purpose = "Read Entra-registered / Intune device inventory" },
     @{ Name = "Application.Read.All"; Id = "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30"; Purpose = "Read all app registrations" },
     @{ Name = "AuditLog.Read.All";    Id = "b0afded3-3588-46d8-8b3d-9842eff778da"; Purpose = "Read audit logs and sign-in reports" },
-    @{ Name = "Policy.Read.All";      Id = "246dd0d5-5bd0-4def-940b-0421030a5b68"; Purpose = "Read Conditional Access policies" },
-    # ── Microsoft 365 Security Operations dashboard (Defender XDR / Entra ID Protection / Intune) ──
-    # Without these the dashboard cannot call Graph and silently renders SAMPLE data instead.
-    @{ Name = "SecurityEvents.Read.All";                   Id = "bf394140-e372-4bf9-a898-299cfc7564e5"; Purpose = "Microsoft Secure Score" },
-    @{ Name = "SecurityIncident.Read.All";                 Id = "45cc0394-e837-488b-a098-1918f48d186c"; Purpose = "Defender XDR incidents" },
-    @{ Name = "SecurityAlert.Read.All";                    Id = "472e4a4d-bb4a-4026-98d1-0b0d74cb74a5"; Purpose = "Defender XDR alerts" },
-    @{ Name = "IdentityRiskyUser.Read.All";                Id = "dc5007c0-2d7d-4c42-879c-2dab87571379"; Purpose = "Entra ID Protection risky users" },
-    @{ Name = "IdentityRiskEvent.Read.All";                Id = "6e472fd1-ad78-48da-a0f0-97ab2c6b769e"; Purpose = "Entra ID Protection risk detections" },
-    @{ Name = "DeviceManagementManagedDevices.Read.All";   Id = "2f51be20-0bb4-4fed-bf7b-db946066c75e"; Purpose = "Intune device compliance inventory" },
-    @{ Name = "Reports.Read.All";                          Id = "230c1aed-a721-4c5d-9cb4-a90514e508ef"; Purpose = "MFA registration / authentication method reports" }
+    @{ Name = "Policy.Read.All";      Id = "246dd0d5-5bd0-4def-940b-0421030a5b68"; Purpose = "Read Conditional Access policies" }
 )
 
 Write-Host ""
@@ -2743,36 +2639,27 @@ if ([string]::IsNullOrEmpty($spObjectId)) {
         foreach ($perm in $graphPermissions) {
             Write-Host "    • $($perm.Name) - $($perm.Purpose)" -ForegroundColor Gray
             
-            # PowerShell mangles the quoting of an inline `az rest --body` JSON string, so Graph
-            # rejects it with "Unable to read JSON request payload" and EVERY grant fails silently.
-            # Writing the body to a BOM-less file and passing @file is the only reliable form.
+            # Create the app role assignment using Microsoft Graph REST API
             $body = @{
                 principalId = $spObjectId
                 resourceId = $graphEnterpriseAppId
                 appRoleId = $perm.Id
             } | ConvertTo-Json -Compress
-            $graphBodyFile = Join-Path $env:TEMP "graph-approle-$([guid]::NewGuid().ToString('N')).json"
-            $body | Out-File -FilePath $graphBodyFile -Encoding ascii -Force
-
+            
+            # Use az rest to call Graph API
             $assignResult = az rest --method POST `
                 --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$spObjectId/appRoleAssignments" `
                 --headers "Content-Type=application/json" `
-                --body "@$graphBodyFile" 2>&1
-            $assignExit = $LASTEXITCODE
-            Remove-Item $graphBodyFile -Force -ErrorAction SilentlyContinue
+                --body $body 2>&1
             
-            if ($assignExit -eq 0) {
+            if ($LASTEXITCODE -eq 0) {
                 Write-Success "    $($perm.Name) - Assigned"
             } elseif ($assignResult -match "Permission being assigned already exists") {
                 Write-Info "    $($perm.Name) - Already assigned"
             } else {
-                # Print the real Graph error instead of a generic guess - masking it is what hid
-                # the fact that none of these were ever being granted.
-                $firstErr = ($assignResult | Out-String).Trim() -split "`n" | Select-Object -First 1
-                Write-Host "    WARNING: $($perm.Name) - not assigned: $firstErr" -ForegroundColor Yellow
-                # Same file-based form as above; an inline --body will fail for the admin too.
-                $refCmd = "`$b='{`"principalId`":`"$spObjectId`",`"resourceId`":`"$graphEnterpriseAppId`",`"appRoleId`":`"$($perm.Id)`"}'; `$f=Join-Path `$env:TEMP 'graph.json'; `$b | Out-File `$f -Encoding ascii; az rest --method POST --uri `"https://graph.microsoft.com/v1.0/servicePrincipals/$spObjectId/appRoleAssignments`" --headers `"Content-Type=application/json`" --body `"@`$f`""
-                $permIssues += @{ Kind = "Graph"; Name = $perm.Name; Scope = "Microsoft Graph (application permission)"; Command = $refCmd }
+                Write-Host "    ⚠️  $($perm.Name) - Could not assign (may require admin consent)" -ForegroundColor Yellow
+                $refBody = "{`"principalId`":`"$spObjectId`",`"resourceId`":`"$graphEnterpriseAppId`",`"appRoleId`":`"$($perm.Id)`"}"
+                $permIssues += @{ Kind = "Graph"; Name = $perm.Name; Scope = "Microsoft Graph (application permission)"; Command = "az rest --method POST --uri `"https://graph.microsoft.com/v1.0/servicePrincipals/$spObjectId/appRoleAssignments`" --headers `"Content-Type=application/json`" --body '$refBody'" }
             }
         }
         
@@ -2879,74 +2766,6 @@ if (-not [string]::IsNullOrWhiteSpace($EntraAppClientId)) {
 }
 
 # ============================================
-# VERIFY THE APPLICATION RESPONDS
-# Probed while the public endpoint is still reachable, so a broken deployment surfaces
-# here rather than after the app has been sealed behind its Private Endpoint.
-# ============================================
-Write-Step "Step 13: Verifying Application Health"
-
-$healthUrl = "https://$appUrl/api/auth/config"
-$healthOk = $false
-# In Private mode the probe is only informational (the Private Endpoint makes the
-# hostname resolve to a private IP), so don't spend long on it.
-$healthAttempts = if ($DeploymentMode -eq "Private") { 4 } else { 12 }
-Write-Info "Probing $healthUrl ..."
-foreach ($attempt in 1..$healthAttempts) {
-    try {
-        $resp = Invoke-WebRequest -Uri $healthUrl -Method GET -TimeoutSec 20 -UseBasicParsing -ErrorAction Stop
-        if ($resp.StatusCode -eq 200) { $healthOk = $true; break }
-    } catch {
-        $status = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
-        # An auth challenge still proves the app started and is serving requests.
-        if ($status -eq 401 -or $status -eq 403) { $healthOk = $true; break }
-    }
-    if ($attempt -lt $healthAttempts) { Start-Sleep -Seconds 15 }
-}
-
-if ($healthOk) {
-    Write-Success "Application responded successfully: https://$appUrl"
-} elseif ($DeploymentMode -eq "Private") {
-    Write-Host "  No response from the public hostname (probe inconclusive)." -ForegroundColor Yellow
-    Write-Host "     This is EXPECTED when running from outside the VNet - the Web App Private Endpoint" -ForegroundColor Gray
-    Write-Host "     makes $appUrl resolve to a private IP. Browse the URL from a VNet-connected host." -ForegroundColor Gray
-} else {
-    Write-Host "  WARNING: the app did not respond yet - it may still be warming up after the restart." -ForegroundColor Yellow
-    Write-Host "     Check: az webapp log tail --name $WebAppName --resource-group $ResourceGroupName" -ForegroundColor Yellow
-}
-Write-Host ""
-
-# ============================================
-# LOCK DOWN PUBLIC ACCESS (PRIVATE MODE)
-# Deliberately the LAST action of the deployment. Everything before it - the Oryx code
-# deploy, RBAC, Graph permissions, the SQL grant, the restart, the Entra redirect URI and
-# the health probe - runs while the app is still publicly reachable, so nothing is sealed
-# off until the deployment has actually succeeded.
-# ============================================
-if ($DeploymentMode -eq "Private") {
-    Write-Step "Step 14: Disabling Public Network Access on Web App"
-    Write-Info "Deployment complete - sealing the Web App behind its Private Endpoint..."
-    $webAppResourceIdLockdown = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Web/sites/$WebAppName"
-    az webapp update `
-        --name $WebAppName `
-        --resource-group $ResourceGroupName `
-        --set publicNetworkAccess=Disabled `
-        --output none 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        az resource update `
-            --ids $webAppResourceIdLockdown `
-            --set properties.publicNetworkAccess=Disabled `
-            --output none 2>$null
-    }
-    if ($LASTEXITCODE -eq 0) {
-        Write-Success "Public network access disabled - Web App is now reachable only via the Private Endpoint"
-    } else {
-        Write-Host "  WARNING: Could not disable public network access automatically. Disable it manually:" -ForegroundColor Yellow
-        Write-Host "     az webapp update --name $WebAppName --resource-group $ResourceGroupName --set publicNetworkAccess=Disabled" -ForegroundColor Yellow
-    }
-    Write-Host ""
-}
-
-# ============================================
 # DEPLOYMENT SUMMARY
 # ============================================
 Write-Host ""
@@ -2980,6 +2799,9 @@ if ($DeploySql) {
     Write-Host "  Azure SQL Database:    $SqlDatabaseName (SKU: $SqlServiceObjective, ${SqlMaxSizeGb}GB)" -ForegroundColor White
     Write-Host "  SQL Zone Redundant:    $SqlZoneRedundant  |  Backup: $SqlBackupStorageRedundancy" -ForegroundColor White
 }
+if (-not [string]::IsNullOrWhiteSpace($costExportStorageId)) {
+    Write-Host "  Cost Export Storage:   $CostExportStorageAccountName / $CostExportContainerName (FinOps cost data)" -ForegroundColor White
+}
 
 if ($DeploymentMode -eq "Private") {
     Write-Host "" -ForegroundColor White
@@ -2991,6 +2813,9 @@ if ($DeploymentMode -eq "Private") {
     Write-Host "" -ForegroundColor White
     Write-Host "  🔗 PRIVATE ENDPOINTS" -ForegroundColor Magenta
     Write-Host "  Azure OpenAI PE:       ${OpenAIResourceName}-pe" -ForegroundColor White
+    if (-not [string]::IsNullOrWhiteSpace($costExportStorageId)) {
+        Write-Host "  Cost Export Blob PE:   ${CostExportStorageAccountName}-pe (trusted Azure services allowed so exports can write)" -ForegroundColor White
+    }
     Write-Host "  Web App PE:            ${WebAppName}-pe" -ForegroundColor White
     Write-Host "" -ForegroundColor White
     Write-Host "  🌐 PRIVATE DNS ZONES" -ForegroundColor Magenta

@@ -17,8 +17,6 @@ import {
   Lightbulb, HeartPulse, ShieldCheck, Wand2, ClipboardList,
 } from 'lucide-react';
 import { getJSON } from './mgmt/MgmtWidgets';
-import AIControlsBar, { EMPTY_AI_CONTROLS, aiControlsQuery } from './ai/AIAnalysisTools';
-import { asText } from '../utils/safeText';
 
 // Per-category presentation metadata (icon + accent). Keyed by backend `key`.
 const MODULE_META = {
@@ -147,7 +145,7 @@ function ExecutiveBriefing({ briefing, loading, error, canGenerate, analyzedCoun
     <div style={{ ...panel, padding: 16, background: 'linear-gradient(135deg,var(--c-0f172a),var(--c-131c33))', borderColor: 'var(--c-312e81)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <div style={{ width: 30, height: 30, borderRadius: 8, background: '#6366f133', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Sparkles size={16} style={{ color: 'var(--c-a5b4fc)' }} />
+          <Sparkles size={16} style={{ color: '#a5b4fc' }} />
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ color: 'var(--c-f1f5f9)', fontWeight: 700, fontSize: 14 }}>AI Executive Briefing</div>
@@ -174,7 +172,7 @@ function ExecutiveBriefing({ briefing, loading, error, canGenerate, analyzedCoun
       )}
 
       {loading && !briefing && (
-        <div style={{ color: 'var(--c-a5b4fc)', fontSize: 12.5, padding: '6px 2px' }}>Reasoning across all analyzed categories… this can take up to ~2 minutes.</div>
+        <div style={{ color: '#a5b4fc', fontSize: 12.5, padding: '6px 2px' }}>Reasoning across all analyzed categories… this can take up to ~2 minutes.</div>
       )}
 
       {briefing && (
@@ -200,13 +198,13 @@ function ExecutiveBriefing({ briefing, loading, error, canGenerate, analyzedCoun
             <div>
               <div style={{ color: 'var(--c-94a3b8)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Top cross-cutting risks</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {(briefing?.top_cross_cutting_risks || []).slice(0, 5).map((r, i) => (
+                {briefing.top_cross_cutting_risks.slice(0, 5).map((r, i) => (
                   <div key={i} style={{ background: 'var(--c-0b1220)', border: '1px solid var(--c-1e293b)', borderLeft: `3px solid ${riskColor(r.severity)}`, borderRadius: 8, padding: '8px 12px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 9.5, fontWeight: 700, color: riskColor(r.severity), textTransform: 'uppercase' }}>{r.severity}</span>
                       <span style={{ color: 'var(--c-f1f5f9)', fontWeight: 600, fontSize: 12.5 }}>{r.title}</span>
                       {(r.categories || []).map((c, j) => (
-                        <span key={j} style={{ fontSize: 9.5, color: 'var(--c-94a3b8)', background: 'var(--c-1e293b)', borderRadius: 4, padding: '0 6px' }}>{asText(c)}</span>
+                        <span key={j} style={{ fontSize: 9.5, color: 'var(--c-94a3b8)', background: 'var(--c-1e293b)', borderRadius: 4, padding: '0 6px' }}>{c}</span>
                       ))}
                     </div>
                     {r.detail && <div style={{ color: 'var(--c-94a3b8)', fontSize: 11.5, marginTop: 3, lineHeight: 1.45 }}>{r.detail}</div>}
@@ -226,7 +224,7 @@ function ExecutiveBriefing({ briefing, loading, error, canGenerate, analyzedCoun
                   <div key={b.key} style={{ background: 'var(--c-0b1220)', border: '1px solid var(--c-1e293b)', borderRadius: 8, padding: '10px 12px' }}>
                     <div style={{ color: b.color, fontSize: 11, fontWeight: 700, marginBottom: 6 }}>{b.label}</div>
                     <ul style={{ margin: 0, paddingLeft: 16, color: 'var(--c-cbd5e1)', fontSize: 11.5, lineHeight: 1.5 }}>
-                      {(roadmap[b.key] || []).slice(0, 5).map((a, i) => <li key={i} style={{ marginBottom: 4 }}>{asText(a)}</li>)}
+                      {(roadmap[b.key] || []).slice(0, 5).map((a, i) => <li key={i} style={{ marginBottom: 4 }}>{a}</li>)}
                       {!(roadmap[b.key] || []).length && <li style={{ color: 'var(--c-475569)', listStyle: 'none', marginLeft: -12 }}>—</li>}
                     </ul>
                   </div>
@@ -263,7 +261,6 @@ export default function AIInsightsDashboard({ onNavigate }) {
   const [briefing, setBriefing] = useState(null);
   const [briefingLoading, setBriefingLoading] = useState(false);
   const [briefingError, setBriefingError] = useState(null);
-  const [aiControls, setAiControls] = useState(EMPTY_AI_CONTROLS);
 
   const load = useCallback(async () => {
     try {
@@ -301,8 +298,7 @@ export default function AIInsightsDashboard({ onNavigate }) {
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 240000);
-      const sep = m.endpoint.includes('?') ? '' : '?_=1';
-      const res = await fetch(`${m.endpoint}${sep}${aiControlsQuery(aiControls)}`, { signal: ctrl.signal });
+      const res = await fetch(m.endpoint, { signal: ctrl.signal });
       clearTimeout(t);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await res.json();
@@ -312,7 +308,7 @@ export default function AIInsightsDashboard({ onNavigate }) {
     } finally {
       setBusyKeys((p) => { const n = { ...p }; delete n[m.key]; return n; });
     }
-  }, [load, aiControls]);
+  }, [load]);
 
   const generateAll = useCallback(async () => {
     const missing = (data?.modules || []).filter((m) => !m.available);
@@ -333,7 +329,7 @@ export default function AIInsightsDashboard({ onNavigate }) {
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 240000);
-      const res = await fetch(`/api/ai/executive-briefing?refresh=true${aiControlsQuery(aiControls)}`, { signal: ctrl.signal });
+      const res = await fetch('/api/ai/executive-briefing?refresh=true', { signal: ctrl.signal });
       clearTimeout(t);
       const b = await res.json();
       if (b.error) setBriefingError(b.error);
@@ -343,7 +339,7 @@ export default function AIInsightsDashboard({ onNavigate }) {
     } finally {
       setBriefingLoading(false);
     }
-  }, [aiControls]);
+  }, []);
 
   const openModule = useCallback((m) => {
     onNavigate?.(m.view);
@@ -402,15 +398,6 @@ export default function AIInsightsDashboard({ onNavigate }) {
           Couldn't load AI insights: {error}
         </div>
       )}
-
-      {/* Focus applies to the briefing AND to every category card generated below. */}
-      <AIControlsBar
-        title="AI Insights"
-        report={briefing}
-        value={aiControls}
-        busy={briefingLoading}
-        onApply={next => setAiControls(next)}
-      />
 
       {/* Executive briefing */}
       <div style={{ marginBottom: 14 }}>

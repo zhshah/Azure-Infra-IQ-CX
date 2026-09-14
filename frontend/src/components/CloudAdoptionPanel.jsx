@@ -1,7 +1,5 @@
 import React, { useState, useMemo, useCallback } from "react";
-import AIControlsBar, { EMPTY_AI_CONTROLS, aiControlsQuery } from "./ai/AIAnalysisTools";
 import { ResourceIconImg } from "../utils/resourceIcons";
-import { asText } from '../utils/safeText';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -362,12 +360,12 @@ function MigrationSummaryCards({ categories }) {
           </div>
 
           <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-            {(card?.benefits || []).map(b => (
-              <span key={asText(b)} style={{
+            {card.benefits.map(b => (
+              <span key={b} style={{
                 background: `${card.color}10`, color: `${card.color}cc`,
                 fontSize: 9, fontWeight: 600, padding: "2px 7px",
                 borderRadius: 8, border: `1px solid ${card.color}20`,
-              }}>{asText(b)}</span>
+              }}>{b}</span>
             ))}
           </div>
         </div>
@@ -547,15 +545,15 @@ function AdoptionCard({ gap }) {
             <div style={{ marginTop: 10, background: "var(--c-1e293b)", borderRadius: 10, padding: "14px 16px", border: "1px solid var(--c-334155)" }}>
 
               {/* Steps */}
-              {gap.implementation_steps && (gap?.implementation_steps || []).length > 0 && (
+              {gap.implementation_steps && gap.implementation_steps.length > 0 && (
                 <div style={{ marginBottom: 14 }}>
                   <div style={{ color: "#22c55e", fontSize: 11, fontWeight: 600, marginBottom: 8 }}>
                     Migration Steps
                   </div>
                   <ol style={{ margin: 0, paddingLeft: 18 }}>
-                    {(gap?.implementation_steps || []).map((step, i) => (
+                    {gap.implementation_steps.map((step, i) => (
                       <li key={i} style={{ color: "var(--c-94a3b8)", fontSize: 12, lineHeight: 1.7, marginBottom: 2 }}>
-                        {asText(step)}
+                        {step}
                       </li>
                     ))}
                   </ol>
@@ -757,7 +755,7 @@ function AIAdoptionAnalysis({ data, loading, error, onRun }) {
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
                     {(opp.benefits || []).map((b, j) => (
-                      <span key={j} style={{ background: "var(--c-0f172a)", color: "var(--c-94a3b8)", fontSize: 9, padding: "2px 7px", borderRadius: 8, border: "1px solid var(--c-334155)" }}>{asText(b)}</span>
+                      <span key={j} style={{ background: "var(--c-0f172a)", color: "var(--c-94a3b8)", fontSize: 9, padding: "2px 7px", borderRadius: 8, border: "1px solid var(--c-334155)" }}>{b}</span>
                     ))}
                     {opp.effort_weeks && (
                       <span style={{ background: "var(--c-0f172a)", color: "#eab308", fontSize: 9, padding: "2px 7px", borderRadius: 8, border: "1px solid #eab30825" }}>
@@ -765,9 +763,9 @@ function AIAdoptionAnalysis({ data, loading, error, onRun }) {
                       </span>
                     )}
                   </div>
-                  {opp.steps && (opp?.steps || []).length > 0 && (
+                  {opp.steps && opp.steps.length > 0 && (
                     <div style={{ color: "var(--c-64748b)", fontSize: 10, lineHeight: 1.6 }}>
-                      {(opp?.steps || []).map((s, j) => <div key={j}>• {asText(s)}</div>)}
+                      {opp.steps.map((s, j) => <div key={j}>• {s}</div>)}
                     </div>
                   )}
                 </div>
@@ -795,7 +793,7 @@ function AIAdoptionAnalysis({ data, loading, error, onRun }) {
                   </div>
                   <div style={{ color: "var(--c-e2e8f0)", fontSize: 11, fontWeight: 600, marginBottom: 8 }}>{wave.theme}</div>
                   {(wave.actions || []).map((a, j) => (
-                    <div key={j} style={{ color: "var(--c-94a3b8)", fontSize: 10, lineHeight: 1.6 }}>• {asText(a)}</div>
+                    <div key={j} style={{ color: "var(--c-94a3b8)", fontSize: 10, lineHeight: 1.6 }}>• {a}</div>
                   ))}
                   {wave.expected_savings > 0 && (
                     <div style={{ color: "#22c55e", fontSize: 10, fontWeight: 600, marginTop: 6 }}>
@@ -852,9 +850,9 @@ function AIAdoptionAnalysis({ data, loading, error, onRun }) {
                   </div>
                   <div style={{ color: "var(--c-e2e8f0)", fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{rec.title}</div>
                   <div style={{ color: "var(--c-64748b)", fontSize: 11, lineHeight: 1.5 }}>{rec.description}</div>
-                  {rec.affected_resources && (rec?.affected_resources || []).length > 0 && (
+                  {rec.affected_resources && rec.affected_resources.length > 0 && (
                     <div style={{ marginTop: 6, color: "var(--c-475569)", fontSize: 10 }}>
-                      Resources: {(rec?.affected_resources || []).slice(0, 3).join(", ")}{(rec?.affected_resources || []).length > 3 ? ` +${(rec?.affected_resources || []).length - 3} more` : ""}
+                      Resources: {rec.affected_resources.slice(0, 3).join(", ")}{rec.affected_resources.length > 3 ? ` +${rec.affected_resources.length - 3} more` : ""}
                     </div>
                   )}
                 </div>
@@ -876,7 +874,6 @@ export default function CloudAdoptionPanel({ acrOpportunities }) {
   const [filterImpact,  setFilterImpact] = useState("all");
   const [aiData,        setAiData]       = useState(null);
   const [aiLoading,     setAiLoading]    = useState(false);
-  const [aiControls,    setAiControls]   = useState(EMPTY_AI_CONTROLS);
   const [aiError,       setAiError]      = useState(null);
 
   const opps     = acrOpportunities;
@@ -892,11 +889,11 @@ export default function CloudAdoptionPanel({ acrOpportunities }) {
     });
   }, [allGaps, filterSev, filterCat, filterImpact]);
 
-  const runAiAnalysis = useCallback(async (refresh = false, ctl = aiControls) => {
+  const runAiAnalysis = useCallback(async (refresh = false) => {
     setAiLoading(true);
     setAiError(null);
     try {
-      const res = await fetch(`/api/ai/cloud-adoption?refresh=${refresh}${aiControlsQuery(ctl)}`);
+      const res = await fetch(`/api/ai/cloud-adoption?refresh=${refresh}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (json.error) throw new Error(json.error);
@@ -906,7 +903,7 @@ export default function CloudAdoptionPanel({ acrOpportunities }) {
     } finally {
       setAiLoading(false);
     }
-  }, [aiControls]);
+  }, []);
 
   if (!opps) {
     return (
@@ -995,16 +992,7 @@ export default function CloudAdoptionPanel({ acrOpportunities }) {
 
       {/* ── AI Deep Analysis Tab ─────────────────────────────────────────── */}
       {activeTab === "ai" && (
-        <>
-          <AIControlsBar
-            title="Cloud Adoption AI Analysis"
-            report={aiData}
-            value={aiControls}
-            busy={aiLoading}
-            onApply={next => { setAiControls(next); runAiAnalysis(true, next); }}
-          />
-          <AIAdoptionAnalysis data={aiData} loading={aiLoading} error={aiError} onRun={runAiAnalysis} />
-        </>
+        <AIAdoptionAnalysis data={aiData} loading={aiLoading} error={aiError} onRun={runAiAnalysis} />
       )}
 
       {/* ── Findings Tab ──────────────────────────────────────────────────── */}

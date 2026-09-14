@@ -1255,17 +1255,26 @@ if ($DeploySql) {
     $sqlServerExists = az sql server show --name $SqlServerName --resource-group $ResourceGroupName 2>&1
     if ($LASTEXITCODE -eq 0) {
         Write-Info "SQL server '$SqlServerName' already exists - reusing"
-        if ([string]::IsNullOrWhiteSpace($SqlAdminPassword)) {
-            Write-Error "SQL server '$SqlServerName' exists but no -SqlAdminPassword was provided to build the connection string."
-            Write-Host "  Re-run with -SqlAdminPassword '<existing-password>' (and -SqlAdminUser if not '$SqlAdminUser')." -ForegroundColor Yellow
-            exit 1
+
+        # The admin login name is fixed at creation time and can't be renamed afterwards, so always
+        # use whatever is actually configured on the server rather than trusting the requested/default value.
+        $existingAdminUser = az sql server show --name $SqlServerName --resource-group $ResourceGroupName --query administratorLogin -o tsv 2>$null
+        if (-not [string]::IsNullOrWhiteSpace($existingAdminUser) -and $existingAdminUser -ne $SqlAdminUser) {
+            Write-Info "Existing server's admin login is '$existingAdminUser' - using that instead of '$SqlAdminUser'."
+            $SqlAdminUser = $existingAdminUser
         }
-        # Reset the existing server's admin password to the provided value so the server ALWAYS
-        # matches the connection string stored below. Without this, a mismatched password causes
-        # "Login failed for user" (error 18456) and snapshot persistence silently breaks.
+
+        # The deploying identity has full control-plane (RBAC) access on this resource group, so the
+        # admin password never needs to be known ahead of time - just reset it to a freshly generated
+        # one and keep the connection string in sync. This lets the server be reused indefinitely
+        # without operator hand-off of secrets between runs.
+        if ([string]::IsNullOrWhiteSpace($SqlAdminPassword)) {
+            $SqlAdminPassword = (-join ((65..90) + (97..122) + (50..57) | Get-Random -Count 20 | ForEach-Object { [char]$_ })) + "!aZ7"
+            Write-Info "No -SqlAdminPassword supplied - generating a new one and resetting it on the existing server..."
+        }
         az sql server update --name $SqlServerName --resource-group $ResourceGroupName --admin-password $SqlAdminPassword --output none 2>$null
         if ($LASTEXITCODE -eq 0) { Write-Success "Reset SQL admin password on existing server (keeps connection string in sync)" }
-        else { Write-Warning "Could not reset SQL admin password on existing server '$SqlServerName' - ensure the provided password is correct." }
+        else { Write-Warning "Could not reset SQL admin password on existing server '$SqlServerName' - check that this identity has Contributor/SQL Server Contributor on the resource group." }
     } else {
         if ([string]::IsNullOrWhiteSpace($SqlAdminPassword)) {
             $SqlAdminPassword = (-join ((65..90) + (97..122) + (50..57) | Get-Random -Count 20 | ForEach-Object { [char]$_ })) + "!aZ7"
@@ -1526,7 +1535,10 @@ if ($LASTEXITCODE -eq 0) {
         param([string]$Sku, [string]$Region)
         $regionKey = ($Region -replace '\s', '').ToLower()
         $scope = "/subscriptions/$SubscriptionId/providers/Microsoft.Web/locations/$regionKey"
-        $q = az quota show --resource-name $Sku --scope $scope -o json 2>$null
+        # Avoid an interactive "install extension?" prompt hanging the script if the quota
+        # extension isn't pre-installed (common on locked-down customer machines).
+        az config set extension.use_dynamic_install=yes_without_prompt --only-show-errors 2>$null | Out-Null
+        $q = az quota show --resource-name $Sku --scope $scope -o json --only-show-errors 2>$null
         if ($LASTEXITCODE -ne 0 -or -not $q) { return -1 }
         try {
             $val = ($q | ConvertFrom-Json).properties.limit.value

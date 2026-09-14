@@ -26,32 +26,6 @@ logger = logging.getLogger(__name__)
 _PAGE_SIZE = 1000
 
 
-class RGResult(list):
-    """A normal list of rows that also remembers whether the query actually succeeded.
-
-    A failed Resource Graph query used to return a bare ``[]``, so every caller read
-    "the query broke" as "this estate has none of those" — which is how a dead credential
-    became "0 security findings". Callers that care check ``.ok``; the other ~50 call
-    sites keep treating it as the plain list it still is.
-    """
-
-    __slots__ = ("ok", "error")
-
-    def __init__(self, rows=(), ok: bool = True, error: str = ""):
-        super().__init__(rows)
-        self.ok = ok
-        self.error = error
-
-
-def rg_ok(rows: Any) -> bool:
-    """True unless the rows came from a query that demonstrably failed."""
-    return getattr(rows, "ok", True)
-
-
-def rg_error(rows: Any) -> str:
-    return getattr(rows, "error", "")
-
-
 def query_resource_graph(
     kql: str,
     subscription_ids: Optional[List[str]] = None,
@@ -73,12 +47,11 @@ def query_resource_graph(
 
     if not sub_ids:
         logger.warning("No subscription IDs configured — skipping Resource Graph query")
-        return RGResult([], ok=False, error="No subscriptions are configured, so Azure was never queried.")
+        return []
 
     client = ResourceGraphClient(credential)
     all_rows: List[Dict[str, Any]] = []
     skip_token: Optional[str] = None
-    query_error = ""
 
     while True:
         options = QueryRequestOptions(
@@ -96,7 +69,6 @@ def query_resource_graph(
             response = client.resources(request)
         except Exception as exc:
             logger.error("Resource Graph query failed: %s\nKQL: %s", exc, kql[:200])
-            query_error = str(exc)
             break
 
         rows = response.data or []
@@ -111,7 +83,7 @@ def query_resource_graph(
             break
 
     logger.info("Resource Graph query returned %d rows", len(all_rows))
-    return RGResult(all_rows, ok=not query_error, error=query_error)
+    return all_rows
 
 
 # ── Pre-built KQL queries for dependency discovery ───────────────────────────

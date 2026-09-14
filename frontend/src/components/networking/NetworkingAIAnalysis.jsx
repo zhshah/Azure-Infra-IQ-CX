@@ -6,7 +6,6 @@ import {
   DollarSign, Activity, Network, Router, MapPin,
 } from 'lucide-react'
 import { api } from '../../api/client'
-import { asText } from '../../utils/safeText';
 
 // ── Badges ──────────────────────────────────────────────────────────────────
 
@@ -215,11 +214,11 @@ export default function NetworkingAIAnalysis() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <h5 className="text-xs font-semibold text-green-400 mb-1">Strengths</h5>
-              <ul className="space-y-1">{(architecture_assessment.strengths || []).map((s, i) => <li key={i} className="text-xs text-gray-300 flex gap-1"><CheckCircle className="w-3 h-3 text-green-400 mt-0.5 shrink-0" />{asText(s)}</li>)}</ul>
+              <ul className="space-y-1">{(architecture_assessment.strengths || []).map((s, i) => <li key={i} className="text-xs text-gray-300 flex gap-1"><CheckCircle className="w-3 h-3 text-green-400 mt-0.5 shrink-0" />{s}</li>)}</ul>
             </div>
             <div>
               <h5 className="text-xs font-semibold text-orange-400 mb-1">Weaknesses</h5>
-              <ul className="space-y-1">{(architecture_assessment.weaknesses || []).map((s, i) => <li key={i} className="text-xs text-gray-300 flex gap-1"><AlertTriangle className="w-3 h-3 text-orange-400 mt-0.5 shrink-0" />{asText(s)}</li>)}</ul>
+              <ul className="space-y-1">{(architecture_assessment.weaknesses || []).map((s, i) => <li key={i} className="text-xs text-gray-300 flex gap-1"><AlertTriangle className="w-3 h-3 text-orange-400 mt-0.5 shrink-0" />{s}</li>)}</ul>
             </div>
           </div>
         </CollapsibleSection>
@@ -253,12 +252,12 @@ export default function NetworkingAIAnalysis() {
                     {hub.nva_assessment && <p className="text-xs text-gray-400 mb-1"><span className="text-yellow-400">NVA:</span> {hub.nva_assessment}</p>}
                     {hub.issues && hub.issues.length > 0 && (
                       <div className="mt-2">
-                        {hub.issues.map((issue, i) => <p key={i} className="text-xs text-red-400 flex gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{asText(issue)}</p>)}
+                        {hub.issues.map((issue, i) => <p key={i} className="text-xs text-red-400 flex gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue}</p>)}
                       </div>
                     )}
                     {hub.recommendations && hub.recommendations.length > 0 && (
                       <div className="mt-1">
-                        {hub.recommendations.map((rec, i) => <p key={i} className="text-xs text-blue-400">→ {asText(rec)}</p>)}
+                        {hub.recommendations.map((rec, i) => <p key={i} className="text-xs text-blue-400">→ {rec}</p>)}
                       </div>
                     )}
                   </div>
@@ -279,7 +278,7 @@ export default function NetworkingAIAnalysis() {
               </div>
               {topology_assessment.spoke_assessment.issues && topology_assessment.spoke_assessment.issues.length > 0 && (
                 <ul className="space-y-1">
-                  {topology_assessment.spoke_assessment.issues.map((issue, i) => <li key={i} className="text-xs text-orange-400 flex gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{asText(issue)}</li>)}
+                  {topology_assessment.spoke_assessment.issues.map((issue, i) => <li key={i} className="text-xs text-orange-400 flex gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue}</li>)}
                 </ul>
               )}
             </div>
@@ -299,7 +298,7 @@ export default function NetworkingAIAnalysis() {
                 {topology_assessment.multi_region_assessment.latency_considerations && <p className="text-xs text-gray-400 mb-1"><span className="text-yellow-400">Latency:</span> {topology_assessment.multi_region_assessment.latency_considerations}</p>}
                 {topology_assessment.multi_region_assessment.recommendations && topology_assessment.multi_region_assessment.recommendations.length > 0 && (
                   <div className="mt-2">
-                    {topology_assessment.multi_region_assessment.recommendations.map((rec, i) => <p key={i} className="text-xs text-blue-400">→ {asText(rec)}</p>)}
+                    {topology_assessment.multi_region_assessment.recommendations.map((rec, i) => <p key={i} className="text-xs text-blue-400">→ {rec}</p>)}
                   </div>
                 )}
               </div>
@@ -316,7 +315,7 @@ export default function NetworkingAIAnalysis() {
                 <p className="text-xs text-gray-400 mb-1"><span className="text-yellow-400">Asymmetric Risk:</span> {topology_assessment.routing_assessment.asymmetric_routing_risk}</p>
                 {topology_assessment.routing_assessment.black_hole_risks && topology_assessment.routing_assessment.black_hole_risks.length > 0 && (
                   <div className="mt-1">
-                    {topology_assessment.routing_assessment.black_hole_risks.map((r, i) => <p key={i} className="text-xs text-red-400 flex gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{asText(r)}</p>)}
+                    {topology_assessment.routing_assessment.black_hole_risks.map((r, i) => <p key={i} className="text-xs text-red-400 flex gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{r}</p>)}
                   </div>
                 )}
               </div>
@@ -328,7 +327,7 @@ export default function NetworkingAIAnalysis() {
             <div className="mb-4">
               <h5 className="text-xs font-semibold text-red-400 mb-2">Blast Radius Analysis</h5>
               <div className="bg-red-900/10 border border-red-900/30 rounded-lg p-3">
-                {topology_assessment.blast_radius_analysis.single_points_of_failure.map((spf, i) => <p key={i} className="text-xs text-red-300 flex gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{asText(spf)}</p>)}
+                {topology_assessment.blast_radius_analysis.single_points_of_failure.map((spf, i) => <p key={i} className="text-xs text-red-300 flex gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{spf}</p>)}
                 {topology_assessment.blast_radius_analysis.max_blast_radius && <p className="text-xs text-gray-400 mt-2">Worst case: {topology_assessment.blast_radius_analysis.max_blast_radius}</p>}
               </div>
             </div>
@@ -432,7 +431,7 @@ export default function NetworkingAIAnalysis() {
               <p className="text-sm text-gray-300">Maturity: <span className="font-semibold text-cyan-300">{zero_trust_assessment.maturity_level}</span></p>
               {zero_trust_assessment.gaps && (
                 <ul className="mt-2 space-y-1">
-                  {zero_trust_assessment.gaps.map((g, i) => <li key={i} className="text-xs text-gray-400 flex gap-1"><AlertTriangle className="w-3 h-3 text-yellow-400 mt-0.5 shrink-0" />{asText(g)}</li>)}
+                  {zero_trust_assessment.gaps.map((g, i) => <li key={i} className="text-xs text-gray-400 flex gap-1"><AlertTriangle className="w-3 h-3 text-yellow-400 mt-0.5 shrink-0" />{g}</li>)}
                 </ul>
               )}
             </div>
@@ -456,7 +455,7 @@ export default function NetworkingAIAnalysis() {
                 <p className="text-xs text-gray-400 mt-1">{rec.description}</p>
                 {rec.implementation_steps && (
                   <ul className="mt-2 space-y-0.5">
-                    {rec.implementation_steps.map((s, i) => <li key={i} className="text-xs text-gray-500 pl-3 relative before:absolute before:left-0 before:content-['→'] before:text-blue-500">{asText(s)}</li>)}
+                    {rec.implementation_steps.map((s, i) => <li key={i} className="text-xs text-gray-500 pl-3 relative before:absolute before:left-0 before:content-['→'] before:text-blue-500">{s}</li>)}
                   </ul>
                 )}
               </div>
@@ -472,7 +471,7 @@ export default function NetworkingAIAnalysis() {
             <div className="bg-gray-900/80 border border-gray-700/60 rounded-xl p-5">
               <h4 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2"><Zap className="w-4 h-4 text-yellow-400" /> 30-Day Plan</h4>
               <ol className="space-y-1.5">
-                {data['30_day_plan'].map((a, i) => <li key={i} className="text-xs text-gray-300 flex gap-2"><span className="text-yellow-400 font-bold">{i + 1}.</span>{asText(a)}</li>)}
+                {data['30_day_plan'].map((a, i) => <li key={i} className="text-xs text-gray-300 flex gap-2"><span className="text-yellow-400 font-bold">{i + 1}.</span>{a}</li>)}
               </ol>
             </div>
           )}
@@ -480,7 +479,7 @@ export default function NetworkingAIAnalysis() {
             <div className="bg-gray-900/80 border border-gray-700/60 rounded-xl p-5">
               <h4 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2"><Target className="w-4 h-4 text-purple-400" /> 90-Day Plan</h4>
               <ol className="space-y-1.5">
-                {data['90_day_plan'].map((a, i) => <li key={i} className="text-xs text-gray-300 flex gap-2"><span className="text-purple-400 font-bold">{i + 1}.</span>{asText(a)}</li>)}
+                {data['90_day_plan'].map((a, i) => <li key={i} className="text-xs text-gray-300 flex gap-2"><span className="text-purple-400 font-bold">{i + 1}.</span>{a}</li>)}
               </ol>
             </div>
           )}
