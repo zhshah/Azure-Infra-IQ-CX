@@ -3097,36 +3097,46 @@ async def _finops_cache_warmup() -> None:
         logger.warning("FinOps warmup: commitments failed/timeout: %s", e)
 
     # ── 4. Allocation breakdowns (3 key dimensions) ───────────────────────
-    for dim in ("SubscriptionId", "ServiceFamily", "ResourceType"):
+    # Each dimension costs TWO Cost Management query-API calls (current + prior
+    # period), so this block alone is 6 throttled calls every 30 minutes. When the
+    # export loader owns the cost tables that same breakdown is already in Azure SQL,
+    # and re-asking Azure for it is what starves the ETL and the on-demand views of
+    # their throttle budget - a warmup here was measured at 22 minutes, almost all of
+    # it in 429 backoff. Same rule the warehouse ETL already follows.
+    if _export_ingestion_owns_costs():
+        logger.info("FinOps warmup: cost tables are loaded from Cost Management exports — "
+                    "skipping the allocation/chargeback/forecast query-API warmup")
+    else:
+        for dim in ("SubscriptionId", "ServiceFamily", "ResourceType"):
+            try:
+                alloc = await loop.run_in_executor(
+                    _pool, lambda d=dim: finops_svc.get_cost_allocation(d, "last_30d", sub_ids))
+                _finops_warm_cache[f"alloc_{dim}"]    = alloc
+                _finops_warm_cache[f"alloc_{dim}_ts"] = ts
+                logger.info("FinOps warmup: allocation by %s cached", dim)
+            except Exception as e:
+                logger.warning("FinOps warmup: allocation(%s) failed: %s", dim, e)
+
+        # ── 5. Chargeback ─────────────────────────────────────────────────────
         try:
-            alloc = await loop.run_in_executor(
-                _pool, lambda d=dim: finops_svc.get_cost_allocation(d, "last_30d", sub_ids))
-            _finops_warm_cache[f"alloc_{dim}"]    = alloc
-            _finops_warm_cache[f"alloc_{dim}_ts"] = ts
-            logger.info("FinOps warmup: allocation by %s cached", dim)
+            cb = await loop.run_in_executor(_pool, lambda: finops_svc.get_chargeback_report("last_30d", sub_ids))
+            _finops_warm_cache["chargeback"]    = cb
+            _finops_warm_cache["chargeback_ts"] = ts
+            logger.info("FinOps warmup: chargeback cached")
         except Exception as e:
-            logger.warning("FinOps warmup: allocation(%s) failed: %s", dim, e)
+            logger.warning("FinOps warmup: chargeback failed: %s", e)
 
-    # ── 5. Chargeback ─────────────────────────────────────────────────────
-    try:
-        cb = await loop.run_in_executor(_pool, lambda: finops_svc.get_chargeback_report("last_30d", sub_ids))
-        _finops_warm_cache["chargeback"]    = cb
-        _finops_warm_cache["chargeback_ts"] = ts
-        logger.info("FinOps warmup: chargeback cached")
-    except Exception as e:
-        logger.warning("FinOps warmup: chargeback failed: %s", e)
-
-    # ── 6. Forecast — runs last; capped at 90s so it doesn't block others ─
-    try:
-        fc = await asyncio.wait_for(
-            loop.run_in_executor(_pool, lambda: forecast_finops_svc.get_forecast(horizon_days=30, subscription_ids=sub_ids)),
-            timeout=90.0,
-        )
-        _finops_warm_cache["forecast"]    = fc
-        _finops_warm_cache["forecast_ts"] = ts
-        logger.info("FinOps warmup: forecast cached")
-    except (asyncio.TimeoutError, Exception) as e:
-        logger.warning("FinOps warmup: forecast failed/timeout: %s", e)
+        # ── 6. Forecast — runs last; capped at 90s so it doesn't block others ─
+        try:
+            fc = await asyncio.wait_for(
+                loop.run_in_executor(_pool, lambda: forecast_finops_svc.get_forecast(horizon_days=30, subscription_ids=sub_ids)),
+                timeout=90.0,
+            )
+            _finops_warm_cache["forecast"]    = fc
+            _finops_warm_cache["forecast_ts"] = ts
+            logger.info("FinOps warmup: forecast cached")
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.warning("FinOps warmup: forecast failed/timeout: %s", e)
 
     _finops_warm_cache["last_warmup"]    = datetime.now(tz=timezone.utc).isoformat()
     _finops_warm_cache["last_warmup_ts"] = ts
