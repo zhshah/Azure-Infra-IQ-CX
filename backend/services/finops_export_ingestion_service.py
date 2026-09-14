@@ -209,19 +209,32 @@ def ensure_exports(subscription_ids: List[str]) -> Dict[str, Any]:
 
     token = _credential().get_token("https://management.azure.com/.default").token
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    created, failed = [], []
+    created, failed, triggered = [], [], []
     for subscription_id in subscription_ids:
         short = subscription_id.split("-")[0]
         for cost_type in _COST_TYPES:
             name = f"infraiq-{cost_type.lower()}-daily-{short}"
-            url = (f"https://management.azure.com/subscriptions/{subscription_id}"
-                   f"/providers/Microsoft.CostManagement/exports/{name}"
-                   f"?api-version={EXPORT_API_VERSION}")
+            base = (f"https://management.azure.com/subscriptions/{subscription_id}"
+                    f"/providers/Microsoft.CostManagement/exports/{name}")
+            url = f"{base}?api-version={EXPORT_API_VERSION}"
             try:
+                existed = requests.get(url, headers=headers, timeout=60).status_code < 300
                 response = requests.put(url, headers=headers,
                                         json=_export_definition(cost_type, subscription_id), timeout=90)
                 if response.status_code < 300:
                     created.append(name)
+                    # A brand-new daily export does not execute until its next scheduled
+                    # occurrence, which can be ~24h away — a fresh deployment would sit
+                    # with empty FinOps views until then. Kick the first run off now.
+                    # Existing exports are left alone so routine passes cost nothing.
+                    if not existed:
+                        run = requests.post(f"{base}/run?api-version={EXPORT_API_VERSION}",
+                                            headers=headers, timeout=90)
+                        if run.status_code < 300:
+                            triggered.append(name)
+                        else:
+                            logger.warning("Could not start first run of %s: %s %s",
+                                           name, run.status_code, run.text[:200])
                 else:
                     failed.append({"export": name, "status": response.status_code,
                                    "detail": response.text[:200]})
@@ -229,7 +242,9 @@ def ensure_exports(subscription_ids: List[str]) -> Dict[str, Any]:
                 failed.append({"export": name, "status": "exception", "detail": str(exc)[:200]})
     if failed:
         logger.warning("Cost export provisioning incomplete: %s", failed[:3])
-    return {"provisioned": created, "failed": failed}
+    if triggered:
+        logger.info("First run started for %d new cost export(s)", len(triggered))
+    return {"provisioned": created, "failed": failed, "first_run_started": triggered}
 
 
 def _months_needing_history(subscription_id: str, months: int) -> List[tuple]:
