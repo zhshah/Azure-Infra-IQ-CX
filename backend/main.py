@@ -8024,8 +8024,10 @@ _ingestion_task: Optional[asyncio.Task] = None
 _INGESTION_STEPS = [
     {"key": "estate_scan", "label": "Estate scan (inventory, scores, metrics)",
      "typical": "5-12 min", "weight": 30},
-    {"key": "warehouse_etl", "label": "Cost warehouse ETL (per resource / subscription / service / tag / meter)",
-     "typical": "10-40 min", "weight": 45},
+    {"key": "cost_exports", "label": "Cost Management exports → Azure SQL (all cost tables)",
+     "typical": "1-3 min", "weight": 15},
+    {"key": "warehouse_etl", "label": "Cost warehouse ETL (budgets, utilisation, auxiliary datasets)",
+     "typical": "10-40 min", "weight": 30},
     {"key": "utilisation", "label": "Utilisation metrics snapshot",
      "typical": "2-8 min", "weight": 10},
     {"key": "cost_snapshot", "label": "Cost bundle snapshot",
@@ -8094,7 +8096,25 @@ async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full")
                    lambda d: (f"{len(getattr(d, 'resources', []) or [])} resources",
                               len(getattr(d, "resources", []) or [])))
 
-    # 2) Cost warehouse — the spine behind every FinOps chart.
+    # 2) Cost Management exports -> Azure SQL. This owns every cost table, so it runs
+    #    before the warehouse ETL (which now only fills the auxiliary datasets).
+    if _FINOPS_EXPORT_INGESTION_AVAILABLE and finops_export_ingestion_svc.is_configured():
+        async def _exports():
+            return await loop.run_in_executor(
+                _pool, finops_export_ingestion_svc.ingest_available_exports)
+
+        def _exports_detail(r):
+            loaded = len((r or {}).get("processed") or [])
+            rows = sum(((r or {}).get("rows_written") or {}).values())
+            skipped = (r or {}).get("skipped_already_loaded", 0)
+            return (f"{loaded} export file(s) loaded, {skipped} already current", rows)
+
+        await step("cost_exports", _exports, _exports_detail)
+    else:
+        _ing.job_step("cost_exports", "skipped",
+                      detail="no cost-export storage configured (FINOPS_EXPORT_ACCOUNT)")
+
+    # 3) Cost warehouse — the spine behind every FinOps chart.
     async def _etl():
         if not _FINOPS_WAREHOUSE_AVAILABLE:
             raise RuntimeError("FinOps warehouse not available (Azure SQL required)")
