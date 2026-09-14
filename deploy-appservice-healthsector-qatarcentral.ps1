@@ -1786,16 +1786,31 @@ if ($DeployRedis -and [string]::IsNullOrWhiteSpace($RedisUrl)) {
             az redis update --name $redisName --resource-group $ResourceGroupName --set publicNetworkAccess=Disabled --output none 2>$null
             $redisResourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Cache/Redis/$redisName"
             $redisPeName = "${redisName}-pe"
-            az network private-endpoint create `
-                --name $redisPeName `
-                --resource-group $ResourceGroupName `
-                --location $Location `
-                --vnet-name $VNetName `
-                --subnet $PrivateEndpointSubnetName `
-                --private-connection-resource-id $redisResourceId `
-                --group-id "redisCache" `
-                --connection-name "${redisName}-connection" `
-                --output none 2>$null
+            # Same reason as the other endpoints: --vnet-name resolves inside the deployment
+            # resource group, which is not where the VNet usually lives.
+            if (-not [string]::IsNullOrWhiteSpace($peSubnetResourceId)) {
+                az network private-endpoint create `
+                    --name $redisPeName `
+                    --resource-group $ResourceGroupName `
+                    --location $Location `
+                    --subnet $peSubnetResourceId `
+                    --private-connection-resource-id $redisResourceId `
+                    --group-id "redisCache" `
+                    --connection-name "${redisName}-connection" `
+                    --output none 2>$null
+            }
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($peSubnetResourceId)) {
+                az network private-endpoint create `
+                    --name $redisPeName `
+                    --resource-group $ResourceGroupName `
+                    --location $Location `
+                    --vnet-name $VNetName `
+                    --subnet $PrivateEndpointSubnetName `
+                    --private-connection-resource-id $redisResourceId `
+                    --group-id "redisCache" `
+                    --connection-name "${redisName}-connection" `
+                    --output none 2>$null
+            }
             $redisDnsZoneName = "privatelink.redis.cache.windows.net"
             az network private-dns zone create --name $redisDnsZoneName --resource-group $dnsZoneResourceGroup --subscription $dnsZoneSubscriptionId --output none 2>$null
             $redisDnsLinkName = "link-$VNetName-redis"
@@ -2093,16 +2108,33 @@ if (-not [string]::IsNullOrWhiteSpace($costExportStorageId)) {
             --default-action Deny --bypass AzureServices --output none 2>$null
 
         $costPeName = "$CostExportStorageAccountName-pe"
-        az network private-endpoint create `
-            --name $costPeName `
-            --resource-group $ResourceGroupName `
-            --location $Location `
-            --vnet-name $VNetName `
-            --subnet $PrivateEndpointSubnetName `
-            --private-connection-resource-id $costExportStorageId `
-            --group-id "blob" `
-            --connection-name "$CostExportStorageAccountName-blob" `
-            --output none 2>$null
+        # --vnet-name/--subnet resolve inside --resource-group, so they only work when the
+        # VNet lives in the DEPLOYMENT resource group. It usually does not, which is why the
+        # other endpoints here pass the resolved subnet id. Same approach, same reason.
+        $costPeOut = ""
+        if (-not [string]::IsNullOrWhiteSpace($peSubnetResourceId)) {
+            $costPeOut = az network private-endpoint create `
+                --name $costPeName `
+                --resource-group $ResourceGroupName `
+                --location $Location `
+                --subnet $peSubnetResourceId `
+                --private-connection-resource-id $costExportStorageId `
+                --group-id "blob" `
+                --connection-name "$CostExportStorageAccountName-blob" `
+                --output none 2>&1
+        }
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($peSubnetResourceId)) {
+            $costPeOut = az network private-endpoint create `
+                --name $costPeName `
+                --resource-group $ResourceGroupName `
+                --location $Location `
+                --vnet-name $VNetName `
+                --subnet $PrivateEndpointSubnetName `
+                --private-connection-resource-id $costExportStorageId `
+                --group-id "blob" `
+                --connection-name "$CostExportStorageAccountName-blob" `
+                --output none 2>&1
+        }
         if ($LASTEXITCODE -eq 0) {
             $blobDnsZoneName = "privatelink.blob.core.windows.net"
             az network private-dns zone create --name $blobDnsZoneName --resource-group $dnsZoneResourceGroup --subscription $dnsZoneSubscriptionId --output none 2>$null
@@ -2115,7 +2147,12 @@ if (-not [string]::IsNullOrWhiteSpace($costExportStorageId)) {
             az network private-endpoint dns-zone-group create --name "blob-dns-group" --endpoint-name $costPeName --resource-group $ResourceGroupName --private-dns-zone $blobDnsZoneId --zone-name "blob" --output none 2>$null
             Write-Success "Cost export storage Private Endpoint configured"
         } else {
-            Write-Host "  WARNING: Private Endpoint for '$CostExportStorageAccountName' failed - the app may not reach the export files." -ForegroundColor Yellow
+            # Storage is Deny-by-default at this point, so without the endpoint the app
+            # cannot read the export files at all — say why, and how to finish it by hand.
+            Write-Host "  WARNING: Private Endpoint for '$CostExportStorageAccountName' failed - the app cannot reach the export files." -ForegroundColor Yellow
+            if ($costPeOut) { Write-Host ("           " + (($costPeOut | Out-String).Trim() -split "`n" | Select-Object -First 3 | Join-String -Separator ' ')) -ForegroundColor DarkYellow }
+            $permIssues += @{ Kind = "Network"; Name = "Cost export blob Private Endpoint"; Scope = $CostExportStorageAccountName;
+                Command = "az network private-endpoint create --name $costPeName --resource-group $ResourceGroupName --location $Location --subnet $peSubnetResourceId --private-connection-resource-id $costExportStorageId --group-id blob --connection-name $CostExportStorageAccountName-blob" }
         }
     }
 
