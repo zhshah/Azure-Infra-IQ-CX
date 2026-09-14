@@ -215,14 +215,43 @@ def _retry_after_seconds(exc: Exception) -> Optional[float]:
 # Cost Management throttles per-tenant, so concurrency is not the issue — arrival rate is.
 # Spacing calls costs a couple of seconds each but avoids a 429 that costs 110s of backoff.
 _COST_CALL_LOCK = threading.Lock()
+_COST_RATE_LOCK = threading.Lock()   # separate: the pacer sleeps holding the one above
 _last_cost_call_at: float = 0.0
 COST_MIN_CALL_INTERVAL = float(os.getenv("FINOPS_MIN_CALL_INTERVAL_SECONDS", "3"))
+COST_MAX_CALL_INTERVAL = float(os.getenv("FINOPS_MAX_CALL_INTERVAL_SECONDS", "60"))
+# A fixed interval cannot escape a throttle storm: every caller kept firing 3s after the
+# previous one gave up, which earned another 429 immediately and the ETL never advanced.
+# This widens on a 429 and eases back on success, so the whole app converges on the rate
+# the tenant will actually serve instead of fighting it.
+_cost_call_interval: float = COST_MIN_CALL_INTERVAL
+
+
+def cost_call_interval() -> float:
+    with _COST_RATE_LOCK:
+        return _cost_call_interval
+
+
+def _note_cost_throttled() -> None:
+    global _cost_call_interval
+    with _COST_RATE_LOCK:
+        _cost_call_interval = min(COST_MAX_CALL_INTERVAL,
+                                  max(COST_MIN_CALL_INTERVAL, _cost_call_interval) * 2)
+        widened = _cost_call_interval
+    logger.warning("FinOps: throttled — spacing cost calls %.0fs apart tenant-wide", widened)
+
+
+def _note_cost_ok() -> None:
+    global _cost_call_interval
+    with _COST_RATE_LOCK:
+        if _cost_call_interval > COST_MIN_CALL_INTERVAL:
+            _cost_call_interval = max(COST_MIN_CALL_INTERVAL, _cost_call_interval * 0.75)
 
 
 def _pace_cost_call() -> None:
     global _last_cost_call_at
+    interval = cost_call_interval()
     with _COST_CALL_LOCK:
-        wait = COST_MIN_CALL_INTERVAL - (time.monotonic() - _last_cost_call_at)
+        wait = interval - (time.monotonic() - _last_cost_call_at)
         if wait > 0:
             time.sleep(wait)
         _last_cost_call_at = time.monotonic()
@@ -358,12 +387,14 @@ def query_cost(
                 rows.append(row_dict)
 
             skiptoken = _extract_skiptoken(response.next_link)
+            _note_cost_ok()
             if not skiptoken:
                 break
 
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "TooManyRequests" in err_str:
+                _note_cost_throttled()
                 if retry_idx < len(retry_delays):
                     wait = _retry_after_seconds(e) or retry_delays[retry_idx]
                     retry_idx += 1

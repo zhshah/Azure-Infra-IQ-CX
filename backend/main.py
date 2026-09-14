@@ -300,6 +300,9 @@ _pool = ThreadPoolExecutor(max_workers=12)  # shared executor for blocking I/O (
 # Dedicated pool for AI calls so long (~15-20s) Azure OpenAI requests can never
 # starve the data pool and make every FinOps tab hang on a spinner.
 _ai_pool = ThreadPoolExecutor(max_workers=4)
+# The estate scan fans out ~30 Azure calls at once. It used to build its own pool per
+# call and never shut it down, so every scan and auto-refresh left threads behind.
+_scan_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="scan")
 # ── Arc security findings cache (15 min TTL) ──────────────────────────────────
 import time as _time_mod
 _arc_security_cache: dict = {}  # {"data": [...], "ts": float}
@@ -689,7 +692,7 @@ async def _build_dashboard(
             await progress_cb({"type": "progress", "step": step, "message": msg, "pct": pct})
 
     loop     = asyncio.get_event_loop()
-    executor = ThreadPoolExecutor(max_workers=10)
+    executor = _scan_pool
     cfg      = settings_svc.get()
     sub_ids  = settings_svc.get_subscription_ids()
     # Full set the identity can access, captured BEFORE any single-subscription
@@ -2961,7 +2964,7 @@ async def _regenerate_ai_narrative() -> None:
     """Regenerate AI narrative for the cached data without a full re-scan."""
     try:
         loop     = asyncio.get_event_loop()
-        executor = ThreadPoolExecutor(max_workers=2)
+        executor = _ai_pool
         for slot in ("data:*", "data"):
             cached: Optional[DashboardData] = _cache.get(slot)
             if cached and cached.resources and cached.kpi:
@@ -9555,7 +9558,7 @@ async def analyze_single_resource(resource_id: str):
     }
 
     loop     = asyncio.get_event_loop()
-    executor = ThreadPoolExecutor(max_workers=1)
+    executor = _ai_pool
     try:
         verdicts = await loop.run_in_executor(executor, partial(get_ai_verdicts, [resource_dict]))
     except Exception as exc:
