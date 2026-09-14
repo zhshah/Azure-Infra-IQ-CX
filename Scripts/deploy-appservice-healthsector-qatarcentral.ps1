@@ -596,6 +596,12 @@ $CostExportStorageAccountName = $CostExportStorageAccountName.ToLower()
 if ($CostExportStorageAccountName -notmatch '^[a-z0-9]{3,24}$') {
     throw "Cost export storage account name '$CostExportStorageAccountName' is invalid - use 3-24 lowercase letters and digits only."
 }
+# Caught here rather than 20 minutes later at 'az storage container create', which would
+# leave the app pointed at a container that was never made and the FinOps views empty.
+$CostExportContainerName = $CostExportContainerName.Trim().ToLower()
+if ($CostExportContainerName -notmatch '^[a-z0-9]([a-z0-9]|-(?!-)){1,61}[a-z0-9]$') {
+    throw "Cost export container name '$CostExportContainerName' is invalid - use 3-63 lowercase letters, digits and single hyphens, starting and ending with a letter or digit."
+}
 Write-Success "Cost export storage: $CostExportStorageAccountName (container '$CostExportContainerName')"
 
 # 3a) Azure OpenAI SOURCE — create a NEW resource, or reuse an EXISTING one (e.g. a PTU /
