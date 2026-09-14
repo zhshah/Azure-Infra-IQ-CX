@@ -19,12 +19,15 @@
     Idempotent: re-running updates the existing export definitions in place.
 #>
 param(
-    [string[]]$SubscriptionIds = @(
-        '14c6c34f-edd7-4e75-86d5-d4c7d4a99510',
-        '4641c577-f07c-4107-b7cb-e3a729cb52d3',
-        'b28cc86b-8f84-47e5-a38a-b814b44d047e'
-    ),
-    [string]$StorageAccountId = '/subscriptions/b28cc86b-8f84-47e5-a38a-b814b44d047e/resourceGroups/rg-infraiq-swc-demo/providers/Microsoft.Storage/storageAccounts/infraiqcostexpqb2y2t',
+    # Empty = every enabled subscription in the signed-in tenant, which is what the app
+    # itself scans. Never hard-code subscription ids here: this script ships to customers.
+    [string[]]$SubscriptionIds = @(),
+
+    # Supply either the full resource id, or the account name plus its resource group.
+    [string]$StorageAccountId = '',
+    [string]$StorageAccountName = '',
+    [string]$StorageResourceGroup = '',
+
     [string]$Container = 'cost-exports',
     [int]$BackfillMonths = 0,
     [switch]$RunNow
@@ -32,7 +35,43 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $apiVersion = '2023-08-01'
-$az = { & 'C:\Program Files\Microsoft SDKs\Azure\CLI2\python.exe' -X utf8 -IBm azure.cli @args }
+# Plain 'az' on PATH is the norm; fall back to the Windows installer's python entry point.
+$azExe = (Get-Command az -ErrorAction SilentlyContinue)
+if ($azExe) {
+    $az = { & az @args }
+} elseif (Test-Path 'C:\Program Files\Microsoft SDKs\Azure\CLI2\python.exe') {
+    $az = { & 'C:\Program Files\Microsoft SDKs\Azure\CLI2\python.exe' -X utf8 -IBm azure.cli @args }
+} else {
+    throw 'Azure CLI not found. Install it, or run this from a shell where "az" is on PATH.'
+}
+
+# Resolve the export destination from whichever form the caller supplied.
+if (-not $StorageAccountId) {
+    if (-not $StorageAccountName) {
+        throw 'Supply -StorageAccountId, or -StorageAccountName together with -StorageResourceGroup. This is the storage account the deployment created for cost exports (app setting FINOPS_EXPORT_ACCOUNT).'
+    }
+    $lookup = @('storage', 'account', 'show', '--name', $StorageAccountName, '--query', 'id', '-o', 'tsv')
+    if ($StorageResourceGroup) { $lookup += @('--resource-group', $StorageResourceGroup) }
+    $StorageAccountId = (& $az @lookup 2>$null)
+    if (-not $StorageAccountId) { throw "Storage account '$StorageAccountName' not found." }
+}
+Write-Host "  export destination : $(($StorageAccountId -split '/')[-1]) / $Container"
+
+# Must match finops_export_ingestion_service._deployment_tag(): sha256 of the storage
+# account name, first 6 hex. Keeps each deployment's exports separate from any other
+# Infra IQ instance scanning the same subscription.
+$exportStorageName = ($StorageAccountId -split '/')[-1]
+$tagBytes = [System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($exportStorageName))
+$deploymentTag = (([BitConverter]::ToString($tagBytes) -replace '-', '').Substring(0, 6).ToLower())
+Write-Host "  deployment tag     : $deploymentTag"
+
+# Default to whatever the signed-in identity can see, mirroring the app's own discovery.
+if (-not $SubscriptionIds -or $SubscriptionIds.Count -eq 0) {
+    $SubscriptionIds = @(& $az account list --query "[?state=='Enabled'].id" -o tsv 2>$null) | Where-Object { $_ }
+    if (-not $SubscriptionIds) { throw 'No enabled subscriptions found. Pass -SubscriptionIds explicitly.' }
+    Write-Host "  subscriptions      : $($SubscriptionIds.Count) discovered"
+}
+
 $token = (& $az account get-access-token --resource https://management.azure.com --query accessToken -o tsv)
 if (-not $token) { throw 'Unable to acquire an ARM access token' }
 $headers = @{ Authorization = "Bearer $token"; 'Content-Type' = 'application/json' }
@@ -93,7 +132,7 @@ foreach ($subscriptionId in $SubscriptionIds) {
     $short = $subscriptionId.Split('-')[0]
 
     foreach ($costType in @('ActualCost', 'AmortizedCost')) {
-        $name = "infraiq-$($costType.ToLower())-daily-$short"
+        $name = "infraiq-$($costType.ToLower())-daily-$short-$deploymentTag"
         $folder = "$($costType.ToLower())/$subscriptionId"
         $uri = "https://management.azure.com$scope/providers/Microsoft.CostManagement/exports/$($name)?api-version=$apiVersion"
         $body = New-ExportBody -CostType $costType -FolderPath $folder -Timeframe 'MonthToDate' -Recurring $true
@@ -111,7 +150,7 @@ foreach ($subscriptionId in $SubscriptionIds) {
         $monthEnd = $monthStart.AddMonths(1).AddDays(-1)
         $stamp = $monthStart.ToString('yyyyMM')
         foreach ($costType in @('ActualCost', 'AmortizedCost')) {
-            $name = "infraiq-$($costType.ToLower())-hist-$stamp-$short"
+            $name = "infraiq-$($costType.ToLower())-hist-$stamp-$short-$deploymentTag"
             $folder = "$($costType.ToLower())/$subscriptionId"
             $uri = "https://management.azure.com$scope/providers/Microsoft.CostManagement/exports/$($name)?api-version=$apiVersion"
             $body = New-ExportBody -CostType $costType -FolderPath $folder -Timeframe 'Custom' -From $monthStart -To $monthEnd -Recurring $false

@@ -59,6 +59,24 @@ ACCOUNT = os.getenv("FINOPS_EXPORT_ACCOUNT", "")
 # A cost difference below this is floating-point noise, not a missing charge.
 TOLERANCE_USD = 0.01
 
+
+def _deployment_tag() -> str:
+    """Short id that makes this deployment's export names its own.
+
+    Cost Management exports live on the SUBSCRIPTION, so two Infra IQ deployments
+    scanning the same subscription would otherwise share one export object and each
+    rewrite its destination to their own storage — last writer wins, and the loser's
+    container silently stays empty. Keying on the storage account keeps them apart.
+    """
+    return hashlib.sha256((ACCOUNT or "default").encode("utf-8")).hexdigest()[:6]
+
+
+def _export_name(cost_type: str, subscription_id: str, period: Optional[str] = None) -> str:
+    kind = f"hist-{period}" if period else "daily"
+    return (f"infraiq-{cost_type.lower()}-{kind}-"
+            f"{subscription_id.split('-')[0]}-{_deployment_tag()}")
+
+
 _BLOB_AVAILABLE = True
 try:  # pragma: no cover - import guard
     from azure.storage.blob import BlobServiceClient
@@ -211,9 +229,8 @@ def ensure_exports(subscription_ids: List[str]) -> Dict[str, Any]:
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     created, failed, triggered = [], [], []
     for subscription_id in subscription_ids:
-        short = subscription_id.split("-")[0]
         for cost_type in _COST_TYPES:
-            name = f"infraiq-{cost_type.lower()}-daily-{short}"
+            name = _export_name(cost_type, subscription_id)
             base = (f"https://management.azure.com/subscriptions/{subscription_id}"
                     f"/providers/Microsoft.CostManagement/exports/{name}")
             url = f"{base}?api-version={EXPORT_API_VERSION}"
@@ -293,10 +310,9 @@ def ensure_history_exports(subscription_ids: List[str], months: Optional[int] = 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     triggered = []
     for subscription_id in subscription_ids:
-        short = subscription_id.split("-")[0]
         for start, end in _months_needing_history(subscription_id, months):
             for cost_type in _COST_TYPES:
-                name = f"infraiq-{cost_type.lower()}-hist-{start.strftime('%Y%m')}-{short}"
+                name = _export_name(cost_type, subscription_id, start.strftime('%Y%m'))
                 body = _export_definition(cost_type, subscription_id)
                 body["properties"]["schedule"] = {"status": "Inactive"}
                 body["properties"]["definition"].update({
