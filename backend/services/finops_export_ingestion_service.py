@@ -264,6 +264,74 @@ def ensure_exports(subscription_ids: List[str]) -> Dict[str, Any]:
     return {"provisioned": created, "failed": failed, "first_run_started": triggered}
 
 
+def prune_orphaned_exports(subscription_ids: List[str]) -> Dict[str, Any]:
+    """Delete our exports whose destination storage account no longer exists.
+
+    Exports are SUBSCRIPTION-scoped, so deleting a deployment's resource group takes
+    the storage account away but leaves the export definitions behind, failing every
+    night against a destination that is gone. Only an export whose destination really
+    returns 404 is removed, so a live deployment's exports are never touched.
+    """
+    if not is_configured():
+        return {"deleted": [], "skipped": "not configured"}
+
+    import requests
+
+    token = _credential().get_token("https://management.azure.com/.default").token
+    headers = {"Authorization": f"Bearer {token}"}
+    deleted, kept_alive = [], 0
+    checked: Dict[str, bool] = {}
+    for subscription_id in subscription_ids:
+        listing = (f"https://management.azure.com/subscriptions/{subscription_id}"
+                   f"/providers/Microsoft.CostManagement/exports?api-version={EXPORT_API_VERSION}")
+        try:
+            response = requests.get(listing, headers=headers, timeout=60)
+            if response.status_code >= 300:
+                continue
+            exports = response.json().get("value") or []
+        except Exception as exc:
+            logger.warning("Could not list exports on %s: %s", subscription_id, exc)
+            continue
+
+        for export in exports:
+            name = export.get("name") or ""
+            if not name.startswith("infraiq-"):
+                continue  # not ours
+            destination = ((export.get("properties") or {}).get("deliveryInfo") or {}).get("destination") or {}
+            storage_id = destination.get("resourceId") or ""
+            if not storage_id or storage_id == STORAGE_RESOURCE_ID:
+                continue  # this deployment's own storage, nothing to check
+
+            if storage_id not in checked:
+                try:
+                    probe = requests.get(
+                        f"https://management.azure.com{storage_id}?api-version=2023-01-01",
+                        headers=headers, timeout=60)
+                    # Only a definitive 404 proves it is gone; 403 means we simply
+                    # cannot see someone else's storage, which is not our business.
+                    checked[storage_id] = (probe.status_code == 404)
+                except Exception:
+                    checked[storage_id] = False
+            if not checked[storage_id]:
+                kept_alive += 1
+                continue
+
+            try:
+                removal = requests.delete(
+                    f"https://management.azure.com/subscriptions/{subscription_id}"
+                    f"/providers/Microsoft.CostManagement/exports/{name}"
+                    f"?api-version={EXPORT_API_VERSION}", headers=headers, timeout=60)
+                if removal.status_code < 300 or removal.status_code == 404:
+                    deleted.append(name)
+            except Exception as exc:
+                logger.warning("Could not delete orphaned export %s: %s", name, exc)
+
+    if deleted:
+        logger.info("Removed %d orphaned cost export(s) whose storage no longer exists: %s",
+                    len(deleted), deleted[:5])
+    return {"deleted": deleted, "left_alone": kept_alive}
+
+
 def _months_needing_history(subscription_id: str, months: int) -> List[tuple]:
     """Past months this subscription has no stored cost for, newest first.
 
@@ -747,6 +815,9 @@ def ingest_available_exports(max_manifests: int = 24) -> Dict[str, Any]:
             # Recent cost comes from the recurring export; history is requested only
             # for months the warehouse is still missing.
             provisioning["history_requested"] = ensure_history_exports(subscriptions)
+            # A deleted deployment leaves its subscription-scoped exports behind,
+            # failing nightly against storage that no longer exists.
+            provisioning["pruned"] = prune_orphaned_exports(subscriptions).get("deleted")
 
     processed, skipped, failed = [], 0, []
     totals: Dict[str, int] = defaultdict(int)

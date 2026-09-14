@@ -2197,6 +2197,29 @@ if (-not [string]::IsNullOrWhiteSpace($costExportStorageId)) {
             $permIssues += @{ Kind = "RBAC"; Name = "Cost Management Contributor"; Scope = "/subscriptions/$cesub"; Command = "az role assignment create --assignee $principalId --role `"Cost Management Contributor`" --scope `"/subscriptions/$cesub`"" }
         }
     }
+    # Exports are SUBSCRIPTION-scoped, so deleting an old deployment's resource group
+    # takes its storage away but leaves the export definitions behind, failing every
+    # night against a destination that no longer exists. Remove only those whose
+    # storage really answers 404 - a live deployment's exports are left alone.
+    $prunedExports = 0
+    foreach ($cesub in $costExportTargets) {
+        $ceList = az rest --method get --url "https://management.azure.com/subscriptions/$cesub/providers/Microsoft.CostManagement/exports?api-version=2023-08-01" -o json 2>$null | ConvertFrom-Json
+        foreach ($ceExport in @($ceList.value)) {
+            if ($ceExport.name -notlike 'infraiq-*') { continue }
+            $ceDest = $ceExport.properties.deliveryInfo.destination.resourceId
+            if ([string]::IsNullOrWhiteSpace($ceDest) -or $ceDest -eq $costExportStorageId) { continue }
+            az rest --method get --url "https://management.azure.com$ceDest`?api-version=2023-01-01" -o none 2>$null
+            if ($LASTEXITCODE -eq 0) { continue }   # destination still alive, leave it
+            $ceProbe = az storage account show --ids $ceDest --query name -o tsv 2>$null
+            if (-not [string]::IsNullOrWhiteSpace($ceProbe)) { continue }
+            az rest --method delete --url "https://management.azure.com/subscriptions/$cesub/providers/Microsoft.CostManagement/exports/$($ceExport.name)?api-version=2023-08-01" -o none 2>$null
+            if ($LASTEXITCODE -eq 0) { $prunedExports++ }
+        }
+    }
+    if ($prunedExports -gt 0) {
+        Write-Success "Removed $prunedExports orphaned cost export(s) left by a deleted deployment"
+    }
+
     # An export whose storage rejects the Cost Management writer is created but never
     # produces a file, so surface the firewall state rather than claiming success.
     $ceNetAction = az storage account show --name $CostExportStorageAccountName --resource-group $ResourceGroupName --query "networkRuleSet.defaultAction" -o tsv 2>$null
@@ -2459,12 +2482,19 @@ function New-DeploymentPackage {
 
 function Invoke-ZipDeploy {
     param([string]$ZipPath)
+    # --track-status makes the CLI wait for the WORKER to start and hard-fail after 10
+    # minutes. The build itself finishes in seconds; this app's first cold start is
+    # slower than that window, so the deploy was reported as failed every time even
+    # though the code was already published. Step 11 restarts and Step 13 probes it,
+    # so publish success is what matters here. Older CLIs reject the flag, and the
+    # config-zip fallback below still covers them.
     az webapp deploy `
         --name $WebAppName `
         --resource-group $ResourceGroupName `
         --src-path $ZipPath `
         --type zip `
         --async false `
+        --track-status false `
         --output none
     if ($LASTEXITCODE -eq 0) { return $true }
     # Older CLI / transient SCM errors: the legacy endpoint often succeeds where the new one fails.
