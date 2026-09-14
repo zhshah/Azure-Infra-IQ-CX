@@ -186,6 +186,43 @@ def job_set_counts(when: str, counts: Dict[str, int]) -> None:
         _JOB[f"rows_{when}"] = dict(counts)
 
 
+# ── First-fill supervisor ────────────────────────────────────────────────────
+# A fresh deployment has empty tables, and every collector is on its own timer, so
+# the dashboards stay blank until each one happens to fire. This tracks the
+# supervisor that drives them until the estate is actually populated, and is what
+# the UI reads to say what is filled, what is still pending, and what it is doing.
+
+_FILL_LOCK = threading.Lock()
+_FILL: Dict[str, Any] = {
+    "active": False,
+    "phase": "idle",           # idle | waiting | running | settled | exhausted
+    "attempt": 0,
+    "max_attempts": 0,
+    "started_at": None,
+    "finished_at": None,
+    "next_attempt_at": None,
+    "filled": [],              # datasets that now have rows
+    "pending": [],             # datasets still empty, with why
+    "message": None,
+    "last_error": None,
+}
+
+
+def fill_snapshot() -> Dict[str, Any]:
+    with _FILL_LOCK:
+        snap = {k: (list(v) if isinstance(v, list) else
+                    dict(v) if isinstance(v, dict) else v)
+                for k, v in _FILL.items()}
+    snap["pending_count"] = len(snap.get("pending") or [])
+    snap["filled_count"] = len(snap.get("filled") or [])
+    return snap
+
+
+def fill_update(**fields: Any) -> None:
+    with _FILL_LOCK:
+        _FILL.update(fields)
+
+
 # ── Census ───────────────────────────────────────────────────────────────────
 
 def _fast_row_counts(cur) -> Dict[str, int]:

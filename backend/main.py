@@ -8198,6 +8198,121 @@ async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full")
     logger.info("Ingestion run %s finished (%d step failure(s))", run_id, len(failures))
 
 
+# Tables the main dashboards read. If these are empty the UI has nothing to draw,
+# which is what "everything is blank after a fresh deployment" actually means.
+# Names are the catalogued ones in data_availability_service.DATASETS - a name that
+# is not in the catalogue is skipped silently, so they are verified against it.
+_FIRST_FILL_TARGETS = [
+    ("resource_snapshots", "Estate inventory (home, resources, architecture)"),
+    ("finops_daily_resource_costs", "Per-resource daily cost (FinOps overview, drilldowns)"),
+    ("finops_daily_subscription_costs", "Per-subscription daily cost (summary, trends)"),
+    ("finops_monthly_service_costs", "Cost by service (breakdown charts)"),
+    ("finops_daily_meter_costs", "Meter-level cost (unit economics)"),
+    ("finops_daily_dimension_costs", "Cost by dimension (tags, locations)"),
+    ("finops_budgets", "Budgets and alerts"),
+    ("finops_resource_utilization", "Utilisation metrics (right-sizing)"),
+    ("finops_recommendations", "Optimisation recommendations"),
+]
+
+
+def _first_fill_gaps() -> List[Dict[str, Any]]:
+    """Which dashboard-critical tables are still empty."""
+    from services import finops_ingestion_service as _ing
+    counts = _ing.table_counts()
+    gaps = []
+    for table, label in _FIRST_FILL_TARGETS:
+        if table not in counts:
+            continue  # table not in this schema, nothing to wait for
+        if int(counts.get(table) or 0) <= 0:
+            gaps.append({"dataset": table, "label": label})
+    return gaps
+
+
+async def _first_fill_supervisor() -> None:
+    """Drive collection until the dashboards actually have data, then stand down.
+
+    Every collector owns its own timer, so on a fresh deployment the views stay blank
+    until each one happens to fire - up to hours. This runs the whole pipeline at
+    startup and keeps retrying while tables are still empty, because the usual reasons
+    for an empty first pass (exports not yet produced, Azure 429, RBAC still
+    propagating) all clear on their own given another attempt. Progress is published
+    for the UI so "empty" is never indistinguishable from "broken".
+    """
+    from services import finops_ingestion_service as _ing
+
+    max_attempts = int(os.getenv("FINOPS_FIRST_FILL_ATTEMPTS", "6") or 6)
+    # Long enough for a cost export to be produced and for 429 backoff to clear.
+    backoff = [120, 300, 600, 900, 1800, 1800]
+    loop = asyncio.get_running_loop()
+
+    await asyncio.sleep(45)  # let migrations, RBAC and the export loader settle
+
+    try:
+        gaps = await loop.run_in_executor(_pool, _first_fill_gaps)
+    except Exception as exc:
+        logger.warning("First-fill: could not read table counts: %s", exc)
+        gaps = []
+    if not gaps:
+        _ing.fill_update(active=False, phase="settled", message="Estate already populated",
+                         pending=[], finished_at=datetime.now(timezone.utc).isoformat())
+        return
+
+    _ing.fill_update(active=True, phase="running", attempt=0, max_attempts=max_attempts,
+                     started_at=datetime.now(timezone.utc).isoformat(), finished_at=None,
+                     pending=gaps, filled=[], last_error=None,
+                     message=f"{len(gaps)} dataset(s) empty - starting first collection")
+    logger.info("First-fill: %d dashboard dataset(s) empty, driving collection", len(gaps))
+
+    for attempt in range(1, max_attempts + 1):
+        # Never fight a run the user started from the UI.
+        while _ing.job_is_running():
+            _ing.fill_update(phase="waiting", message="Waiting for the running collection to finish")
+            await asyncio.sleep(30)
+
+        _ing.fill_update(phase="running", attempt=attempt, next_attempt_at=None,
+                         message=f"Collection attempt {attempt} of {max_attempts}")
+        try:
+            # First pass pulls full history; later passes only top up what is missing.
+            await _run_ingestion_async("first-fill supervisor", days=30,
+                                       mode="full" if attempt == 1 else "quick")
+        except Exception as exc:
+            logger.warning("First-fill attempt %d failed: %s", attempt, exc)
+            _ing.fill_update(last_error=str(exc)[:300])
+
+        try:
+            gaps = await loop.run_in_executor(_pool, _first_fill_gaps)
+        except Exception as exc:
+            _ing.fill_update(last_error=str(exc)[:300])
+            gaps = gaps  # keep the previous view rather than claiming success
+
+        filled = [t for t, _ in _FIRST_FILL_TARGETS
+                  if t not in {g["dataset"] for g in gaps}]
+        _ing.fill_update(pending=gaps, filled=filled)
+
+        if not gaps:
+            _ing.fill_update(active=False, phase="settled",
+                             finished_at=datetime.now(timezone.utc).isoformat(),
+                             message=f"All dashboard datasets populated after {attempt} attempt(s)")
+            logger.info("First-fill: complete after %d attempt(s)", attempt)
+            return
+
+        if attempt < max_attempts:
+            wait = backoff[min(attempt - 1, len(backoff) - 1)]
+            nxt = datetime.now(timezone.utc) + timedelta(seconds=wait)
+            _ing.fill_update(phase="waiting", next_attempt_at=nxt.isoformat(),
+                             message=(f"{len(gaps)} dataset(s) still empty - retrying in "
+                                      f"{wait // 60} min"))
+            logger.info("First-fill: %d still empty, retry %d in %ds",
+                        len(gaps), attempt + 1, wait)
+            await asyncio.sleep(wait)
+
+    _ing.fill_update(active=False, phase="exhausted",
+                     finished_at=datetime.now(timezone.utc).isoformat(),
+                     message=(f"{len(gaps)} dataset(s) still empty after {max_attempts} attempts - "
+                              f"the scheduled collectors will keep trying"))
+    logger.warning("First-fill: gave up with %d dataset(s) still empty", len(gaps))
+
+
 @app.get("/api/finops/ingestion/inventory", tags=["FinOps Ingestion"])
 async def ingestion_inventory(subscriptions: bool = True, refresh: bool = False):
     """Everything currently persisted: per dataset, rows, date coverage, freshness,
@@ -8278,7 +8393,11 @@ async def ingestion_inventory(subscriptions: bool = True, refresh: bool = False)
 async def ingestion_status():
     """Live progress of the force-ingest run: per-step state and rows written."""
     from services import finops_ingestion_service as _ing
-    return _ing.job_snapshot()
+    snap = _ing.job_snapshot()
+    # The supervisor is what keeps running after a fresh deployment, so the UI can
+    # say "still filling, N datasets pending" instead of just showing empty charts.
+    snap["first_fill"] = _ing.fill_snapshot()
+    return snap
 
 
 @app.post("/api/finops/ingestion/run", tags=["FinOps Ingestion"])
@@ -9235,6 +9354,15 @@ async def start_auto_refresh_scheduler() -> None:
                         finops_export_ingestion_svc.ACCOUNT)
     except Exception as _xis:
         logger.warning("Startup: could not start the cost export loader: %s", _xis)
+
+    # ── Drive the first fill until the dashboards have data ───────────────────
+    # Each collector below runs on its own timer, so a fresh deployment shows empty
+    # views until every one of them has happened to fire. This supervises them.
+    try:
+        asyncio.create_task(_first_fill_supervisor())
+        logger.info("Startup: first-fill supervisor registered")
+    except Exception as _ffe:
+        logger.warning("Startup: could not start the first-fill supervisor: %s", _ffe)
 
     # ── Start FinOps Warehouse nightly ETL scheduler ──────────────────────────
     # Downloads all Azure cost data into Azure SQL every night at midnight UTC.
