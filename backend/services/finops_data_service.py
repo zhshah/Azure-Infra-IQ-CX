@@ -257,6 +257,51 @@ def _pace_cost_call() -> None:
         _last_cost_call_at = time.monotonic()
 
 
+# ── Admission control ────────────────────────────────────────────────────────
+# The pacer serialises cost calls tenant-wide, so every thread beyond the first is
+# simply asleep holding a worker. On a single-instance plan that is exactly how the app
+# ran out of threads and stopped answering pages while the CPU sat at 3%. Only a couple
+# of callers are ever admitted; the rest are turned away immediately and fall back to
+# cached or warehouse data instead of queueing.
+_COST_SLOTS = threading.BoundedSemaphore(
+    max(1, int(os.getenv("FINOPS_MAX_CONCURRENT_COST_CALLS", "2") or 2)))
+
+# Background work runs on the pools named "bg" and "scan" (see main.py). Neither serves
+# requests, so both can afford to wait. A request handler cannot: a user must never sit
+# behind a 120s backoff, so it is turned away and served cached data instead.
+_BG_THREAD_PREFIXES = ("bg", "scan")
+_REQUEST_ADMIT_SECONDS = float(os.getenv("FINOPS_REQUEST_ADMIT_SECONDS", "2") or 2)
+_BACKGROUND_ADMIT_SECONDS = float(os.getenv("FINOPS_BACKGROUND_ADMIT_SECONDS", "300") or 300)
+
+
+def is_background_caller() -> bool:
+    return threading.current_thread().name.startswith(_BG_THREAD_PREFIXES)
+
+
+def cost_calls_degraded() -> bool:
+    """True when the tenant is throttling hard enough that a request should not wait."""
+    return cost_call_interval() >= COST_MAX_CALL_INTERVAL
+
+
+class CostCallRejected(Exception):
+    """Raised instead of queueing when admission would make a caller wait too long."""
+
+
+@contextmanager
+def cost_call_slot():
+    """Bound how many threads may be inside the throttled cost path at once."""
+    background = is_background_caller()
+    if not background and cost_calls_degraded():
+        raise CostCallRejected("cost API is hard-throttled; serving cached data")
+    timeout = _BACKGROUND_ADMIT_SECONDS if background else _REQUEST_ADMIT_SECONDS
+    if not _COST_SLOTS.acquire(timeout=timeout):
+        raise CostCallRejected(f"cost API busy; not waiting past {timeout:.0f}s")
+    try:
+        yield
+    finally:
+        _COST_SLOTS.release()
+
+
 # Throttling is the single biggest cause of both a slow ETL and silent warehouse gaps,
 # so it is counted and surfaced rather than left in the log.
 _THROTTLE_STATS: Dict[str, int] = {"queries": 0, "throttled_queries": 0, "gave_up": 0}
@@ -366,55 +411,70 @@ def query_cost(
     rows: List[Dict[str, Any]] = []
     skiptoken: Optional[str] = None
     # A 429 costs far more than a pause, so be patient rather than abandoning the query:
-    # giving up silently leaves a permanent hole in the warehouse.
-    retry_delays = [5, 15, 30, 60, 90, 120]
+    # giving up silently leaves a permanent hole in the warehouse. A REQUEST handler gets
+    # no such patience - a user must never sit behind two minutes of backoff, and the
+    # caller falls back to cached or warehouse data instead.
+    background = is_background_caller()
+    retry_delays = [5, 15, 30, 60, 90, 120] if background else [3]
     retry_idx = 0
 
-    while True:
-        try:
-            _pace_cost_call()
-            response = client.query.usage(
-                scope=scope,
-                parameters=query_def,
-                **({"skiptoken": skiptoken} if skiptoken else {}),
-            )
-            col_names = [c.name for c in response.columns]
+    try:
+        slot = cost_call_slot()
+        slot.__enter__()
+    except CostCallRejected as exc:
+        logger.info("FinOps: skipping cost query on %s — %s", scope, exc)
+        _THROTTLE_STATS["rejected"] = _THROTTLE_STATS.get("rejected", 0) + 1
+        cached = _get_cached(cache_key) if use_cache else None
+        return cached or []
 
-            for row in (response.rows or []):
-                row_dict: Dict[str, Any] = {}
-                for i, val in enumerate(row):
-                    row_dict[col_names[i] if i < len(col_names) else f"col_{i}"] = val
-                rows.append(row_dict)
+    try:
+        while True:
+            try:
+                _pace_cost_call()
+                response = client.query.usage(
+                    scope=scope,
+                    parameters=query_def,
+                    **({"skiptoken": skiptoken} if skiptoken else {}),
+                )
+                col_names = [c.name for c in response.columns]
 
-            skiptoken = _extract_skiptoken(response.next_link)
-            _note_cost_ok()
-            if not skiptoken:
-                break
+                for row in (response.rows or []):
+                    row_dict: Dict[str, Any] = {}
+                    for i, val in enumerate(row):
+                        row_dict[col_names[i] if i < len(col_names) else f"col_{i}"] = val
+                    rows.append(row_dict)
 
-        except Exception as e:
-            err_str = str(e)
-            if "429" in err_str or "TooManyRequests" in err_str:
-                _note_cost_throttled()
-                if retry_idx < len(retry_delays):
-                    wait = _retry_after_seconds(e) or retry_delays[retry_idx]
-                    retry_idx += 1
-                    logger.warning("FinOps: 429 on %s — waiting %.0fs (attempt %d/%d)",
-                                   scope, wait, retry_idx, len(retry_delays))
-                    time.sleep(wait)
-                    continue
-                else:
-                    _THROTTLE_STATS["gave_up"] += 1
-                    logger.error(
-                        "FinOps: sustained 429 on %s after %d retries — GIVING UP. "
-                        "This grain will have a gap: group_by=%s type=%s %s..%s",
-                        scope, len(retry_delays), group_by, cost_type, from_date, to_date)
+                skiptoken = _extract_skiptoken(response.next_link)
+                _note_cost_ok()
+                if not skiptoken:
                     break
-            elif "403" in err_str or "Forbidden" in err_str or "NotFound" in err_str:
-                logger.warning("FinOps: scope %s not accessible: %s", scope, e)
-                break
-            else:
-                logger.error("FinOps: query_cost error on %s: %s", scope, e)
-                break
+
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "TooManyRequests" in err_str:
+                    _note_cost_throttled()
+                    if retry_idx < len(retry_delays):
+                        wait = _retry_after_seconds(e) or retry_delays[retry_idx]
+                        retry_idx += 1
+                        logger.warning("FinOps: 429 on %s — waiting %.0fs (attempt %d/%d)",
+                                       scope, wait, retry_idx, len(retry_delays))
+                        time.sleep(wait)
+                        continue
+                    else:
+                        _THROTTLE_STATS["gave_up"] += 1
+                        logger.error(
+                            "FinOps: sustained 429 on %s after %d retries — GIVING UP. "
+                            "This grain will have a gap: group_by=%s type=%s %s..%s",
+                            scope, len(retry_delays), group_by, cost_type, from_date, to_date)
+                        break
+                elif "403" in err_str or "Forbidden" in err_str or "NotFound" in err_str:
+                    logger.warning("FinOps: scope %s not accessible: %s", scope, e)
+                    break
+                else:
+                    logger.error("FinOps: query_cost error on %s: %s", scope, e)
+                    break
+    finally:
+        slot.__exit__(None, None, None)
 
     if retry_idx:
         _THROTTLE_STATS["throttled_queries"] += 1
