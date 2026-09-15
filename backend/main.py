@@ -8229,16 +8229,18 @@ _FIRST_FILL_TARGETS = [
 
 
 def _first_fill_gaps() -> List[Dict[str, Any]]:
-    """Which dashboard-critical tables are still empty."""
+    """Which dashboard-critical tables are still empty.
+
+    A table missing from the census counts as a gap, not as "nothing to do": on a
+    fresh deployment the schema migrations run alongside startup, so an early probe
+    sees no tables at all. Treating that as success would make the supervisor stand
+    down on exactly the deployment it exists for.
+    """
     from services import finops_ingestion_service as _ing
     counts = _ing.table_counts()
-    gaps = []
-    for table, label in _FIRST_FILL_TARGETS:
-        if table not in counts:
-            continue  # table not in this schema, nothing to wait for
-        if int(counts.get(table) or 0) <= 0:
-            gaps.append({"dataset": table, "label": label})
-    return gaps
+    return [{"dataset": table, "label": label}
+            for table, label in _FIRST_FILL_TARGETS
+            if int(counts.get(table) or 0) <= 0]
 
 
 async def _first_fill_supervisor() -> None:
