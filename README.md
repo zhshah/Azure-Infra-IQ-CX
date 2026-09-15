@@ -1,9 +1,9 @@
-> **Release branch:** [`Sep-FinOps-STG`](https://github.com/zhshah/Azure-Infra-IQ-CX/tree/Sep-FinOps-STG) - this is the current release.
+> **Release branch:** [`Sep-MC-Non-AI-Dep`](https://github.com/zhshah/Azure-Infra-IQ-CX/tree/Sep-MC-Non-AI-Dep) - this is the current release.
 >
 > Clone it with:
 >
 > ```
-> git clone -b Sep-FinOps-STG https://github.com/zhshah/Azure-Infra-IQ-CX.git
+> git clone -b Sep-MC-Non-AI-Dep https://github.com/zhshah/Azure-Infra-IQ-CX.git
 > ```
 >
 > This README has two parts:
@@ -213,7 +213,7 @@ OpenAI + model, optional SQL/Redis, the Container App with a Managed Identity, a
 ### Step 1 — Clone
 
 ```bash
-git clone -b Sep-FinOps-STG https://github.com/zhshah/Azure-Infra-IQ-CX.git
+git clone -b Sep-MC-Non-AI-Dep https://github.com/zhshah/Azure-Infra-IQ-CX.git
 cd Azure-Infra-IQ-CX
 ```
 
@@ -358,6 +358,34 @@ subscription** (the hub-spoke pattern most enterprises use).
     -PrivateDnsZoneSubscriptionId    "<hub-subscription-id>" `
     -PrivateDnsZoneResourceGroupName "rg-private-dns-zones"
 ```
+
+**Enterprise, without AI (App Service)** — no Azure OpenAI resource is created or used.
+
+Use this when AI services are not approved, not available in the region, or out of budget. It is a **different script** (`Scripts/Infra-IQ-FinOps-No-AI-Storage-Deployment.ps1`) and an App Service deployment rather than Container Apps. Everything else is the same: Azure SQL cost warehouse, the Cost Management export pipeline, RBAC, VNet integration, Private Endpoints and Private DNS.
+
+```powershell
+.\Infra-IQ-FinOps-No-AI-Storage-Deployment.ps1 `
+    -ResourceGroupName  "rg-azure-infra-iq" `
+    -Location           "swedencentral" `
+    -WebAppName         "app-infraiq-agent" `
+    -AppServicePlanName "asp-infraiq-agent" `
+    -EntraAppClientId   "<your-entra-app-client-id>" `
+    -EntraTenantId      "<your-entra-tenant-id>" `
+    -SubscriptionId     "<your-subscription-id>" `
+    `
+    -CostExportStorageAccountName "<cost-export-storage-account>" `
+    -CostExportContainerName      "<cost-export-container>" `
+    `
+    -DeploymentMode                  "Private" `
+    -VNetName                        "corp-vnet" `
+    -VNetResourceGroupName           "rg-networking" `
+    -PrivateEndpointSubnetName       "pe-subnet" `
+    -AppServiceIntegrationSubnetName "appsvc-integration-subnet" `
+    -PrivateDnsZoneSubscriptionId    "<hub-subscription-id>" `
+    -PrivateDnsZoneResourceGroupName "rg-private-dns-zones"
+```
+
+There are **no `-OpenAI*` parameters** on this script, so passing one is a parameter-binding error rather than a silently ignored flag. FinOps, the cost ETL, the estate scan, inventory, waste detection, Advisor, utilisation, budgets and reports all work; only the AI-written narratives are switched off. See **Option 5** under *Cloud Deployment (Azure App Service)* for the full breakdown.
 
 **Manual capacity (SKU) selection** — pick a specific Container App workload profile at deploy
 time instead of the automatic fallback ladder. Append `-CapacityMode Manual` to any command
@@ -608,19 +636,19 @@ Each command should print a version number. If any of them says "not recognised"
 
 ## Step 2 - Download the tool
 
-**Branch to use:** [`Sep-FinOps-STG`](https://github.com/zhshah/Azure-Infra-IQ-CX/tree/Sep-FinOps-STG) — open that link to browse the code in your browser.
+**Branch to use:** [`Sep-MC-Non-AI-Dep`](https://github.com/zhshah/Azure-Infra-IQ-CX/tree/Sep-MC-Non-AI-Dep) — open that link to browse the code in your browser.
 
 To download it, open Command Prompt and run:
 
 ```bat
-git clone -b Sep-FinOps-STG https://github.com/zhshah/Azure-Infra-IQ-CX.git
+git clone -b Sep-MC-Non-AI-Dep https://github.com/zhshah/Azure-Infra-IQ-CX.git
 cd Azure-Infra-IQ-CX
 install.bat
 ```
 
 `install.bat` sets everything up automatically. It creates a Python environment, installs all packages, and builds the frontend. This takes 2-3 minutes and only needs to be run once.
 
-> **Note:** `-b Sep-FinOps-STG` is what selects the branch. Do not paste the browser address ending in `/tree/Sep-FinOps-STG` into `git clone`; that is a web page address and git will report "repository not found". Omitting `-b` gives you the default branch, which does not include the latest FinOps modules.
+> **Note:** `-b Sep-MC-Non-AI-Dep` is what selects the branch. Do not paste the browser address ending in `/tree/Sep-MC-Non-AI-Dep` into `git clone`; that is a web page address and git will report "repository not found". Omitting `-b` gives you the default branch, which does not include the latest FinOps modules.
 
 ---
 
