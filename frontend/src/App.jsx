@@ -463,6 +463,7 @@ import BudgetScenario     from './finops/BudgetScenario'
 import ForecastPanel      from './finops/ForecastPanel'
 import AllocationView     from './finops/AllocationView'
 import ChargebackPanel    from './finops/ChargebackPanel'
+import ChargebackByTag    from './finops/ChargebackByTag'
 import CommitmentTracker  from './finops/CommitmentTracker'
 import CommitmentPlanner  from './finops/CommitmentPlanner'
 import SavingsSummary     from './finops/SavingsSummary'
@@ -2424,7 +2425,8 @@ function AppInner() {
           { key: 'tags', label: 'Tag Analytics', render: () => <TagAnalytics /> },
           { key: 'compliance', label: 'FinOps Compliance', render: () => <FinOpsComplianceView /> },
           { key: 'lens', label: 'Cost Lens', render: () => <CostLens /> },
-          { key: 'chargeback', label: 'Chargeback', render: () => <ChargebackPanel /> },
+          { key: 'chargeback', label: 'Chargeback', render: () => <ChargebackByTag /> },
+          { key: 'chargeback-cc', label: 'Chargeback (CostCenter)', render: () => <ChargebackPanel /> },
           { key: 'unit', label: 'Unit Economics', render: () => <UnitEconomics /> },
         ]} />}
         {view === 'finops-overview' && <FinOpsHub tabs={[

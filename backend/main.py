@@ -5251,6 +5251,29 @@ async def finops_allocation(
 
 # ── Chargeback / Showback ──────────────────────────────────────────────────────
 
+@app.get("/api/finops/chargeback/tag-keys", tags=["FinOps"])
+async def finops_chargeback_tag_keys(days: int = 30, subscription_id: Optional[str] = None):
+    """Tag keys that actually carry cost, with the share of spend each can allocate."""
+    _require_finops()
+    from services import finops_chargeback_service as _cb
+    subs = [subscription_id] if subscription_id else None
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, lambda: _cb.list_tag_keys(days, subs))
+
+
+@app.get("/api/finops/chargeback/by-tag", tags=["FinOps"])
+async def finops_chargeback_by_tag(tag_key: str, days: int = 30,
+                                   subscription_id: Optional[str] = None):
+    """Allocate spend across one tag key's values, and report what it cannot allocate."""
+    _require_finops()
+    if not (tag_key or "").strip():
+        raise HTTPException(status_code=400, detail="tag_key is required")
+    from services import finops_chargeback_service as _cb
+    subs = [subscription_id] if subscription_id else None
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, lambda: _cb.chargeback_by_tag(tag_key, days, subs))
+
+
 @app.get("/api/finops/chargeback", response_model=FinOpsChargebackReport, tags=["FinOps"])
 async def finops_chargeback(time_range: str = "last_month"):
     """
