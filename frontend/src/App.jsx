@@ -461,6 +461,7 @@ import SavingsLedger       from './finops/SavingsLedger'
 import SubscriptionGovernance from './finops/SubscriptionGovernance'
 import BudgetManager      from './finops/BudgetManager'
 import BudgetScenario     from './finops/BudgetScenario'
+import BudgetBurndown     from './finops/BudgetBurndown'
 import ForecastPanel      from './finops/ForecastPanel'
 import AllocationView     from './finops/AllocationView'
 import ChargebackPanel    from './finops/ChargebackPanel'
@@ -2419,6 +2420,7 @@ function AppInner() {
         ]} />}
         {view === 'finops-budgets-hub' && <FinOpsHub storageKey="finops:hub:budgets" tabs={[
           { key: 'budgets', label: 'Budgets', render: () => <BudgetManager /> },
+          { key: 'burndown', label: 'Burn-down', render: () => <BudgetBurndown /> },
           { key: 'scenario', label: 'Scenario & Burndown', render: () => <BudgetScenario /> },
           { key: 'alerts', label: 'Alerts', render: () => <FinOpsAlerts /> },
         ]} />}

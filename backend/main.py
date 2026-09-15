@@ -5251,6 +5251,15 @@ async def finops_allocation(
 
 # ── Chargeback / Showback ──────────────────────────────────────────────────────
 
+@app.get("/api/finops/budgets/burndown", tags=["FinOps"])
+async def finops_budget_burndown(subscription_id: Optional[str] = None):
+    """Burn-down for every Azure budget: pace, projection and threshold breach dates."""
+    _require_finops()
+    from services import finops_burndown_service as _bd
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_pool, lambda: _bd.burndown_all(subscription_id))
+
+
 @app.get("/api/finops/chargeback/tag-keys", tags=["FinOps"])
 async def finops_chargeback_tag_keys(days: int = 30, subscription_id: Optional[str] = None):
     """Tag keys that actually carry cost, with the share of spend each can allocate."""
