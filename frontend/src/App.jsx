@@ -462,6 +462,7 @@ import SubscriptionGovernance from './finops/SubscriptionGovernance'
 import BudgetManager      from './finops/BudgetManager'
 import BudgetScenario     from './finops/BudgetScenario'
 import BudgetBurndown     from './finops/BudgetBurndown'
+import CostAttribution    from './finops/CostAttribution'
 import ForecastPanel      from './finops/ForecastPanel'
 import AllocationView     from './finops/AllocationView'
 import ChargebackPanel    from './finops/ChargebackPanel'
@@ -2452,7 +2453,12 @@ function AppInner() {
         ]} />}
         {view === 'finops-log-analytics' && <LogAnalyticsCost />}
         {view === 'finops-cost-lens' && <CostLens />}
-        {view === 'finops-studio' && <CostStudio />}
+        {/* Cost Studio's reason to exist is attribution: no other view explains why spend
+            moved, as opposed to what it is. That tab leads. */}
+        {view === 'finops-studio' && <FinOpsHub storageKey="finops:hub:studio" tabs={[
+          { key: 'attribution', label: 'Cost Change Attribution', render: () => <CostAttribution /> },
+          { key: 'studio', label: 'Studio Overview', render: () => <CostStudio /> },
+        ]} />}
         {view === 'finops-ingestion' && <DataIngestion />}
         {view === 'finops-pulse' && <CostPulse />}
         {view === 'finops' && <FinOpsDashboard />}

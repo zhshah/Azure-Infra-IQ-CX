@@ -8865,6 +8865,26 @@ async def mgmt_service_categories(days: int = 30, subscription_id: Optional[str]
         _pool, lambda: _fd.get_service_category_costs(days, _mgmt_subs(subscription_id)))
 
 
+@app.get("/api/finops/studio/cost-attribution", tags=["FinOps Management"])
+async def studio_cost_attribution(days: int = 30,
+                                  dimension: str = "resource",
+                                  subscription_id: Optional[str] = None,
+                                  resource_group: Optional[str] = None):
+    """Why spend changed: decomposes the delta between two equal windows into
+    new / increased / decreased / retired, which sum exactly to the total change.
+
+    `dimension` is looked up in a fixed map, so an unrecognised value falls back to
+    resource rather than reaching SQL.
+    """
+    from services import finops_attribution_service as _fa
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _pool, lambda: _fa.cost_change_attribution(
+            days=days, dimension=(dimension or "resource").strip().lower(),
+            subscription_ids=_mgmt_subs(subscription_id),
+            resource_group=(resource_group or "").strip()))
+
+
 @app.get("/api/finops/mgmt/category-breakdown", tags=["FinOps Management"])
 async def mgmt_category_breakdown(days: int = 30,
                                   subscription_id: Optional[str] = None,

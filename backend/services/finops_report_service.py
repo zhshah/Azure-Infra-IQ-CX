@@ -158,6 +158,53 @@ REPORT_TYPES: Dict[str, Dict[str, Any]] = {
             "well-run estate should look like. The headline states the dominant category and its share."
         ),
     },
+    "cost_variance": {
+        "label": "Cost Change & Variance Analysis",
+        "subtitle": "Why spend moved — new, grown, shrunk and retired workloads",
+        "sections": ["movers", "spend_overview", "subscriptions", "service_categories", "anomalies"],
+        "focus": (
+            "A COST CHANGE & VARIANCE report that explains WHY spend moved rather than what it is. Open with the "
+            "direction and size of the change period over period, then attribute it: workloads that are NEW this "
+            "period, existing workloads that GREW, existing workloads that SHRANK, and workloads that were RETIRED. "
+            "Name the specific resources, resource groups and services behind each group and give the dollar movement "
+            "for each. Separate deliberate change (a planned migration, a new project) from unplanned change (an "
+            "anomaly, a runaway job, a forgotten environment) and say which the evidence supports. Do NOT write a "
+            "general spend summary and do NOT list savings levers — every paragraph must explain a movement. The "
+            "headline states the net change in dollars and percent and the single largest contributor to it."
+        ),
+    },
+    "ai_spend": {
+        "label": "AI & Machine Learning Spend",
+        "subtitle": "Cognitive Services, OpenAI, Foundry, search and ML spend and its growth",
+        "sections": ["service_categories", "subscriptions", "movers", "savings_roi", "spend_overview"],
+        "mgmt": True,
+        "focus": (
+            "An AI & MACHINE LEARNING SPEND report. Focus exclusively on the AI estate — Azure OpenAI, Cognitive "
+            "Services, Foundry, AI Search, Machine Learning and AI agent workloads. State what AI costs, what share of "
+            "total estate spend that is, which subscriptions and resource groups it sits in, and how fast it is "
+            "growing period over period. Call out AI resources that appeared recently and any that are growing "
+            "steeply, since AI spend commonly scales with usage rather than with provisioned capacity. Where "
+            "utilisation figures exist for AI resources, note explicitly that they are a call-volume proxy and NOT a "
+            "capacity measure, so low utilisation must NOT be read as waste. Recommend governance actions — quota and "
+            "rate limits, environment separation, tagging for chargeback, and commitment or PTU evaluation where "
+            "consumption is steady. The headline states AI spend, its share of the estate and its growth rate."
+        ),
+    },
+    "chargeback": {
+        "label": "Chargeback Statement by Cost Centre",
+        "subtitle": "What each tagged cost centre owes, and the spend that cannot be charged to anyone",
+        "sections": ["allocation", "governance", "subscriptions", "resource_groups", "spend_overview"],
+        "focus": (
+            "A CHARGEBACK STATEMENT. Unlike a showback report, this is written as an invoice-style breakdown: for each "
+            "cost-centre tag value, state the amount owed, its share of the total, and the resources behind it. Then "
+            "state the UNALLOCATED amount — spend on resources carrying no cost-centre tag — as a separate, "
+            "prominently flagged figure, because it cannot be charged to anyone and is therefore absorbed centrally. "
+            "Give the tag coverage percentage and name the largest untagged resources so owners can be identified. "
+            "Recommend a concrete path to full coverage: which tag key to standardise on, Azure Policy to require it, "
+            "and how to handle shared or platform resources that legitimately have no single owner. The headline "
+            "states the unallocated amount and the coverage percentage."
+        ),
+    },
     "compute": {
         "label": "Virtual Machines — Cost & Utilization",
         "subtitle": "VM spend, power state, CPU and memory utilisation and underutilised capacity",
