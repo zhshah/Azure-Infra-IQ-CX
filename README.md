@@ -769,7 +769,8 @@ Python 3.13 or 3.14 is installed and has no pre-built packages for some dependen
 For production deployments the repo ships a PowerShell script that provisions all required Azure resources — App Service Plan, Web App, Azure SQL, Azure OpenAI, RBAC, and optional private networking — in a single automated run.
 
 > **Script**: `Scripts/deploy-appservice-healthsector-qatarcentral.ps1` (Qatar Central variant)  
-> **Generic variant**: `Scripts/deploy-appservice.ps1`
+> **Generic variant**: `Scripts/deploy-appservice.ps1`  
+> **Without AI**: `Scripts/Infra-IQ-FinOps-No-AI-Storage-Deployment.ps1` — same deployment with no Azure OpenAI resource (see **Option 5** below)
 
 Before running, set execution policy for the session:
 ```powershell
@@ -891,11 +892,53 @@ In `Existing` mode:
 
 ---
 
+### Option 5 — Private enterprise deployment **without AI** (no Azure OpenAI)
+
+Use this when the customer wants the FinOps and estate capability but **no Azure OpenAI resource at all** — for example where AI services are not approved, not available in the region, or out of budget.
+
+> **Script**: `Scripts/Infra-IQ-FinOps-No-AI-Storage-Deployment.ps1`
+
+This is a **separate script**. The AI deployment scripts are unchanged — pick the file that matches what you want to deploy.
+
+It deploys everything the AI script deploys **except** Azure OpenAI: App Service Plan, Web App with managed identity, Azure SQL (the cost warehouse), the Cost Management export storage account, RBAC, VNet integration, Private Endpoints and Private DNS. The app is configured with `AI_PROVIDER=none`, so AI code paths are skipped at runtime rather than failing.
+
+```powershell
+.\Infra-IQ-FinOps-No-AI-Storage-Deployment.ps1 `
+    -ResourceGroupName  "rg-finops-prod-01" `
+    -Location           "swedencentral" `
+    -WebAppName         "app-infraiq-agent" `
+    -AppServicePlanName "asp-infraiq-agent" `
+    -EntraAppClientId   "<app-client-id>" `
+    -EntraTenantId      "<tenant-id>" `
+    -SubscriptionId     "<subscription-id>" `
+    `
+    -CostExportStorageAccountName "<cost-export-storage-account>" `
+    -CostExportContainerName      "<cost-export-container>" `
+    `
+    -DeploymentMode                  "Private" `
+    -VNetName                        "<vnet-name>" `
+    -VNetResourceGroupName           "<vnet-rg>" `
+    -PrivateEndpointSubnetName       "<pe-subnet>" `
+    -AppServiceIntegrationSubnetName "<integration-subnet>" `
+    -PrivateDnsZoneSubscriptionId    "<hub-subscription-id>" `
+    -PrivateDnsZoneResourceGroupName "<private-dns-zone-rg>"
+```
+
+Note there are **no `-OpenAI*` parameters**. They do not exist on this script, so passing one is a parameter-binding error rather than a silently ignored flag.
+
+For a public (non-private) deployment, drop everything from `-DeploymentMode` onward — it defaults to `Public`.
+
+**Still works without AI:** FinOps overview and summary, cost allocation and chargeback, budgets, the cost warehouse and its ETL, the estate scan, resource inventory and scores, waste and orphan detection, Azure Advisor recommendations, utilisation and right-sizing, reservations, Log Analytics per-table cost, exports and reports.
+
+**Does not work without AI:** the AI summary on the home page, AI resource verdicts, AI deep-dive analysis and the executive briefing. Those views render empty; they do not error.
+
+---
+
 ### App Service private deployment — subnet requirements
 
 | Subnet | Delegation | Minimum size | Purpose |
 |--------|-----------|-------------|---------|
-| `PrivateEndpointSubnetName` | None | /27 (32 addresses) | Inbound Private Endpoint for App Service + OpenAI PE |
+| `PrivateEndpointSubnetName` | None | /27 (32 addresses) | Inbound Private Endpoint for App Service + OpenAI PE (no OpenAI PE when using the no-AI script) |
 | `AppServiceIntegrationSubnetName` | `Microsoft.Web/serverFarms` | /26 (64 addresses) recommended | App Service outbound VNet integration |
 
 The script automatically adds `Microsoft.Web/serverFarms` delegation to the integration subnet if it is missing and you confirm when prompted.
