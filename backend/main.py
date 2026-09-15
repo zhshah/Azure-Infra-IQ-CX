@@ -8641,20 +8641,88 @@ async def warehouse_anomalies(
     severity: Optional[str] = None,
     status: str = "open",
     limit: int = 50,
+    subscription_id: Optional[str] = None,
+    resource_group: Optional[str] = None,
+    resource_type: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    search: Optional[str] = None,
 ):
-    """Return detected cost anomalies (spikes vs 7-day rolling average)."""
+    """Detected cost anomalies (spikes vs 7-day rolling average), narrowed by selection."""
     _require_warehouse()
     loop = asyncio.get_event_loop()
-    _ck = _fw_cache_key("anomalies", severity, status, limit)
+    _ck = _fw_cache_key("anomalies", severity, status, limit, subscription_id,
+                        resource_group, resource_type, date_from, date_to, search)
     _hit = cache_svc.get_json(_ck)
     if _hit is not None:
         return _hit
     result = await loop.run_in_executor(
         _pool,
-        lambda: finops_warehouse_svc.get_anomalies(severity, status, limit),
+        lambda: finops_warehouse_svc.get_anomalies(
+            severity, status, limit, subscription_id, resource_group,
+            resource_type, date_from, date_to, search),
     )
     cache_svc.set_json(_ck, result, ttl_seconds=_FW_CACHE_TTL)
     return result
+
+
+@app.get("/api/finops/warehouse/anomalies/facets", tags=["FinOps Warehouse"])
+async def warehouse_anomaly_facets(status: str = "open"):
+    """Filter values that exist in the current anomaly set."""
+    _require_warehouse()
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _pool, lambda: finops_warehouse_svc.get_anomaly_facets(status))
+
+
+@app.get("/api/finops/warehouse/anomalies/{anomaly_id}", tags=["FinOps Warehouse"])
+async def warehouse_anomaly_detail(anomaly_id: str, days: int = 45):
+    """One anomaly with the resource's daily cost around it."""
+    _require_warehouse()
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _pool, lambda: finops_warehouse_svc.get_anomaly_detail(anomaly_id, days))
+
+
+@app.post("/api/finops/warehouse/anomalies/{anomaly_id}/analyze", tags=["FinOps Warehouse"])
+async def warehouse_anomaly_analyze(anomaly_id: str):
+    """AI explanation for one anomaly, grounded on its own daily series."""
+    _require_warehouse()
+    loop = asyncio.get_event_loop()
+    detail = await loop.run_in_executor(
+        _pool, lambda: finops_warehouse_svc.get_anomaly_detail(anomaly_id))
+    if not detail.get("available"):
+        raise HTTPException(status_code=404, detail=detail.get("reason", "anomaly not found"))
+
+    a = detail["anomaly"]
+    # Grounding is the whole point: the model gets this resource's real figures and is
+    # told to say so when the data cannot explain the spike, rather than inventing a cause.
+    facts = {
+        "resource": a["resource_name"], "resource_type": a["resource_type"],
+        "resource_group": a["resource_group"], "subscription_id": a["subscription_id"],
+        "detected_date": a["detected_date"], "severity": a["severity"],
+        "cost_on_detection_day_usd": a["cost_latest"],
+        "prior_7day_average_usd": a["cost_7d_avg"],
+        "spike_pct": a["spike_pct"], "excess_usd": detail["excess_usd"],
+        "daily_series": detail["series"],
+    }
+    prompt = (
+        "You are a FinOps analyst explaining ONE Azure cost anomaly.\n"
+        "Use ONLY the figures supplied. Do not invent causes, resource names or dollar "
+        "amounts. If the series does not explain the spike, say what extra evidence is "
+        "needed (activity logs, deployment history, scale events).\n"
+        "Answer in four short sections: What changed / Most likely cause given this data / "
+        "How to confirm / What it costs if left.\n\n"
+        f"FACTS:\n{json.dumps(facts, indent=2, default=str)}"
+    )
+    try:
+        from services.ai_infra_service import _call_ai
+        text = await loop.run_in_executor(_ai_pool, lambda: _call_ai(
+            "You explain Azure cost anomalies strictly from supplied data.", prompt, 2048))
+        return {"available": True, "anomaly": a, "analysis": text, "grounded_on": facts}
+    except Exception as exc:
+        logger.warning("anomaly AI analysis failed: %s", exc)
+        return {"available": False, "reason": str(exc), "anomaly": a}
 
 
 @app.get("/api/finops/warehouse/by-service", tags=["FinOps Warehouse"])

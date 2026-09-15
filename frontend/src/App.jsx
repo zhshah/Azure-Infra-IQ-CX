@@ -452,6 +452,7 @@ import CostInsights      from './finops/CostInsights'
 import FinOpsHub         from './finops/FinOpsHub'
 import CostFlow          from './finops/CostFlow'
 import AnomalyIntelligence from './finops/AnomalyIntelligence'
+import AnomalyExplorer    from './finops/AnomalyExplorer'
 import CostLens          from './finops/CostLens'
 import FinOpsDashboard    from './finops/FinOpsDashboard'
 import ManagementDashboard from './finops/ManagementDashboard'
@@ -2442,7 +2443,10 @@ function AppInner() {
         {view === 'finops-recommendations' && <RecommendationStudio />}
         {view === 'finops-analyze' && <AnalyzeHub />}
         {view === 'finops-costflow' && <CostFlow />}
-        {view === 'finops-anomalies' && <AnomalyIntelligence />}
+        {view === 'finops-anomalies' && <FinOpsHub storageKey="finops:hub:anom" tabs={[
+          { key: 'explorer', label: 'Explorer', render: () => <AnomalyExplorer /> },
+          { key: 'intelligence', label: 'Intelligence', render: () => <AnomalyIntelligence /> },
+        ]} />}
         {view === 'finops-log-analytics' && <LogAnalyticsCost />}
         {view === 'finops-cost-lens' && <CostLens />}
         {view === 'finops-studio' && <CostStudio />}

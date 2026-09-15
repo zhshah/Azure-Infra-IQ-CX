@@ -1799,16 +1799,39 @@ def get_anomalies(
     severity: Optional[str] = None,
     status: str = "open",
     limit: int = 50,
+    subscription_id: Optional[str] = None,
+    resource_group: Optional[str] = None,
+    resource_type: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    search: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Return detected anomalies from the warehouse."""
+    """Detected anomalies, narrowed by the caller's selection.
+
+    Every filter is bound, not interpolated: these arrive from query-string parameters.
+    """
     if not _DB_AVAILABLE:
         return []
     try:
-        filters = []
+        filters: List[str] = []
+        params: List[Any] = []
         if status:
-            filters.append(f"status = '{status}'")
+            filters.append("status = ?");            params.append(status)
         if severity:
-            filters.append(f"severity = '{severity}'")
+            filters.append("severity = ?");          params.append(severity)
+        if subscription_id:
+            filters.append("subscription_id = ?");   params.append(subscription_id)
+        if resource_group:
+            filters.append("resource_group = ?");    params.append(resource_group)
+        if resource_type:
+            filters.append("resource_type = ?");     params.append(resource_type)
+        if date_from:
+            filters.append("detected_date >= ?");    params.append(date_from)
+        if date_to:
+            filters.append("detected_date <= ?");    params.append(date_to)
+        if search:
+            filters.append("(resource_name LIKE ? OR resource_group LIKE ?)")
+            params.extend([f"%{search}%", f"%{search}%"])
         where = " AND ".join(filters) if filters else "1=1"
 
         with _conn() as con:
@@ -1818,7 +1841,7 @@ def get_anomalies(
                            cost_latest, cost_7d_avg, spike_pct, severity, status
                     FROM finops_anomalies
                     WHERE {where}
-                    ORDER BY spike_pct DESC"""
+                    ORDER BY spike_pct DESC""", tuple(params)
             ).fetchmany(limit)
 
         return [
@@ -1833,6 +1856,88 @@ def get_anomalies(
     except Exception as e:
         logger.error("get_anomalies error: %s", e)
         return []
+
+
+def get_anomaly_facets(status: str = "open") -> Dict[str, Any]:
+    """Filter options drawn from the anomalies that exist, so a selection is never empty."""
+    empty = {"available": False, "subscriptions": [], "resource_groups": [],
+             "resource_types": [], "severities": [], "date_min": None, "date_max": None}
+    if not _DB_AVAILABLE:
+        return empty
+    try:
+        with _conn() as con:
+            def col(name: str) -> List[Dict[str, Any]]:
+                rows = con.execute(
+                    f"SELECT {name}, COUNT(*) FROM finops_anomalies "
+                    "WHERE status = ? AND {c} IS NOT NULL AND {c} <> '' "
+                    "GROUP BY {c} ORDER BY COUNT(*) DESC".replace("{c}", name), (status,)).fetchall()
+                return [{"value": r[0], "count": int(r[1] or 0)} for r in rows]
+
+            span = con.execute(
+                "SELECT MIN(detected_date), MAX(detected_date) FROM finops_anomalies WHERE status = ?",
+                (status,)).fetchone()
+            total = con.execute(
+                "SELECT COUNT(*) FROM finops_anomalies WHERE status = ?", (status,)).fetchone()[0]
+            return {
+                "available": bool(total),
+                "total": int(total or 0),
+                "subscriptions": col("subscription_id"),
+                "resource_groups": col("resource_group"),
+                "resource_types": col("resource_type"),
+                "severities": col("severity"),
+                "date_min": span[0] if span else None,
+                "date_max": span[1] if span else None,
+            }
+    except Exception as e:
+        logger.warning("anomaly facets failed: %s", e)
+        return empty
+
+
+def get_anomaly_detail(anomaly_id: str, days: int = 45) -> Dict[str, Any]:
+    """One anomaly plus the resource's daily cost either side of it.
+
+    The list says a spike happened; this is what lets someone see the shape of it and
+    judge whether it is a step change, a one-day burst or a return to a prior level.
+    """
+    if not _DB_AVAILABLE:
+        return {"available": False}
+    try:
+        with _conn() as con:
+            r = con.execute(
+                """SELECT anomaly_id, detected_date, subscription_id, resource_name,
+                          resource_group, resource_type, cost_latest, cost_7d_avg,
+                          spike_pct, severity, status
+                   FROM finops_anomalies WHERE anomaly_id = ?""", (anomaly_id,)).fetchone()
+            if not r:
+                return {"available": False, "reason": "anomaly not found"}
+            anomaly = {
+                "anomaly_id": r[0], "detected_date": r[1], "subscription_id": r[2],
+                "resource_name": r[3], "resource_group": r[4], "resource_type": r[5],
+                "cost_latest": round(float(r[6] or 0), 2), "cost_7d_avg": round(float(r[7] or 0), 2),
+                "spike_pct": round(float(r[8] or 0), 1), "severity": r[9], "status": r[10],
+            }
+            series = [
+                {"date": s[0], "cost": round(float(s[1] or 0), 2)}
+                for s in con.execute(
+                    """SELECT snapshot_date, SUM(cost_usd) FROM finops_daily_resource_costs
+                       WHERE resource_name = ?
+                         AND snapshot_date >= DATEADD(day, -?, CAST(? AS date))
+                         AND snapshot_date <= DATEADD(day,  ?, CAST(? AS date))
+                       GROUP BY snapshot_date ORDER BY snapshot_date""",
+                    (anomaly["resource_name"], int(days), anomaly["detected_date"],
+                     7, anomaly["detected_date"])).fetchall()
+            ]
+            baseline = anomaly["cost_7d_avg"]
+            return {
+                "available": True,
+                "anomaly": anomaly,
+                "series": series,
+                "baseline_usd": baseline,
+                "excess_usd": round(max(anomaly["cost_latest"] - baseline, 0), 2),
+            }
+    except Exception as e:
+        logger.warning("anomaly detail failed: %s", e)
+        return {"available": False, "reason": str(e)}
 
 
 def get_tag_breakdown(
