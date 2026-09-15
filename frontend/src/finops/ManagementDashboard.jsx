@@ -174,6 +174,12 @@ export default function ManagementDashboard() {
   const [days, setDays] = useState(30)
   const [hoverCat, setHoverCat] = useState(null)
   const [hoverEnv, setHoverEnv] = useState(null)
+  // Resource type shown in the cost-vs-utilisation review. The overview payload carries
+  // VMs; any other type is fetched on demand.
+  const [utilTypes, setUtilTypes] = useState([])
+  const [utilType, setUtilType] = useState('microsoft.compute/virtualmachines')
+  const [utilData, setUtilData] = useState(null)
+  const [utilLoading, setUtilLoading] = useState(false)
 
   const load = async () => {
     setLoading(true); setError(null)
@@ -186,6 +192,28 @@ export default function ManagementDashboard() {
   }
   useEffect(() => { load() }, [days])
 
+  // Only types with a real reading are offered, so the picker can never select a blank chart.
+  useEffect(() => {
+    let dead = false
+    fetch('/api/finops/mgmt/utilization-types')
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { if (!dead && j?.types) setUtilTypes(j.types) })
+      .catch(() => {})
+    return () => { dead = true }
+  }, [])
+
+  useEffect(() => {
+    if (utilType === 'microsoft.compute/virtualmachines') { setUtilData(null); return undefined }
+    let dead = false
+    setUtilLoading(true)
+    fetch(`/api/finops/mgmt/vm-utilization?resource_types=${encodeURIComponent(utilType)}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { if (!dead) setUtilData(j) })
+      .catch(() => { if (!dead) setUtilData(null) })
+      .finally(() => { if (!dead) setUtilLoading(false) })
+    return () => { dead = true }
+  }, [utilType])
+
   const collect = async () => {
     setCollecting(true)
     try {
@@ -195,8 +223,14 @@ export default function ManagementDashboard() {
     finally { setCollecting(false) }
   }
 
+  // VMs come from the overview payload already loaded; other types are fetched on demand.
+  const utilView = useMemo(
+    () => (utilType === 'microsoft.compute/virtualmachines' ? (data?.vm || {}) : (utilData || {})),
+    [utilType, data, utilData],
+  )
+
   const vmScatter = useMemo(() => {
-    const vms = data?.vm?.vms || []
+    const vms = utilView?.vms || []
     return vms
       .filter(v => v.utilization_pct !== null && v.utilization_pct !== undefined)
       .map(v => ({
@@ -206,7 +240,7 @@ export default function ManagementDashboard() {
         name: v.resource_name,
         sku: v.sku,
       }))
-  }, [data])
+  }, [utilView])
 
   if (loading) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300, gap: 10 }}>
@@ -221,9 +255,12 @@ export default function ManagementDashboard() {
   )
   if (!data) return null
 
-  const { vm = {}, storage_tiers = {}, storage_growth = {}, network = {},
+  const { storage_tiers = {}, storage_growth = {}, network = {},
     security = {}, ingestion = {}, environments = {}, resource_groups = {},
     management_groups = {}, savings = {}, service_categories = {} } = data
+  // Every tile and table in the section below reads `vm`, so pointing it at the selected
+  // view switches the whole panel without touching each reference.
+  const vm = utilView
 
   const prodCost = (environments.environments || []).find(e => e.environment === 'Production')?.cost_usd || 0
   const nonProdCost = (environments.environments || []).find(e => e.environment === 'Non-Production')?.cost_usd || 0
@@ -326,32 +363,56 @@ export default function ManagementDashboard() {
         )}
       </Section>
 
-      {/* ── VM cost & utilisation ──────────────────────────────────────────── */}
-      <Section title="Virtual Machines — Cost &amp; Utilisation" icon={Server}
+      {/* ── Cost & utilisation, by resource type ───────────────────────────── */}
+      <Section title={`${vm.type_label || 'Virtual Machines'} — Cost & Utilisation`} icon={Server}
         note={vm.available && vm.metrics_note
           ? vm.metrics_note
-          : (vm.available && vm.memory_coverage_pct < 100
+          : (vm.available && vm.has_memory && vm.memory_coverage_pct < 100
             ? `Memory is reported for ${vm.memory_coverage_pct}% of running VMs. Memory comes from the host-level "Available Memory Bytes" metric combined with the SKU's RAM; VMs whose size is not in the catalogue show no memory figure.`
             : null)}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+          <span style={{ fontSize: 11, color: 'var(--c-94a3b8, #94a3b8)' }}>Resource type</span>
+          <select value={utilType} onChange={e => setUtilType(e.target.value)}
+            style={{ background: 'var(--c-0b1220, #0b1220)', border: '1px solid var(--c-334155, #334155)',
+                     borderRadius: 6, padding: '5px 9px', color: 'var(--c-e2e8f0, #e2e8f0)', fontSize: 12 }}>
+            {(utilTypes.length ? utilTypes : [{ resource_type: 'microsoft.compute/virtualmachines', label: 'Virtual Machines', with_utilization: 0, cost_month_usd: 0 }])
+              .map(t => (
+                <option key={t.resource_type} value={t.resource_type}>
+                  {t.label} — {t.with_utilization} measured · {fmtUsd(t.cost_month_usd)}
+                </option>
+              ))}
+          </select>
+          {utilLoading && <RefreshCw size={13} className="animate-spin" style={{ color: '#3b82f6' }} />}
+          <span style={{ fontSize: 10.5, color: 'var(--c-64748b, #64748b)' }}>
+            Only types that report a utilisation metric are listed.
+          </span>
+        </div>
         {!vm.available ? (
-          <NoData what="VM utilisation" hint="Populated after the next resource scan." />
+          <NoData what={`${vm.type_label || 'VM'} utilisation`} hint="Populated after the next resource scan." />
         ) : (
           <>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
-              <Kpi label="Total VM Spend" value={fmtUsd(vm.total_vm_cost_usd)} sub={`${vm.vm_count} VMs`} icon={DollarSign} />
-              <Kpi label="Running" value={vm.running_count} sub={fmtUsd(vm.running_cost_usd)} color="#22c55e" />
-              <Kpi label="Stopped" value={vm.stopped_count} sub={fmtUsd(vm.stopped_cost_usd)} color="#f59e0b" />
-              <Kpi label="Idle VM Cost" value={fmtUsd(vm.idle_cost_usd)} sub="deallocated or inactive 30d+" color="#ef4444" />
-              <Kpi label="Avg CPU" value={vm.avg_cpu_pct !== null && vm.avg_cpu_pct !== undefined ? `${vm.avg_cpu_pct}%` : '—'}
-                sub={vm.running_count ? `across ${vm.running_count} running` : 'no running VMs'} />
-              <Kpi label="Avg Memory" value={vm.avg_memory_pct !== null && vm.avg_memory_pct !== undefined ? `${vm.avg_memory_pct}%` : '—'}
-                sub={vm.running_count ? `${vm.memory_coverage_pct}% coverage` : 'no running VMs'} />
-              <Kpi label="% Underutilised" value={`${vm.underutilized_pct}%`} sub={`${vm.underutilized_count} of ${vm.running_count} running`} color="#f59e0b" />
+              <Kpi label="Total Spend" value={fmtUsd(vm.total_vm_cost_usd)} sub={`${vm.vm_count} resources`} icon={DollarSign} />
+              {vm.has_power_state && <Kpi label="Running" value={vm.running_count} sub={fmtUsd(vm.running_cost_usd)} color="#22c55e" />}
+              {vm.has_power_state && <Kpi label="Stopped" value={vm.stopped_count} sub={fmtUsd(vm.stopped_cost_usd)} color="#f59e0b" />}
+              <Kpi label="Idle Cost" value={fmtUsd(vm.idle_cost_usd)} sub="deallocated or inactive 30d+" color="#ef4444" />
+              {/* CPU and memory are VM-centric; hiding them beats showing a dash for a type
+                  that cannot report them. */}
+              {vm.has_cpu && (
+                <Kpi label="Avg CPU" value={vm.avg_cpu_pct !== null && vm.avg_cpu_pct !== undefined ? `${vm.avg_cpu_pct}%` : '—'}
+                  sub={vm.running_count ? `across ${vm.running_count} measured` : 'nothing running'} />
+              )}
+              {vm.has_memory && (
+                <Kpi label="Avg Memory" value={vm.avg_memory_pct !== null && vm.avg_memory_pct !== undefined ? `${vm.avg_memory_pct}%` : '—'}
+                  sub={vm.running_count ? `${vm.memory_coverage_pct}% coverage` : 'nothing running'} />
+              )}
+              <Kpi label="% Underutilised" value={`${vm.underutilized_pct}%`}
+                sub={`${vm.underutilized_count} of ${vm.metrics_sample_count || vm.vm_count} measured`} color="#f59e0b" />
             </div>
 
             {vmScatter.length > 0 && (
               <div style={{ height: 280, marginBottom: 16 }}>
-                <div style={{ fontSize: 12, color: 'var(--c-94a3b8, #94a3b8)', marginBottom: 6 }}>Cost vs Utilisation — bottom-right is waste</div>
+                <div style={{ fontSize: 12, color: 'var(--c-94a3b8, #94a3b8)', marginBottom: 6 }}>Cost vs Utilisation — top-left is waste (high cost, low utilisation)</div>
                 <ResponsiveContainer width="100%" height="100%">
                   <ScatterChart margin={{ top: 10, right: 20, bottom: 20, left: 10 }}>
                     <CartesianGrid stroke="#1e293b" />
@@ -389,7 +450,7 @@ export default function ManagementDashboard() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead style={{ position: 'sticky', top: 0, background: '#0f172a' }}>
                   <tr style={{ color: 'var(--c-94a3b8, #94a3b8)', textAlign: 'left' }}>
-                    <th style={{ padding: '6px 8px' }}>VM</th>
+                    <th style={{ padding: '6px 8px' }}>{vm.type_label || 'VM'}</th>
                     <th style={{ padding: '6px 8px' }}>Size</th>
                     <th style={{ padding: '6px 8px' }}>State</th>
                     <th style={{ padding: '6px 8px', textAlign: 'right' }}>Cost</th>

@@ -422,7 +422,7 @@ export default function FinOpsWarehouse() {
   const freshness = dashboard?.data_freshness || status || {}
 
   // Build subscriptions list for filter
-  const subscriptions = bySubscription.map(s => ({ id: s.subscription_id, name: s.subscription_id }))
+  const subscriptions = bySubscription.map(s => ({ id: s.subscription_id, name: s.subscription_name || s.subscription_id }))
 
   // Get unique service families for monthly stacked chart
   const svcFamilies = [...new Set(monthlyServiceTrend.flatMap(m => Object.keys(m).filter(k => k !== 'month')))].slice(0, 8)
@@ -590,25 +590,78 @@ export default function FinOpsWarehouse() {
               <SectionTitle>By Subscription</SectionTitle>
               {bySubscription.length === 0 ? (
                 <EmptyState message="No subscription data" />
-              ) : (
-                <ResponsiveContainer width="100%" height={200}>
-                  <PieChart>
-                    <Pie
-                      data={bySubscription}
-                      cx="50%" cy="50%"
-                      innerRadius={50} outerRadius={80}
-                      dataKey="cost"
-                      nameKey="subscription_id"
-                      paddingAngle={2}
-                    >
-                      {bySubscription.map((_, i) => (
-                        <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
+              ) : (() => {
+                // The arc alone was unreadable: no legend, and nameKey was the GUID, so a
+                // slice could not be tied to a subscription at all.
+                const rows = bySubscription.filter(s => Number(s.cost) > 0)
+                const total = rows.reduce((a, s) => a + Number(s.cost || 0), 0)
+                const nameOf = s => s.subscription_name || s.subscription_id
+                return (
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div style={{ position: 'relative', flex: '1 1 180px', minWidth: 170, height: 200 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={rows}
+                            cx="50%" cy="50%"
+                            innerRadius={52} outerRadius={80}
+                            dataKey="cost"
+                            nameKey="subscription_name"
+                            paddingAngle={2}
+                            minAngle={2}
+                            isAnimationActive={false}
+                            labelLine={false}
+                            label={({ cx, cy, midAngle, innerRadius, outerRadius, percent }) => {
+                              if (percent < 0.05) return null
+                              const RAD = Math.PI / 180
+                              const r = innerRadius + (outerRadius - innerRadius) * 0.5
+                              return (
+                                <text x={cx + r * Math.cos(-midAngle * RAD)} y={cy + r * Math.sin(-midAngle * RAD)}
+                                      textAnchor="middle" dominantBaseline="central"
+                                      fill="#ffffff" fontSize={11} fontWeight={700} style={{ pointerEvents: 'none' }}>
+                                  {`${(percent * 100).toFixed(0)}%`}
+                                </text>
+                              )
+                            }}
+                          >
+                            {rows.map((_, i) => (
+                              <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip formatter={(v, n) => [fmtUsd(v), n]}
+                                   contentStyle={{ background: 'var(--c-0f172a)', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+                                    alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                        <div style={{ fontSize: 9, letterSpacing: 0.4, textTransform: 'uppercase', color: C.muted }}>Total</div>
+                        <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--c-f1f5f9)', fontVariantNumeric: 'tabular-nums' }}>
+                          {fmtUsd(total)}
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ flex: '1 1 190px', minWidth: 180, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      {rows.map((s, i) => (
+                        <div key={s.subscription_id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                          <span style={{ width: 9, height: 9, borderRadius: 2, flexShrink: 0,
+                                         background: CHART_PALETTE[i % CHART_PALETTE.length] }} />
+                          <span title={s.subscription_id}
+                                style={{ flex: 1, color: 'var(--c-e2e8f0)', overflow: 'hidden',
+                                         textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {nameOf(s)}
+                          </span>
+                          <span style={{ color: 'var(--c-f1f5f9)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                            {fmtUsd(s.cost)}
+                          </span>
+                          <span style={{ color: C.muted, width: 34, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                            {total > 0 ? `${((s.cost / total) * 100).toFixed(0)}%` : '—'}
+                          </span>
+                        </div>
                       ))}
-                    </Pie>
-                    <Tooltip formatter={(v) => [fmtUsd(v), 'Cost']} />
-                  </PieChart>
-                </ResponsiveContainer>
-              )}
+                    </div>
+                  </div>
+                )
+              })()}
             </Card>
           </div>
 

@@ -301,27 +301,63 @@ export default function AIInsightsDashboard({ onNavigate }) {
       const res = await fetch(m.endpoint, { signal: ctrl.signal });
       clearTimeout(t);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      await res.json();
+      const body = await res.json().catch(() => null);
+      // The server stops waiting at its own budget (AI_REQUEST_BUDGET_SECONDS) and
+      // answers 200 {status:"processing"} while the analysis keeps running. That is a
+      // success status code for work that has NOT finished, so treat it as such and let
+      // the caller keep polling — otherwise the card is marked done while still empty.
       await load();
+      return body?.status === 'processing' ? 'processing' : 'done';
     } catch (e) {
-      // leave the card as not-analyzed; surface nothing intrusive
+      return 'error';
     } finally {
       setBusyKeys((p) => { const n = { ...p }; delete n[m.key]; return n; });
     }
   }, [load]);
+
+  // Run a few categories at once. Each one is a 70-300s reasoning pass, so doing all 15
+  // strictly one-after-another took 20-70 minutes and looked hung at 0/15. Concurrency is
+  // deliberately bounded rather than Promise.all: the backend AI pool is finite, and
+  // firing 15 at once would just queue them there while starving every other AI feature.
+  const AI_LANES = 4;
 
   const generateAll = useCallback(async () => {
     const missing = (data?.modules || []).filter((m) => !m.available);
     if (!missing.length) return;
     cancelRef.current = false;
     setGenAll({ done: 0, total: missing.length });
-    for (let i = 0; i < missing.length; i++) {
-      if (cancelRef.current) break;
-      await generateOne(missing[i]);
-      setGenAll({ done: i + 1, total: missing.length });
+
+    let next = 0;
+    let done = 0;
+    const pending = [];
+
+    const worker = async () => {
+      while (!cancelRef.current) {
+        const i = next++;
+        if (i >= missing.length) return;
+        const outcome = await generateOne(missing[i]);
+        if (outcome === 'processing') pending.push(missing[i]);
+        done += 1;
+        setGenAll({ done, total: missing.length });
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(AI_LANES, missing.length) }, worker));
+
+    // Anything the server was still computing when it answered: poll the read-only
+    // summary until those cards appear, instead of leaving them as "not analyzed".
+    for (let i = 0; i < 12 && pending.length && !cancelRef.current; i++) {
+      await new Promise((r) => setTimeout(r, 15000));
+      const d = await getJSON('/api/ai/insights-dashboard').catch(() => null);
+      if (!d) continue;
+      setData(d);
+      const stillMissing = new Set((d.modules || []).filter((m) => !m.available).map((m) => m.key));
+      for (let j = pending.length - 1; j >= 0; j--) {
+        if (!stillMissing.has(pending[j].key)) pending.splice(j, 1);
+      }
     }
     setGenAll(null);
-  }, [data, generateOne]);
+  }, [data, generateOne, load]);
 
   const generateBriefing = useCallback(async () => {
     setBriefingLoading(true);

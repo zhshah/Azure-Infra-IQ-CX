@@ -339,7 +339,7 @@ function MoMMovers({ s }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--c-94a3b8)', marginBottom: 3 }}>
             <span>{r.label}</span><span style={{ color: r.color, fontWeight: 600 }}>{fmtUsd(r.value)}</span>
           </div>
-          <div style={{ height: 8, background: 'var(--c-0f172a)', borderRadius: 4, overflow: 'hidden' }}>
+          <div style={{ height: 8, background: 'var(--c-track)', borderRadius: 4, overflow: 'hidden' }}>
             <div style={{ width: `${Math.max(0, Math.min(100, r.width))}%`, height: '100%', background: r.color, opacity: 0.7 }} />
           </div>
         </div>

@@ -588,7 +588,7 @@ export default function CostPulse() {
                 return (
                   <div key={p.key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <div style={{ width: 190, color: 'var(--c-cbd5e1)', fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.label}>{p.label}</div>
-                    <div style={{ flex: 1, height: 8, background: 'var(--c-0f172a)', borderRadius: 999, overflow: 'hidden' }}>
+                    <div style={{ flex: 1, height: 8, background: 'var(--c-track)', borderRadius: 999, overflow: 'hidden' }}>
                       <div style={{
                         width: `${Math.max(share, 0.6)}%`, height: '100%', borderRadius: 999,
                         background: `linear-gradient(90deg, ${colorOf(ci)}, ${colorOf(ci)}99)`,
@@ -691,7 +691,7 @@ export default function CostPulse() {
               <div key={b.key} onMouseEnter={() => setHoverKey(b.key)} onMouseLeave={() => setHoverKey(null)}
                 style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'default' }}>
                     <div style={{ width: 190, color: 'var(--c-cbd5e1)', fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={keyLabel(b.key)}>{keyLabel(b.key)}</div>
-                <div style={{ flex: 1, height: 9, background: 'var(--c-0f172a)', borderRadius: 999, overflow: 'hidden' }}>
+                <div style={{ flex: 1, height: 9, background: 'var(--c-track)', borderRadius: 999, overflow: 'hidden' }}>
                   <div style={{
                     width: `${Math.max(pct, 0.6)}%`, height: '100%', borderRadius: 999,
                     background: `linear-gradient(90deg, ${colorOf(i)}, ${colorOf(i)}99)`,

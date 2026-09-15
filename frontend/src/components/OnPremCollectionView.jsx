@@ -2213,7 +2213,7 @@ function ServerDetail({ server: s, onBack }) {
                   <td style={{ padding: 8, textAlign: 'right', color: 'var(--c-34d399)' }}>{d.free_gb}</td>
                   <td style={{ padding: 8, textAlign: 'right', color: pct > 90 ? '#ef4444' : pct > 75 ? '#fbbf24' : 'var(--c-e2e8f0)' }}>{pct}%</td>
                   <td style={{ padding: 8, width: 120 }}>
-                    <div style={{ background: 'var(--c-0f172a)', borderRadius: 4, height: 8, overflow: 'hidden' }}>
+                    <div style={{ background: 'var(--c-track)', borderRadius: 4, height: 8, overflow: 'hidden' }}>
                       <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', borderRadius: 4, background: pct > 90 ? '#ef4444' : pct > 75 ? '#fbbf24' : '#34d399' }} />
                     </div>
                   </td>

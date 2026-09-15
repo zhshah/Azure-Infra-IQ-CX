@@ -1568,7 +1568,21 @@ def get_warehouse_dashboard(
                     GROUP BY subscription_id
                     ORDER BY total DESC"""
             ).fetchall()
-            by_subscription = [{"subscription_id": r[0], "cost": round(float(r[1]), 2)} for r in sub_rows]
+            # finops_daily_resource_costs stores only the GUID, so the chart had no way to
+            # name a slice. The subscription-grain table carries the display name.
+            name_map = {}
+            try:
+                for nr in con.execute(
+                    "SELECT DISTINCT subscription_id, subscription_name "
+                    "FROM finops_daily_subscription_costs "
+                    "WHERE subscription_name IS NOT NULL AND subscription_name <> ''").fetchall():
+                    if nr[0]:
+                        name_map[str(nr[0]).lower()] = nr[1]
+            except Exception as _ne:
+                logger.debug("subscription name lookup unavailable: %s", _ne)
+            by_subscription = [{"subscription_id": r[0],
+                                "subscription_name": name_map.get(str(r[0]).lower()) or r[0],
+                                "cost": round(float(r[1]), 2)} for r in sub_rows]
 
             # ── By service family ─────────────────────────────────────────
             svc_rows = con.execute(

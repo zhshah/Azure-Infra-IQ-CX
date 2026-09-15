@@ -127,6 +127,8 @@ export default function FinOpsDashboard() {
   const [selectedSub,   setSelectedSub]   = useState(null)
   const [selectedRG,    setSelectedRG]    = useState(null)
   const [timeRange,     setTimeRange]     = useState('last_30d')
+  // Must sit with the other hooks: the component early-returns below on loading/error.
+  const [bdHover,       setBdHover]       = useState(null)
   const [breakdownDim,  setBreakdownDim]  = useState('SubscriptionId')
   const [showFilters,   setShowFilters]   = useState(true)
 
@@ -298,6 +300,12 @@ export default function FinOpsDashboard() {
 
   // Breakdown chart click → resources behind the segment (resource-mappable dims only).
   const bdDrillable = ['ResourceGroupName', 'ResourceType', 'ResourceLocation'].includes(breakdownDim) || (breakdownDim || '').startsWith('TagKey:')
+  // $0 rows drew a zero-width slice and still consumed a colour and a label slot; keep
+  // them out of the arc and report the count under the key instead.
+  const bdRows      = breakdownData.filter(d => Number(d.cost) > 0)
+  const bdZeroCount = breakdownData.length - bdRows.length
+  const bdTotal     = bdRows.reduce((s, d) => s + Number(d.cost || 0), 0)
+  const bdActive    = bdHover ? bdRows.find(d => d.name === bdHover) : null
   const bdDrill = async (value) => {
     const params = _dashDrillParams(breakdownDim, value)
     if (!params) return
@@ -582,48 +590,89 @@ export default function FinOpsDashboard() {
           <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, fontWeight: 600, marginBottom: 12 }}>
             Cost Distribution — {dimLabel}
           </div>
-          {breakdownData.length > 0 ? (
+          {bdRows.length > 0 ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              <ResponsiveContainer width="55%" height={200}>
+              <div style={{ position: 'relative', width: '55%', height: 200 }}>
+              <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
-                    data={breakdownData}
+                    data={bdRows}
                     dataKey="cost"
                     nameKey="name"
                     cx="50%"
                     cy="50%"
-                    innerRadius={40}
+                    innerRadius={48}
                     outerRadius={80}
+                    paddingAngle={1}
+                    minAngle={2}
+                    isAnimationActive={false}
                     strokeWidth={1}
                     stroke="#0f172a"
                     label={({ cx, cy, midAngle, innerRadius, outerRadius, percent }) =>
                       PieLabel({ cx, cy, midAngle, innerRadius, outerRadius, pct: percent * 100 })
                     }
                     labelLine={false}
+                    onMouseEnter={(_, i) => setBdHover(bdRows[i]?.name ?? null)}
+                    onMouseLeave={() => setBdHover(null)}
                     onClick={bdDrillable ? (d) => d && bdDrill(d.name ?? d.payload?.name) : undefined}
                     style={bdDrillable ? { cursor: 'pointer' } : undefined}
                   >
-                    {breakdownData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} cursor={bdDrillable ? 'pointer' : undefined} />)}
+                    {bdRows.map((d, i) => (
+                      <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]}
+                            opacity={!bdHover || bdHover === d.name ? 1 : 0.32}
+                            cursor={bdDrillable ? 'pointer' : undefined} />
+                    ))}
                   </Pie>
                   <Tooltip contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 11 }} formatter={v => fmtUsd(v, 2)} />
                 </PieChart>
               </ResponsiveContainer>
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, overflow: 'hidden' }}>
-                {breakdownData.slice(0, 6).map((d, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+              {/* Centre read-out: the ring only carries percentages, so the dollars live here. */}
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+                            alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', padding: '0 26%' }}>
+                <div style={{ fontSize: 9, letterSpacing: 0.4, textTransform: 'uppercase', color: 'var(--c-64748b)',
+                              textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
+                  {bdActive ? bdActive.name : 'Total'}
+                </div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--c-f1f5f9)', fontVariantNumeric: 'tabular-nums' }}>
+                  {fmtUsd(bdActive ? bdActive.cost : bdTotal)}
+                </div>
+              </div>
+              </div>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, overflow: 'hidden' }}>
+                {bdRows.slice(0, 8).map((d, i) => (
+                  <div key={i}
+                       onMouseEnter={() => setBdHover(d.name)} onMouseLeave={() => setBdHover(null)}
+                       onClick={bdDrillable ? () => bdDrill(d.name) : undefined}
+                       style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, padding: '2px 4px',
+                                borderRadius: 4, cursor: bdDrillable ? 'pointer' : 'default',
+                                background: bdHover === d.name ? 'rgba(var(--rgb-slate), .30)' : 'transparent' }}>
                     <div style={{ width: 8, height: 8, borderRadius: 2, background: CHART_COLORS[i % CHART_COLORS.length], flexShrink: 0 }} />
                     <span style={{ color: 'var(--c-94a3b8)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
-                    <span style={{ color: 'var(--c-e2e8f0)', fontWeight: 600, flexShrink: 0 }}>{fmtUsd(d.cost)}</span>
+                    <span style={{ color: 'var(--c-e2e8f0)', fontWeight: 600, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{fmtUsd(d.cost)}</span>
+                    <span style={{ color: 'var(--c-64748b)', flexShrink: 0, width: 32, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                      {bdTotal > 0 ? `${((d.cost / bdTotal) * 100).toFixed(0)}%` : '—'}
+                    </span>
                   </div>
                 ))}
-                {breakdownData.length > 6 && (
-                  <span style={{ color: 'var(--c-475569)', fontSize: 10 }}>+{breakdownData.length - 6} more</span>
+                {bdRows.length > 8 && (
+                  <span style={{ color: 'var(--c-475569)', fontSize: 10 }}>+{bdRows.length - 8} more</span>
+                )}
+                {bdZeroCount > 0 && (
+                  <span style={{ color: 'var(--c-475569)', fontSize: 10 }}>
+                    {bdZeroCount} with no attributed spend (not charted)
+                  </span>
                 )}
               </div>
             </div>
           ) : (
-            <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--c-334155)', fontSize: 12 }}>
+            <div style={{ height: 200, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                          color: 'var(--c-64748b)', fontSize: 12, textAlign: 'center', padding: '0 24px' }}>
               No data available
+              {breakdownData.length > 0 && (
+                <div style={{ marginTop: 6, fontSize: 11, color: 'var(--c-475569)', lineHeight: 1.45 }}>
+                  {breakdownData.length} {breakdownData.length === 1 ? 'value' : 'values'} matched, but none carry attributed spend for this period.
+                </div>
+              )}
             </div>
           )}
         </div>

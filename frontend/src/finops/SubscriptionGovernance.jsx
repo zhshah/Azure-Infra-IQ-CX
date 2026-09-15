@@ -4,11 +4,18 @@
  * Surfaces three conditions the estate view otherwise hides: subscriptions with
  * no management-group assignment (outside policy inheritance), subscriptions
  * with no spend (candidates for cleanup), and subscriptions that are disabled
- * yet still billing.
+ * yet still billing. A roster below lists every reviewed subscription, so one
+ * that raises no finding is visibly healthy rather than simply absent.
  */
 import React, { useState, useEffect } from 'react'
-import { RefreshCw, AlertCircle, ShieldAlert, Ban, CircleSlash } from 'lucide-react'
+import { RefreshCw, AlertCircle, ShieldAlert, Ban, CircleSlash, ListChecks, CheckCircle2 } from 'lucide-react'
 import { fmtUsd } from './finopsApi'
+
+const FINDING_LABELS = {
+  not_in_landing_zone: 'Not in a landing zone',
+  zero_spend: 'Zero spend',
+  disabled_but_billing: 'Disabled but billing',
+}
 
 const card = {
   background: 'var(--c-0f172a, #0f172a)',
@@ -146,6 +153,68 @@ export default function SubscriptionGovernance() {
         items={data.disabled_with_cost || []}
         why="The subscription is disabled yet still accruing charges — normally retained storage, reserved capacity or a support plan that survives deactivation. This is money spent on something nobody can use; raise a billing case to stop the charge."
         empty="No disabled subscriptions are incurring cost." />
+
+      {/* The cards above only list exceptions, so a compliant subscription appeared
+          nowhere and looked like it had been missed. This roster accounts for every
+          subscription behind the "reviewed" count. */}
+      {(data.subscriptions || []).length > 0 && (
+        <div style={{ background: 'var(--c-111827, #111827)', border: '1px solid var(--c-1e293b, #1e293b)', borderRadius: 10, padding: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <ListChecks size={15} style={{ color: '#22c55e' }} />
+            <span style={{ color: 'var(--c-f1f5f9, #f1f5f9)', fontSize: 14, fontWeight: 700 }}>All reviewed subscriptions</span>
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--c-64748b, #64748b)' }}>
+              {data.healthy_count} of {data.subscriptions.length} with no findings
+            </span>
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--c-64748b, #64748b)', lineHeight: 1.5, marginBottom: 10 }}>
+            Every subscription the identity can read, including those that raised no finding.
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ color: 'var(--c-64748b, #64748b)', textAlign: 'left' }}>
+                  <th style={{ padding: '6px 8px', fontWeight: 600 }}>SUBSCRIPTION</th>
+                  <th style={{ padding: '6px 8px', fontWeight: 600 }}>MANAGEMENT GROUP</th>
+                  <th style={{ padding: '6px 8px', fontWeight: 600 }}>STATE</th>
+                  <th style={{ padding: '6px 8px', fontWeight: 600, textAlign: 'right' }}>COST (30D)</th>
+                  <th style={{ padding: '6px 8px', fontWeight: 600 }}>STATUS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.subscriptions.map(s => (
+                  <tr key={s.subscription_id} style={{ borderTop: '1px solid var(--c-1e293b, #1e293b)' }}>
+                    <td style={{ padding: '8px' }}>
+                      <div style={{ color: 'var(--c-e2e8f0, #e2e8f0)', fontWeight: 600 }}>{s.name}</div>
+                      <div style={{ color: 'var(--c-64748b, #64748b)', fontSize: 10.5 }}>{s.subscription_id}</div>
+                    </td>
+                    <td style={{ padding: '8px', color: 'var(--c-94a3b8, #94a3b8)' }}>{s.management_group || '—'}</td>
+                    <td style={{ padding: '8px', color: 'var(--c-94a3b8, #94a3b8)' }}>{s.state}</td>
+                    <td style={{ padding: '8px', textAlign: 'right', color: 'var(--c-e2e8f0, #e2e8f0)', fontVariantNumeric: 'tabular-nums' }}>
+                      {fmtUsd(s.cost_usd)}
+                    </td>
+                    <td style={{ padding: '8px' }}>
+                      {s.healthy ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#22c55e', fontSize: 11 }}>
+                          <CheckCircle2 size={12} /> No findings
+                        </span>
+                      ) : (
+                        <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>
+                          {s.findings.map(f => (
+                            <span key={f} style={{ fontSize: 10, color: '#fbbf24', background: 'rgba(245,158,11,.14)',
+                                                   border: '1px solid rgba(245,158,11,.35)', borderRadius: 999, padding: '1px 7px' }}>
+                              {FINDING_LABELS[f] || f}
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

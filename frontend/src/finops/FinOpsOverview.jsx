@@ -635,7 +635,7 @@ export default function FinOpsOverview() {
                       <span style={{ color: 'var(--c-cbd5e1)' }}>{s.name}</span>
                       <span style={{ color: 'var(--c-f1f5f9)', fontWeight: 600 }}>{fmtUsd(s.cost)}</span>
                     </div>
-                    <div style={{ height: 6, background: 'var(--c-0f172a)', borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{ height: 6, background: 'var(--c-track)', borderRadius: 3, overflow: 'hidden' }}>
                       <div style={{ height: '100%', width: `${Math.max(3, s.cost / topServicesMax * 100)}%`, background: CHART_COLORS[i % CHART_COLORS.length], borderRadius: 3 }} />
                     </div>
                   </div>

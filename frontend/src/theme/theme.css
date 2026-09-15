@@ -89,6 +89,20 @@
   --c-64748b: #64748b;
   --c-475569: #475569;
   --rgb-slate: 30, 41, 59;
+
+  /* Chart chrome. Recharts writes axis/legend colours as SVG presentation
+     attributes, which cannot resolve var() — the rules at the end of this file
+     restyle them via CSS instead, and read these. */
+  --c-chart-text: #cbd5e1;
+  --c-chart-text-strong: #f1f5f9;
+  --c-chart-grid: #1e293b;
+  --c-chart-axis: #334155;
+
+  /* Inset track behind a progress/share bar. Distinct from the panel surface:
+     --c-0f172a turns WHITE in light mode, which is correct for a tooltip but made
+     these tracks invisible on a white card. It was also only 1.01:1 against the dark
+     card, so the unfilled part of a bar barely read in either theme. */
+  --c-track: #1e293b;
 }
 
 html.theme-light {
@@ -173,6 +187,15 @@ html.theme-light {
   --c-64748b: #5b6b7e;
   --c-475569: #566274;
   --rgb-slate: 205, 213, 224;
+
+  /* #cbd5e1 axis labels measured ~1.5:1 on white and were effectively invisible.
+     These give 8.8:1 for tick text and a grid that reads as a hairline. */
+  --c-chart-text: #3a4a5e;
+  --c-chart-text-strong: #16273e;
+  --c-chart-grid: #e3e8f0;
+  --c-chart-axis: #c8d2e0;
+  --c-track: #e6ebf3;
+
   background: var(--c-080c14);
   color-scheme: light;
 }
@@ -356,4 +379,59 @@ html.theme-light {
   --c-67e8f9:#0e7490; --c-38bdf8:#0369a1; --c-a78bfa:#7c3aed; --c-c4b5fd:#7c3aed;
   --c-c7d2fe:#4f46e5; --c-fca5a5:#dc2626; --c-f87171:#dc2626; --c-fdba74:#c2410c;
   --c-fed7aa:#c2410c; --c-9ca3af:#5b6b7e; --c-6b7280:#5b6b7e;
+}
+
+/* ===========================================================================
+   Recharts chrome — theme-aware axis, legend and grid
+   ---------------------------------------------------------------------------
+   Charts set these via props (tick={{ fill: '#cbd5e1' }}), which React renders
+   as an SVG PRESENTATION ATTRIBUTE. Those are not CSS, so var() cannot be used
+   there and the light theme had no way to reach them — axis labels stayed
+   slate-300 on white and were unreadable. A CSS property beats a presentation
+   attribute, so styling them here fixes every chart in the app at once,
+   including any added later, without touching each call site.
+   ========================================================================= */
+.recharts-cartesian-axis-tick-value,
+.recharts-polar-angle-axis-tick-value,
+.recharts-polar-radius-axis-tick-value {
+  fill: var(--c-chart-text) !important;
+}
+
+/* Axis titles and any <Label>. Slightly stronger than tick text. */
+.recharts-label,
+.recharts-cartesian-axis-label,
+.recharts-text.recharts-label {
+  fill: var(--c-chart-text-strong) !important;
+}
+
+/* Legend entries are HTML, not SVG, so they take `color`. */
+.recharts-legend-item-text {
+  color: var(--c-chart-text) !important;
+}
+
+.recharts-cartesian-grid line,
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line,
+.recharts-polar-grid-angle line,
+.recharts-polar-grid-concentric circle {
+  stroke: var(--c-chart-grid) !important;
+}
+
+.recharts-cartesian-axis-line,
+.recharts-cartesian-axis-tick-line {
+  stroke: var(--c-chart-axis) !important;
+}
+
+/* Percentages drawn INSIDE a pie slice sit on a saturated fill in both themes,
+   so they stay white and get a soft shadow for contrast on light slices. */
+.recharts-pie-label-text,
+.recharts-pie .recharts-text {
+  paint-order: stroke;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .45);
+}
+
+/* Hover band behind bars/points: near-black at 10% is invisible on a dark
+   canvas and a grey smear on a light one. */
+.recharts-tooltip-cursor {
+  fill: rgba(var(--rgb-slate), .28) !important;
 }

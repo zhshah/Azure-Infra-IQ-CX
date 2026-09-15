@@ -176,9 +176,13 @@ export default function SavingsLedger() {
                         {r.title}
                         {r.target_sku && <div style={{ fontSize: 10, color: '#64748b' }}>{r.current_sku} → {r.target_sku}</div>}
                       </td>
-                      <td style={{ padding: '6px 8px', textAlign: 'right', color: '#22c55e' }}>{fmtUsd(r.monthly_savings_usd)}</td>
-                      <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--c-94a3b8, #94a3b8)' }}>
-                        {r.baseline_cost_usd > 0 ? fmtUsd(r.baseline_cost_usd) : '—'}
+                      {/* Whole dollars turned $3.56 into "$4" and $1.49 into "$1", which
+                          contradicted the exact figure quoted in the title beside it. */}
+                      <td style={{ padding: '6px 8px', textAlign: 'right', color: '#22c55e', fontVariantNumeric: 'tabular-nums' }}>
+                        {fmtUsd(r.monthly_savings_usd, r.monthly_savings_usd < 100 ? 2 : 0)}
+                      </td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--c-94a3b8, #94a3b8)', fontVariantNumeric: 'tabular-nums' }}>
+                        {r.baseline_cost_usd > 0 ? fmtUsd(r.baseline_cost_usd, r.baseline_cost_usd < 100 ? 2 : 0) : '—'}
                       </td>
                       <td style={{ padding: '6px 8px' }}>
                         <span style={{ color: meta.color, fontWeight: 600 }}>{meta.label}</span>

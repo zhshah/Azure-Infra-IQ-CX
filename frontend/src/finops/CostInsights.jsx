@@ -12,7 +12,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Legend, ScatterChart, Scatter, ZAxis,
+  ResponsiveContainer, ScatterChart, Scatter, ZAxis, ReferenceArea, ReferenceLine,
 } from 'recharts'
 import {
   PieChart as PieIcon, RefreshCw, AlertCircle, Filter, Layers, ShieldCheck,
@@ -55,21 +55,132 @@ function rollup(rows, keyFn, { top = 12, valueFn = (r) => r.cost_current || 0 } 
   return arr
 }
 
-/* ── Reusable donut ── */
-function CostDonut({ data, colorFn, height = 230, onSlice }) {
-  if (!data.length) return <Empty />
-  const click = onSlice ? (d) => d && onSlice(d.name ?? d.payload?.name) : undefined
+/* Shared tooltip chrome. Both surfaces are tokens so the tooltip inverts with
+   the theme instead of rendering dark-on-dark. */
+const tipStyle = {
+  contentStyle: {
+    background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)',
+    borderRadius: 8, fontSize: 12, boxShadow: '0 8px 24px -8px rgba(0,0,0,.45)',
+  },
+  labelStyle: { color: 'var(--c-f1f5f9)', fontWeight: 600, marginBottom: 2 },
+  itemStyle:  { color: 'var(--c-e2e8f0)' },
+}
+
+/* ── Reusable donut ──
+ * A plain <Pie label> writes a label for EVERY slice, so a list with several $0
+ * rows stacked their "0%" labels and leader lines on the same angle — which is
+ * what made these charts look broken. Zero-value slices are dropped from the arc
+ * (they stay in the key, marked "no spend"), labels are drawn INSIDE the slice so
+ * they cannot collide, and only slices wide enough to hold text get one. The key
+ * carries the names, values and share, and hovering either side highlights the
+ * other. */
+function CostDonut({ data, colorFn, height = 230, onSlice, emptyNote }) {
+  const [hovered, setHovered] = useState(null)
+  if (!data.length) return <Empty note={emptyNote} />
+
+  const rows  = data.filter(d => Number(d.value) > 0)
+  const zeros = data.filter(d => !(Number(d.value) > 0))
+  const sum   = rows.reduce((s, d) => s + Number(d.value || 0), 0)
+  if (!rows.length) {
+    // Categories exist but every one is $0 — say so instead of drawing an empty ring.
+    return <Empty note={emptyNote || `Matched ${data.length} ${data.length === 1 ? 'category' : 'categories'}, all with no attributed spend.`} />
+  }
+
+  const colorAt = (d, i) => (colorFn ? colorFn(d.name, i) : PALETTE[i % PALETTE.length])
+  const click   = onSlice ? (name) => onSlice(name) : undefined
+
+  const renderLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }) => {
+    if (percent < 0.05) return null
+    const RAD = Math.PI / 180
+    const r = innerRadius + (outerRadius - innerRadius) * 0.5
+    const x = cx + r * Math.cos(-midAngle * RAD)
+    const y = cy + r * Math.sin(-midAngle * RAD)
+    return (
+      <text x={x} y={y} textAnchor="middle" dominantBaseline="central"
+            fill="#ffffff" fontSize={11.5} fontWeight={700} style={{ pointerEvents: 'none' }}>
+        {`${(percent * 100).toFixed(percent < 0.1 ? 1 : 0)}%`}
+      </text>
+    )
+  }
+
+  const active = hovered ? rows.find(d => d.name === hovered) : null
+
   return (
-    <ResponsiveContainer width="100%" height={height}>
-      <PieChart>
-        <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={55} outerRadius={90} paddingAngle={1}
-          onClick={click} style={onSlice ? { cursor: 'pointer' } : undefined}>
-          {data.map((d, i) => <Cell key={i} fill={colorFn ? colorFn(d.name, i) : PALETTE[i % PALETTE.length]} cursor={onSlice ? 'pointer' : undefined} />)}
-        </Pie>
-        <Tooltip contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 12 }} formatter={(v) => fmtUsd(v)} />
-        <Legend wrapperStyle={{ fontSize: 10 }} />
-      </PieChart>
-    </ResponsiveContainer>
+    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ position: 'relative', flex: '1 1 210px', minWidth: 190, height }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie data={rows} dataKey="value" nameKey="name" cx="50%" cy="50%"
+                 innerRadius="54%" outerRadius="84%" paddingAngle={1} minAngle={2}
+                 labelLine={false} label={renderLabel} isAnimationActive={false}
+                 onClick={click ? (_, i) => click(rows[i].name) : undefined}
+                 onMouseEnter={(_, i) => setHovered(rows[i].name)}
+                 onMouseLeave={() => setHovered(null)}
+                 style={onSlice ? { cursor: 'pointer' } : undefined}>
+              {rows.map((d, i) => (
+                <Cell key={i} fill={colorAt(d, i)}
+                      stroke={hovered === d.name ? 'var(--c-f8fafc)' : 'transparent'}
+                      strokeWidth={hovered === d.name ? 2 : 0}
+                      opacity={!hovered || hovered === d.name ? 1 : 0.32}
+                      cursor={onSlice ? 'pointer' : undefined} />
+              ))}
+            </Pie>
+            <Tooltip {...tipStyle} formatter={(v, n) => [fmtUsd(v), n]} />
+          </PieChart>
+        </ResponsiveContainer>
+        {/* Centre read-out: total normally, the hovered slice while pointing at one. */}
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+                      alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', padding: '0 24%' }}>
+          <div style={{ fontSize: 9, letterSpacing: 0.5, textTransform: 'uppercase', color: 'var(--c-64748b)',
+                        textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
+            {active ? active.name : 'Total'}
+          </div>
+          <div style={{ fontSize: 17, fontWeight: 800, color: 'var(--c-f1f5f9)', fontVariantNumeric: 'tabular-nums' }}>
+            {fmtUsd(active ? active.value : sum)}
+          </div>
+          {active && sum > 0 && (
+            <div style={{ fontSize: 10, color: 'var(--c-94a3b8)', fontVariantNumeric: 'tabular-nums' }}>
+              {((Number(active.value) / sum) * 100).toFixed(1)}% of total
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Key: names + dollars + share, the way Cost analysis presents a breakdown.
+          The arc only ever shows percentages, so this is where the detail lives. */}
+      <div style={{ flex: '1 1 175px', minWidth: 165, maxHeight: height, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {rows.map((d, i) => {
+          const on = hovered === d.name
+          return (
+            <div key={d.name}
+                 onMouseEnter={() => setHovered(d.name)} onMouseLeave={() => setHovered(null)}
+                 onClick={click ? () => click(d.name) : undefined}
+                 style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 5px', borderRadius: 5,
+                          cursor: onSlice ? 'pointer' : 'default',
+                          background: on ? 'rgba(var(--rgb-slate), .30)' : 'transparent' }}>
+              <span style={{ width: 9, height: 9, borderRadius: 2, background: colorAt(d, i), flexShrink: 0 }} />
+              <span style={{ fontSize: 11, color: 'var(--c-e2e8f0)', overflow: 'hidden', textOverflow: 'ellipsis',
+                             whiteSpace: 'nowrap', flex: 1 }} title={d.name}>{d.name}</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-f1f5f9)', fontVariantNumeric: 'tabular-nums' }}>
+                {fmtUsd(d.value)}
+              </span>
+              <span style={{ fontSize: 10, color: 'var(--c-64748b)', fontVariantNumeric: 'tabular-nums', width: 34, textAlign: 'right' }}>
+                {sum > 0 ? `${((d.value / sum) * 100).toFixed(0)}%` : '—'}
+              </span>
+            </div>
+          )
+        })}
+        {/* Kept visible rather than dropped, so a category never silently disappears. */}
+        {zeros.map(d => (
+          <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 5px', opacity: 0.5 }}>
+            <span style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--c-475569)', flexShrink: 0 }} />
+            <span style={{ fontSize: 11, color: 'var(--c-64748b)', overflow: 'hidden', textOverflow: 'ellipsis',
+                           whiteSpace: 'nowrap', flex: 1 }} title={d.name}>{d.name}</span>
+            <span style={{ fontSize: 9.5, color: 'var(--c-64748b)' }}>no spend</span>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -77,14 +188,17 @@ function CostDonut({ data, colorFn, height = 230, onSlice }) {
 function CostBars({ data, colorFn, height = 260, onSlice }) {
   if (!data.length) return <Empty />
   const click = onSlice ? (d) => d && onSlice(d.name ?? d.payload?.name) : undefined
+  const max = Math.max(...data.map(d => Number(d.value) || 0), 0)
   return (
-    <ResponsiveContainer width="100%" height={Math.max(height, data.length * 26 + 30)}>
-      <BarChart data={data} layout="vertical" margin={{ top: 4, right: 24, left: 6, bottom: 4 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
-        <XAxis type="number" tick={{ fontSize: 10, fill: '#64748b' }} tickFormatter={fmtK} />
-        <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 10, fill: '#cbd5e1' }} />
-        <Tooltip contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 12 }} formatter={(v) => fmtUsd(v)} />
-        <Bar dataKey="value" radius={[0, 4, 4, 0]} onClick={click} cursor={onSlice ? 'pointer' : undefined}>
+    <ResponsiveContainer width="100%" height={Math.max(height, data.length * 28 + 34)}>
+      <BarChart data={data} layout="vertical" margin={{ top: 4, right: 62, left: 6, bottom: 4 }}>
+        <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+        <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={fmtK} domain={[0, max * 1.08 || 1]} />
+        <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 10 }} />
+        <Tooltip {...tipStyle} cursor={{ fillOpacity: 0.08 }} formatter={(v) => [fmtUsd(v), 'Cost']} />
+        <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={15} onClick={click} cursor={onSlice ? 'pointer' : undefined}
+             isAnimationActive={false}
+             label={{ position: 'right', formatter: (v) => fmtUsd(v), fontSize: 10, fill: 'var(--c-chart-text)' }}>
           {data.map((d, i) => <Cell key={i} fill={colorFn ? colorFn(d.name, i) : PALETTE[i % PALETTE.length]} cursor={onSlice ? 'pointer' : undefined} />)}
         </Bar>
       </BarChart>
@@ -92,8 +206,13 @@ function CostBars({ data, colorFn, height = 260, onSlice }) {
   )
 }
 
-function Empty() {
-  return <div style={{ padding: 30, textAlign: 'center', color: 'var(--c-64748b)', fontSize: 12 }}>No cost in this slice.</div>
+function Empty({ note }) {
+  return (
+    <div style={{ padding: 30, textAlign: 'center', color: 'var(--c-64748b)', fontSize: 12 }}>
+      No cost in this slice.
+      {note && <div style={{ marginTop: 6, fontSize: 11, color: 'var(--c-475569)', lineHeight: 1.45 }}>{note}</div>}
+    </div>
+  )
 }
 
 function Panel({ title, icon: Icon, children, subtitle }) {
@@ -123,22 +242,84 @@ function Section({ title, icon: Icon, count, children, defaultOpen = true }) {
 }
 
 /* ── Cost vs utilization scatter (efficiency) ── */
+const IDLE_UTIL_PCT = 20   // matches the "Expensive & under-utilized" table below
+
 function CostScatter({ data }) {
-  if (!data.length) return <Empty />
+  if (!data.length) return <Empty note="Only resources that report a utilisation metric are plotted; nothing in the current filter does." />
+
+  const maxCost = Math.max(...data.map(d => d.cost || 0), 0)
+  // "Expensive" is relative to this estate, not an absolute figure: a $200 estate and a
+  // $200k estate have very different ideas of a costly resource.
+  const costBand = maxCost * 0.25
+  const flagged = data.filter(d => d.util < IDLE_UTIL_PCT && d.cost >= costBand).length
+
+  const Dot = ({ cx, cy, payload }) => {
+    if (cx == null || cy == null) return null
+    const r = Math.max(4, Math.min(16, 4 + Math.sqrt(Math.max(payload.cost, 0) / (maxCost || 1)) * 12))
+    const fill = payload.util < 20 ? '#ef4444' : payload.util < 50 ? '#f59e0b' : '#22c55e'
+    return <circle cx={cx} cy={cy} r={r} fill={fill} fillOpacity={0.8} stroke="#ffffff" strokeOpacity={0.35} strokeWidth={1} />
+  }
+
+  // The default tooltip dropped the resource name entirely (labelFormatter returned ''),
+  // so an expensive idle-looking bubble could not be identified from the chart.
+  const Tip = ({ active, payload }) => {
+    if (!active || !payload?.length) return null
+    const d = payload[0].payload
+    return (
+      <div style={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 8,
+                    padding: '8px 10px', fontSize: 12, maxWidth: 280, boxShadow: '0 8px 24px -8px rgba(0,0,0,.45)' }}>
+        <div style={{ color: 'var(--c-f1f5f9)', fontWeight: 700, marginBottom: 4, wordBreak: 'break-all' }}>{d.name}</div>
+        <div style={{ color: 'var(--c-e2e8f0)', fontVariantNumeric: 'tabular-nums' }}>
+          {fmtUsd(d.cost)} · {Math.round(d.util)}% utilised
+        </div>
+        <div style={{ color: 'var(--c-64748b)', fontSize: 10.5, marginTop: 4, lineHeight: 1.4 }}>
+          {d.util < IDLE_UTIL_PCT
+            ? 'Low reported utilisation — confirm before acting; consumption-billed services report activity, not CPU.'
+            : 'Healthy utilisation for the spend.'}
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <ResponsiveContainer width="100%" height={260}>
-      <ScatterChart margin={{ top: 10, right: 20, left: 6, bottom: 12 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-        <XAxis type="number" dataKey="util" name="Utilization" unit="%" domain={[0, 100]} tick={{ fontSize: 10, fill: '#64748b' }} label={{ value: 'Utilization %', position: 'insideBottom', offset: -4, fill: '#64748b', fontSize: 10 }} />
-        <YAxis type="number" dataKey="cost" name="Cost" tick={{ fontSize: 10, fill: '#64748b' }} tickFormatter={fmtK} />
-        <ZAxis type="number" dataKey="cost" range={[40, 400]} />
-        <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ background: 'var(--c-0f172a)', border: '1px solid var(--c-334155)', borderRadius: 6, fontSize: 12 }}
-          formatter={(v, n) => n === 'Cost' ? fmtUsd(v) : `${Math.round(v)}%`} labelFormatter={() => ''} />
-        <Scatter data={data}>
-          {data.map((d, i) => <Cell key={i} fill={d.util < 20 ? '#ef4444' : d.util < 50 ? '#f59e0b' : '#22c55e'} />)}
-        </Scatter>
-      </ScatterChart>
-    </ResponsiveContainer>
+    <>
+      <ResponsiveContainer width="100%" height={260}>
+        <ScatterChart margin={{ top: 10, right: 20, left: 6, bottom: 16 }}>
+          <CartesianGrid strokeDasharray="3 3" />
+          {/* Shades the quadrant the caption calls out, so "top-left" is visible, not just described. */}
+          <ReferenceArea x1={0} x2={IDLE_UTIL_PCT} y1={costBand} y2={maxCost * 1.05 || 1}
+                         fill="#ef4444" fillOpacity={0.07} stroke="none" />
+          <ReferenceLine x={IDLE_UTIL_PCT} stroke="var(--c-chart-axis)" strokeDasharray="4 4" />
+          <XAxis type="number" dataKey="util" name="Utilization" unit="%" domain={[0, 100]} tick={{ fontSize: 10 }}
+                 label={{ value: 'Utilization %', position: 'insideBottom', offset: -8, fontSize: 10 }} />
+          <YAxis type="number" dataKey="cost" name="Cost" tick={{ fontSize: 10 }} tickFormatter={fmtK}
+                 domain={[0, maxCost * 1.05 || 1]} />
+          <ZAxis type="number" dataKey="cost" range={[40, 400]} />
+          <Tooltip cursor={{ strokeDasharray: '3 3' }} content={<Tip />} />
+          <Scatter data={data} shape={<Dot />} isAnimationActive={false} />
+        </ScatterChart>
+      </ResponsiveContainer>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', fontSize: 10.5,
+                    color: 'var(--c-64748b)', marginTop: 4 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 999, background: '#ef4444' }} /> under 20%
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 999, background: '#f59e0b' }} /> 20-50%
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 999, background: '#22c55e' }} /> over 50%
+        </span>
+        <span style={{ marginLeft: 'auto' }}>
+          {data.length} plotted{flagged ? ` · ${flagged} in the shaded zone` : ''} · bubble size = cost
+        </span>
+      </div>
+      <div style={{ fontSize: 10, color: 'var(--c-475569)', marginTop: 4, lineHeight: 1.45 }}>
+        Only resources reporting a utilisation metric appear here. For consumption-billed services
+        (AI, storage, serverless) the figure is a normalised activity signal, not CPU — a high bill is
+        itself evidence of use, so verify before acting on a costly point near 0%.
+      </div>
+    </>
   )
 }
 
@@ -422,7 +603,8 @@ export default function CostInsights() {
           <CostDonut data={agg.byZone} colorFn={(n) => ZONE_COLORS[n] || '#64748b'} onSlice={drillBy('Zone posture', agg.byZone, r => r.zone_label)} />
         </Panel>
         <Panel title="Cost by storage redundancy" subtitle="LRS / ZRS / GRS / GZRS — parsed from the storage SKU">
-          <CostDonut data={agg.byStorageRed} colorFn={(n) => REDUNDANCY_COLORS[n] || '#64748b'} onSlice={drillBy('Storage redundancy', agg.byStorageRed, r => r.storage_redundancy)} />
+          <CostDonut data={agg.byStorageRed} colorFn={(n) => REDUNDANCY_COLORS[n] || '#64748b'} onSlice={drillBy('Storage redundancy', agg.byStorageRed, r => r.storage_redundancy)}
+            emptyNote="Only storage accounts carry a redundancy SKU, so this chart covers those alone. Nothing here means no storage-account spend in the current filter." />
         </Panel>
         <Panel title="Geo-redundant vs single-region spend">
           <CostDonut data={agg.byGeo} colorFn={(n) => (n === 'Geo-redundant' ? '#22c55e' : '#f97316')} onSlice={drillBy('Geo-redundancy', agg.byGeo, r => (r.geo_redundant ? 'Geo-redundant' : 'Single-region'))} />
@@ -448,7 +630,7 @@ export default function CostInsights() {
       </Section>
 
       <Section title="Efficiency & waste" icon={Recycle}>
-        <Panel title="Cost vs utilization" subtitle="Bottom-right = cheap & busy (good) · top-left = expensive & idle (act)">
+        <Panel title="Cost vs utilization" subtitle="Bottom-right = cheap and busy (healthy) · top-left = expensive and idle (investigate first)">
           <CostScatter data={agg.scatter} />
         </Panel>
         <Panel title="Expensive & under-utilized" subtitle="Cost > $0 with utilization < 20% — prime right-size / shutdown candidates">

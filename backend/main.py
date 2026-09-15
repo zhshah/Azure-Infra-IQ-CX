@@ -297,9 +297,17 @@ async def _entra_auth_gate(request: Request, call_next):
 _cache: dict = {}
 _auto_refresh_task: Optional[asyncio.Task] = None   # background scheduler handle
 _pool = ThreadPoolExecutor(max_workers=12)  # shared executor for blocking I/O (data) calls
-# Dedicated pool for AI calls so long (~15-20s) Azure OpenAI requests can never
-# starve the data pool and make every FinOps tab hang on a spinner.
-_ai_pool = ThreadPoolExecutor(max_workers=4)
+# Dedicated pool for AI calls so long Azure OpenAI requests can never starve the
+# data pool and make every FinOps tab hang on a spinner. A deep reasoning pass is
+# 70-300s, not the ~15-20s originally assumed, so the AI Insights board (15 category
+# cards) needs real width here or "Analyze all" serialises behind a couple of slots.
+# Threads are named "ai" deliberately: that prefix is NOT in _BG_THREAD_PREFIXES, so a
+# cost lookup made while rendering an analysis is still admitted as a user request and
+# falls back to cache fast instead of waiting out the background budget.
+_ai_pool = ThreadPoolExecutor(
+    max_workers=int(os.getenv("AI_POOL_WORKERS", "8") or 8),
+    thread_name_prefix="ai",
+)
 # Unattended collection must never queue behind, or ahead of, a user's request. The
 # warmup, ETL, snapshots and first-fill supervisor each hold a worker for minutes at a
 # time while a throttled Azure call backs off, and sharing _pool with the request
@@ -3301,19 +3309,29 @@ async def _metrics_snapshot_run() -> dict:
         logger.info("Metrics snapshot: starting full metrics pull…")
         resources = await loop.run_in_executor(_bg_pool, partial(list_all_resources, sub_ids))
         all_metrics: dict[str, Any] = {}
-        BATCH = 20
-        for i in range(0, len(resources), BATCH):
-            batch = resources[i: i + BATCH]
-            tasks = [
-                loop.run_in_executor(
-                    _pool,
-                    partial(get_resource_metrics, r["id"], r["type"], r.get("subscription_id", "")),
-                )
-                for r in batch
-            ]
-            for r, res in zip(batch, await asyncio.gather(*tasks, return_exceptions=True)):
-                if not isinstance(res, Exception):
-                    all_metrics[r["id"].lower()] = res
+        # A fixed batch + asyncio.gather is a BARRIER: nothing in batch N+1 starts until
+        # the slowest call in batch N returns, so 404 resources became ~21 sequential
+        # waits on the worst resource in each group (measured 42 min). A semaphore keeps
+        # every slot busy instead, so one slow Monitor call costs one slot, not a batch.
+        # _scan_pool, not _pool: this is unattended collection and must not take workers
+        # from the pool serving page requests.
+        _limit = int(os.getenv("METRICS_SNAPSHOT_CONCURRENCY", "16") or 16)
+        _sem = asyncio.Semaphore(_limit)
+
+        async def _pull(r):
+            async with _sem:
+                try:
+                    m = await loop.run_in_executor(
+                        _scan_pool,
+                        partial(get_resource_metrics, r["id"], r["type"], r.get("subscription_id", "")),
+                    )
+                    return r["id"].lower(), m
+                except Exception:
+                    return None
+
+        for item in await asyncio.gather(*(_pull(r) for r in resources)):
+            if item:
+                all_metrics[item[0]] = item[1]
 
         if all_metrics:
             await loop.run_in_executor(_bg_pool, partial(persistence_svc.save_resource_metrics, all_metrics))
@@ -3348,7 +3366,7 @@ async def _metrics_snapshot_run() -> dict:
                 _cache["cached_at"] = _now_ts
                 _dash_json = json.loads(data.model_dump_json())
                 await loop.run_in_executor(
-                    _pool, partial(persistence_svc.save_dashboard, _dash_json)
+                    _bg_pool, partial(persistence_svc.save_dashboard, _dash_json)
                 )
                 # Mirror the rebuilt dashboard into Redis so a restarted process or a
                 # second replica serves a warm Waste-Quadrant-populated dashboard
@@ -3379,7 +3397,8 @@ async def _metrics_snapshot_run() -> dict:
             "Metrics snapshot: persisted %d/%d resources in %.1fs",
             len(all_metrics), len(resources), elapsed,
         )
-        return {"resource_count": len(all_metrics), "elapsed_seconds": round(elapsed, 1)}
+        return {"resource_count": len(all_metrics), "total": len(resources),
+                "elapsed_seconds": round(elapsed, 1)}
     except Exception as exc:
         logger.error("Metrics snapshot run failed: %s", exc)
         _metrics_snapshot_state["last_error"] = str(exc)
@@ -3772,7 +3791,10 @@ async def _await_ai(key: str, fn, *args, **kwargs):
                 logger.error("AI analysis '%s' failed: %s", key, exc)
                 return {"error": str(exc), "available": True}
         if fut is None:
-            fut = _pool.submit(fn, *args, **kwargs)
+            # _ai_pool, not _pool: an analysis holds its worker for 70-300s, and _pool
+            # is the 12-worker executor shared by ~60 other blocking call sites. A single
+            # "Analyze all" used to occupy all of them and stall the whole app.
+            fut = _ai_pool.submit(fn, *args, **kwargs)
             _ai_jobs[key] = fut
     try:
         result = await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(fut)),
@@ -8157,7 +8179,15 @@ async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full")
         status = r.get("status", "?")
         if status not in ("completed", "partial"):
             raise RuntimeError(r.get("message") or f"ETL {status}")
-        detail = f"{status}: " + (", ".join(bits) or "no cost rows returned")
+        if bits:
+            detail = f"{status}: " + ", ".join(bits)
+        elif _FINOPS_WAREHOUSE_AVAILABLE and finops_warehouse_svc.exports_own_cost_data():
+            # Zero cost rows is the CORRECT outcome once exports own the cost tables —
+            # the query-API collectors stand down so two writers cannot disagree. The
+            # bare "no cost rows returned" read like a failure on every run.
+            detail = f"{status}: cost tables are loaded by Cost Management exports; filled auxiliary datasets only"
+        else:
+            detail = f"{status}: no cost rows returned"
         # Surface throttling: an abandoned query is a permanent gap, not just slowness.
         q, thr, gave = (r.get("cost_queries"), r.get("throttled_queries"), r.get("abandoned_queries"))
         if q:
@@ -8171,9 +8201,19 @@ async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full")
     await step("warehouse_etl", _etl, _etl_detail)
 
     # 3) Utilisation metrics.
-    await step("utilisation", lambda: _metrics_snapshot_run(),
-               lambda r: ((r or {}).get("message") or f"{(r or {}).get('resources', 0)} resources",
-                          (r or {}).get("resources")))
+    def _util_detail(r):
+        r = r or {}
+        if r.get("skipped"):
+            return (f"skipped: {r['skipped']}", None)
+        got, total = int(r.get("resource_count") or 0), int(r.get("total") or 0)
+        # Reported 0 for every run until now: the job returns "resource_count" and this
+        # read "resources", so a 404-resource pull rendered as "0 resources" even though
+        # the rows landed in finops_resource_utilization.
+        if total and got < total:
+            return (f"{got} of {total} resources ({total - got} returned no metrics)", got)
+        return (f"{got} resources", got)
+
+    await step("utilisation", lambda: _metrics_snapshot_run(), _util_detail)
 
     # 4) Cost bundle snapshot.
     await step("cost_snapshot", lambda: _cost_snapshot_run(),
@@ -8443,6 +8483,29 @@ async def ingestion_run(days: int = 30, mode: str = "full"):
             "job": _ing.job_snapshot()}
 
 
+_SUB_NAME_CACHE: dict[str, str] = {}
+
+
+def _resolve_subscription_names(ids: list[str]) -> dict[str, str]:
+    """GUID -> display name, memoised for the process.
+
+    The warehouse tables only carry GUIDs, and _build_dashboard's own resolver is nested
+    inside it, so it cannot be reused here.
+    """
+    want = [i for i in ids if i and i not in _SUB_NAME_CACHE]
+    if want:
+        try:
+            from azure.mgmt.subscription import SubscriptionClient
+            from services.azure_auth import get_credential
+            client = SubscriptionClient(get_credential())
+            for s in client.subscriptions.list():
+                if s.subscription_id:
+                    _SUB_NAME_CACHE[s.subscription_id] = s.display_name or s.subscription_id
+        except Exception as exc:
+            logger.debug("subscription name resolution unavailable: %s", exc)
+    return {i: _SUB_NAME_CACHE[i] for i in ids if i in _SUB_NAME_CACHE}
+
+
 @app.get("/api/finops/warehouse/dashboard", tags=["FinOps Warehouse"])
 async def warehouse_dashboard(
     subscription_id: Optional[str] = None,
@@ -8465,6 +8528,26 @@ async def warehouse_dashboard(
         )
         cache_svc.set_json(_ck, data, ttl_seconds=_FW_CACHE_TTL)
     run_status = finops_warehouse_svc.get_last_run_status()
+    # The warehouse stores only GUIDs (finops_daily_subscription_costs.subscription_name
+    # is itself the GUID), so the donut had no way to name a slice. Resolve here, where the
+    # ARM-backed name lookup and its cache live. Done after the cache read so a cached
+    # payload still gets names.
+    try:
+        _subs = data.get("by_subscription") or []
+        _ids = [str(s.get("subscription_id") or "") for s in _subs if s.get("subscription_id")]
+        _needs = [i for i in _ids
+                  if not (next((s.get("subscription_name") for s in _subs
+                                if s.get("subscription_id") == i), "") or "").strip()
+                  or next((s.get("subscription_name") for s in _subs
+                           if s.get("subscription_id") == i), "") == i]
+        if _needs:
+            _names = await loop.run_in_executor(_pool, partial(_resolve_subscription_names, _needs))
+            for s in _subs:
+                nm = _names.get(str(s.get("subscription_id") or ""))
+                if nm:
+                    s["subscription_name"] = nm
+    except Exception as _sne:
+        logger.debug("warehouse dashboard: subscription name resolution skipped: %s", _sne)
     data["data_freshness"] = {
         "completed_at": run_status.get("completed_at"),
         "data_age_hours": run_status.get("data_age_hours"),
@@ -8682,14 +8765,38 @@ async def mgmt_service_categories(days: int = 30, subscription_id: Optional[str]
         _pool, lambda: _fd.get_service_category_costs(days, _mgmt_subs(subscription_id)))
 
 
-@app.get("/api/finops/mgmt/vm-utilization", tags=["FinOps Management"])
-async def mgmt_vm_utilization(subscription_id: Optional[str] = None):
-    """Total VM spend, running vs stopped, idle cost, avg CPU/memory, % underutilised
-    and the VM → size → cost → utilisation table."""
+@app.get("/api/finops/mgmt/utilization-types", tags=["FinOps Management"])
+async def mgmt_utilization_types(subscription_id: Optional[str] = None):
+    """Resource types that actually carry a utilisation reading, for the type picker."""
     from services import finops_dashboard_service as _fd
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
-        _pool, lambda: _fd.get_vm_cost_utilization(_mgmt_subs(subscription_id)))
+        _pool, lambda: {"types": _fd.list_utilization_types(_mgmt_subs(subscription_id))})
+
+
+@app.get("/api/finops/mgmt/vm-utilization", tags=["FinOps Management"])
+async def mgmt_vm_utilization(subscription_id: Optional[str] = None,
+                              resource_types: Optional[str] = None):
+    """Spend, power split, idle cost, avg CPU/memory, % underutilised and the
+    resource → size → cost → utilisation table.
+
+    resource_types is an optional comma-separated list; it defaults to VMs so existing
+    callers keep their behaviour.
+    """
+    from services import finops_dashboard_service as _fd
+    types = [t.strip().lower() for t in (resource_types or "").split(",") if t.strip()]
+    # Only serve types the snapshot actually has, so a hand-edited query string cannot
+    # probe for arbitrary values.
+    if types:
+        allowed = {t["resource_type"].lower()
+                   for t in _fd.list_utilization_types(_mgmt_subs(subscription_id))}
+        types = [t for t in types if t in allowed]
+        if not types:
+            raise HTTPException(status_code=400,
+                                detail="No requested resource type reports utilisation data")
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _pool, lambda: _fd.get_vm_cost_utilization(_mgmt_subs(subscription_id), types or None))
 
 
 @app.get("/api/finops/mgmt/storage", tags=["FinOps Management"])

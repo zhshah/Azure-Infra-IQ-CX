@@ -416,9 +416,87 @@ def purge_old(keep_util_days: int = UTILIZATION_HISTORY_DAYS,
 
 # ── VM cost & utilisation ─────────────────────────────────────────────────────
 
-def get_vm_cost_utilization(subscription_ids: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Total VM spend, running vs stopped, idle cost, avg CPU/memory, % underutilised
-    and the VM -> size -> cost -> utilisation table (latest snapshot)."""
+def list_utilization_types(subscription_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """Resource types in the latest snapshot that actually carry a utilisation figure.
+
+    Only types with at least one reading are returned, so the picker can never offer a
+    selection that renders an empty chart. Also reports which optional columns are
+    populated, because CPU / memory / power state are largely VM-only concepts and the
+    caller must not show an "Avg CPU" tile for a type that never reports one.
+    """
+    if not _DB_AVAILABLE:
+        return []
+    sd = _latest_snapshot_date("finops_resource_utilization")
+    if not sd:
+        return []
+    sql = (
+        "SELECT resource_type, COUNT(*) AS resources, "
+        "SUM(CASE WHEN utilization_pct IS NOT NULL THEN 1 ELSE 0 END) AS with_util, "
+        "SUM(CASE WHEN avg_cpu_pct     IS NOT NULL THEN 1 ELSE 0 END) AS with_cpu, "
+        "SUM(CASE WHEN avg_memory_pct  IS NOT NULL THEN 1 ELSE 0 END) AS with_mem, "
+        "SUM(CASE WHEN power_state IS NOT NULL AND power_state <> '' THEN 1 ELSE 0 END) AS with_power, "
+        "SUM(COALESCE(cost_month_usd, 0)) AS cost "
+        "FROM finops_resource_utilization "
+        f"WHERE snapshot_date = ?{_sub_clause(subscription_ids)} "
+        "GROUP BY resource_type ORDER BY SUM(COALESCE(cost_month_usd, 0)) DESC"
+    )
+    out: List[Dict[str, Any]] = []
+    try:
+        with _conn() as con:
+            for r in con.execute(sql, (sd,)).fetchall():
+                if not int(r[2] or 0):
+                    continue
+                out.append({
+                    "resource_type": r[0],
+                    "label": _friendly_type(r[0]),
+                    "resources": int(r[1] or 0),
+                    "with_utilization": int(r[2] or 0),
+                    "has_cpu": bool(int(r[3] or 0)),
+                    "has_memory": bool(int(r[4] or 0)),
+                    "has_power_state": bool(int(r[5] or 0)),
+                    "cost_month_usd": round(float(r[6] or 0), 2),
+                })
+    except Exception as e:
+        logger.warning("Utilisation type list failed: %s", e)
+        return []
+    return out
+
+
+_TYPE_LABELS = {
+    "microsoft.compute/virtualmachines": "Virtual Machines",
+    "microsoft.compute/virtualmachinescalesets": "VM Scale Sets",
+    "microsoft.compute/disks": "Managed Disks",
+    "microsoft.app/containerapps": "Container Apps",
+    "microsoft.sql/servers/databases": "SQL Databases",
+    "microsoft.web/serverfarms": "App Service Plans",
+    "microsoft.web/sites": "App Services",
+    "microsoft.cognitiveservices/accounts": "Azure AI / Cognitive Services",
+    "microsoft.storage/storageaccounts": "Storage Accounts",
+    "microsoft.containerregistry/registries": "Container Registries",
+    "microsoft.network/publicipaddresses": "Public IP Addresses",
+    "microsoft.network/loadbalancers": "Load Balancers",
+    "microsoft.keyvault/vaults": "Key Vaults",
+    "microsoft.search/searchservices": "AI Search",
+    "microsoft.insights/components": "Application Insights",
+}
+
+
+def _friendly_type(rtype: str) -> str:
+    t = (rtype or "").lower()
+    if t in _TYPE_LABELS:
+        return _TYPE_LABELS[t]
+    tail = t.rsplit("/", 1)[-1] if "/" in t else t
+    return tail.replace("_", " ").title() or rtype
+
+
+def get_vm_cost_utilization(subscription_ids: Optional[List[str]] = None,
+                            resource_types: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Total spend, running vs stopped, idle cost, avg CPU/memory, % underutilised
+    and the resource -> size -> cost -> utilisation table (latest snapshot).
+
+    Defaults to VMs so existing callers are unchanged; pass resource_types to review any
+    other type that reports utilisation.
+    """
     empty = {"available": False, "total_vm_cost_usd": 0.0, "vm_count": 0,
              "running_count": 0, "stopped_count": 0, "idle_cost_usd": 0.0,
              "avg_cpu_pct": None, "avg_memory_pct": None,
@@ -429,18 +507,23 @@ def get_vm_cost_utilization(subscription_ids: Optional[List[str]] = None) -> Dic
     sd = _latest_snapshot_date("finops_resource_utilization")
     if not sd:
         return empty
-    type_list = ",".join("'" + t + "'" for t in VM_TYPES)
+    types = [str(t).lower() for t in (resource_types or VM_TYPES) if str(t or "").strip()]
+    if not types:
+        types = list(VM_TYPES)
+    empty["resource_types"] = types
+    # Parameterised: these arrive from the query string.
+    placeholders = ",".join("?" for _ in types)
     sql = (
         "SELECT resource_id, resource_name, resource_group, subscription_id, location, sku, "
         "power_state, avg_cpu_pct, avg_memory_pct, utilization_pct, is_idle, cost_month_usd, environment "
         "FROM finops_resource_utilization "
-        f"WHERE snapshot_date = ? AND resource_type IN ({type_list})"
+        f"WHERE snapshot_date = ? AND LOWER(resource_type) IN ({placeholders})"
         f"{_sub_clause(subscription_ids)}"
     )
     vms: List[Dict[str, Any]] = []
     try:
         with _conn() as con:
-            for row in con.execute(sql, (sd,)).fetchall():
+            for row in con.execute(sql, (sd, *types)).fetchall():
                 vms.append({
                     "resource_id": row[0], "resource_name": row[1], "resource_group": row[2],
                     "subscription_id": row[3], "location": row[4], "sku": row[5],
@@ -458,8 +541,19 @@ def get_vm_cost_utilization(subscription_ids: Optional[List[str]] = None) -> Dic
     if not vms:
         return empty
 
-    running = [v for v in vms if v["power_state"] == "running"]
-    stopped = [v for v in vms if v["power_state"] in ("deallocated", "stopped")]
+    # Power state is a VM concept. For a type that never reports one, every resource is
+    # "live" — splitting into running/stopped would report 0 running and suppress the
+    # averages entirely.
+    has_power = any((v["power_state"] or "unknown") != "unknown" for v in vms)
+    has_cpu   = any(v["avg_cpu_pct"] is not None for v in vms)
+    has_mem   = any(v["avg_memory_pct"] is not None for v in vms)
+    noun = _friendly_type(types[0]) if len(types) == 1 else "resource"
+
+    if has_power:
+        running = [v for v in vms if v["power_state"] == "running"]
+        stopped = [v for v in vms if v["power_state"] in ("deallocated", "stopped")]
+    else:
+        running, stopped = vms, []
     idle_cost = round(sum(v["cost_month_usd"] for v in vms if v["is_idle"]), 2)
     # Averages are taken over RUNNING VMs only. A deallocated VM emits no live
     # metrics — any CPU value on it is a leftover average from before it was
@@ -467,12 +561,39 @@ def get_vm_cost_utilization(subscription_ids: Optional[List[str]] = None) -> Dic
     # (e.g. "11.6% avg CPU" for a fleet where every VM is off).
     cpus = [v["avg_cpu_pct"] for v in running if v["avg_cpu_pct"] is not None]
     mems = [v["avg_memory_pct"] for v in running if v["avg_memory_pct"] is not None]
-    under = [v for v in running if v["avg_cpu_pct"] is not None
-             and v["avg_cpu_pct"] <= UNDERUTILIZED_CPU_PCT]
+    # Fall back to the generic utilisation reading for types that report no CPU,
+    # otherwise "% underutilised" would always be 0 for them.
+    if has_cpu:
+        under = [v for v in running if v["avg_cpu_pct"] is not None
+                 and v["avg_cpu_pct"] <= UNDERUTILIZED_CPU_PCT]
+        measured = [v for v in running if v["avg_cpu_pct"] is not None]
+    else:
+        under = [v for v in running if v["utilization_pct"] is not None
+                 and v["utilization_pct"] <= UNDERUTILIZED_CPU_PCT]
+        measured = [v for v in running if v["utilization_pct"] is not None]
     vms.sort(key=lambda v: -v["cost_month_usd"])
+
+    if has_power and not running and vms:
+        note = (f"All {len(vms)} {noun} are powered off, so there is no live CPU or memory to "
+                "average. Cost shown is what stopped resources still accrue (disks, public IPs, "
+                "reservations).")
+    elif has_power and stopped:
+        note = (f"Averages cover the {len(running)} running {noun}; "
+                f"{len(stopped)} stopped are excluded because they emit no metrics.")
+    elif not has_cpu:
+        note = (f"{noun} do not report CPU or memory. Utilisation here is the activity signal "
+                "Azure Monitor exposes for this type, so read it as relative, not as CPU load.")
+    else:
+        note = ""
+
     return {
         "available": True,
         "snapshot_date": sd,
+        "resource_types": types,
+        "type_label": noun,
+        "has_power_state": has_power,
+        "has_cpu": has_cpu,
+        "has_memory": has_mem,
         "total_vm_cost_usd": round(sum(v["cost_month_usd"] for v in vms), 2),
         "vm_count": len(vms),
         "running_count": len(running),
@@ -485,18 +606,11 @@ def get_vm_cost_utilization(subscription_ids: Optional[List[str]] = None) -> Dic
         # Coverage is expressed against the running fleet, which is the only
         # population that can produce a metric.
         "memory_coverage_pct": round(len(mems) / len(running) * 100, 1) if running else 0.0,
-        "metrics_basis": "running_vms_only",
+        "metrics_basis": "running_vms_only" if has_power else "all_resources",
         "metrics_sample_count": len(running),
-        "metrics_note": (
-            f"All {len(vms)} VMs are powered off, so there is no live CPU or memory to "
-            "average. Cost shown is what stopped VMs still accrue (disks, public IPs, "
-            "reservations)." if running == [] and vms else
-            (f"Averages cover the {len(running)} running VM(s); "
-             f"{len(stopped)} stopped VM(s) are excluded because they emit no metrics."
-             if stopped else "")
-        ),
+        "metrics_note": note,
         "underutilized_count": len(under),
-        "underutilized_pct": round(len(under) / len(running) * 100, 1) if running else 0.0,
+        "underutilized_pct": round(len(under) / len(measured) * 100, 1) if measured else 0.0,
         "underutilized_cost_usd": round(sum(v["cost_month_usd"] for v in under), 2),
         "vms": vms,
     }
@@ -749,6 +863,7 @@ def find_orphan_subscriptions(all_subscriptions: List[Dict[str, Any]],
     assigned = {s for s in (mg_subscription_ids or []) if s}
     placement = {k: v for k, v in (mg_placement or {}).items() if k}
     unassigned, zero_spend, disabled_with_cost = [], [], []
+    roster = []
     for s in (all_subscriptions or []):
         sid = str(s.get("subscription_id") or s.get("id") or "")
         if not sid:
@@ -764,12 +879,30 @@ def find_orphan_subscriptions(all_subscriptions: List[Dict[str, Any]],
         # never placed sits directly under the tenant root. Reporting that as
         # "unassigned" is factually wrong; the real governance gap is that it is
         # not in a landing-zone MG where policy and RBAC are applied.
-        if hierarchy_known and sid not in assigned:
+        is_unassigned = bool(hierarchy_known and sid not in assigned)
+        is_zero = cost <= 0.01
+        is_disabled_billing = bool(state and state != "enabled" and cost > 0.01)
+        if is_unassigned:
             unassigned.append({**entry, "management_group": placement.get(sid, "Tenant Root Group")})
-        if cost <= 0.01:
+        if is_zero:
             zero_spend.append(entry)
-        if state and state != "enabled" and cost > 0.01:
+        if is_disabled_billing:
             disabled_with_cost.append(entry)
+        # A subscription that trips no finding appears in none of the lists above, which
+        # reads as missing data rather than as "healthy". The roster carries every
+        # reviewed subscription with its verdict so the count on screen can be reconciled.
+        findings = []
+        if is_unassigned:
+            findings.append("not_in_landing_zone")
+        if is_zero:
+            findings.append("zero_spend")
+        if is_disabled_billing:
+            findings.append("disabled_but_billing")
+        roster.append({**entry,
+                       "management_group": placement.get(sid, "Tenant Root Group" if hierarchy_known else ""),
+                       "findings": findings,
+                       "healthy": not findings})
+    roster.sort(key=lambda r: -r["cost_usd"])
     return {
         "available": True,
         "hierarchy_known": hierarchy_known,
@@ -779,6 +912,8 @@ def find_orphan_subscriptions(all_subscriptions: List[Dict[str, Any]],
         "zero_spend": zero_spend,
         "disabled_with_cost_count": len(disabled_with_cost),
         "disabled_with_cost": disabled_with_cost,
+        "subscriptions": roster,
+        "healthy_count": sum(1 for r in roster if r["healthy"]),
         "total_subscriptions": len(all_subscriptions or []),
     }
 
