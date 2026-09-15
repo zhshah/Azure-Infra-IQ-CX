@@ -2421,15 +2421,16 @@ function AppInner() {
         {view === 'finops-budgets-hub' && <FinOpsHub storageKey="finops:hub:budgets" tabs={[
           { key: 'budgets', label: 'Budgets', render: () => <BudgetManager /> },
           { key: 'burndown', label: 'Burn-down', render: () => <BudgetBurndown /> },
-          { key: 'scenario', label: 'Scenario & Burndown', render: () => <BudgetScenario /> },
+          { key: 'scenario', label: 'What-if Scenario', render: () => <BudgetScenario /> },
           { key: 'alerts', label: 'Alerts', render: () => <FinOpsAlerts /> },
         ]} />}
         {view === 'finops-governance-hub' && <FinOpsHub storageKey="finops:hub:gov" tabs={[
           { key: 'tags', label: 'Tag Analytics', render: () => <TagAnalytics /> },
           { key: 'compliance', label: 'FinOps Compliance', render: () => <FinOpsComplianceView /> },
           { key: 'lens', label: 'Cost Lens', render: () => <CostLens /> },
+          // ChargebackByTag supersedes the CostCenter-only panel: CostCenter is just one of
+          // the tag keys it offers, so keeping both showed the same numbers twice.
           { key: 'chargeback', label: 'Chargeback', render: () => <ChargebackByTag /> },
-          { key: 'chargeback-cc', label: 'Chargeback (CostCenter)', render: () => <ChargebackPanel /> },
           { key: 'unit', label: 'Unit Economics', render: () => <UnitEconomics /> },
         ]} />}
         {view === 'finops-overview' && <FinOpsHub tabs={[
@@ -2437,10 +2438,10 @@ function AppInner() {
           { key: 'summary', label: 'Summary', render: () => <FinOpsOverview /> },
         ]} />}
         {view === 'finops-management' && <FinOpsHub storageKey="finops:hub:mgmt" tabs={[
+          // Sentinel/Log Analytics has its own top-level nav entry and Savings & ROI lives in
+          // Optimization; repeating them here was the duplication the review complained about.
           { key: 'dashboard', label: 'Cost & Usage Review', render: () => <ManagementDashboard /> },
-          { key: 'loganalytics', label: 'Sentinel & Log Analytics', render: () => <LogAnalyticsCost /> },
           { key: 'governance', label: 'Subscription Governance', render: () => <SubscriptionGovernance /> },
-          { key: 'ledger', label: 'Savings & ROI', render: () => <SavingsLedger /> },
         ]} />}
         {view === 'finops-recommendations' && <RecommendationStudio />}
         {view === 'finops-analyze' && <AnalyzeHub />}

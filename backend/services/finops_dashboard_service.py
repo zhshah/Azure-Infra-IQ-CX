@@ -990,3 +990,196 @@ def get_service_category_costs(days: int = 30,
             for k, v in sorted(agg.items(), key=lambda x: -x[1])]
     return {"available": True, "categories": cats, "total_usd": total,
             "period_days": days, "date_from": d_from}
+
+
+# ── Category drill-down ───────────────────────────────────────────────────────
+# The category roll-up above answers "how much"; on its own it is a pie and
+# nothing more. This adds the sub-categories behind each slice — service, then
+# resource type, then the individual resources — plus a period-over-period
+# delta so a reviewer can see which category actually moved and open the exact
+# resources responsible without leaving the review.
+
+def _category_rows(d_from: str, d_to: str,
+                   subscription_ids: Optional[List[str]] = None,
+                   resource_group: str = "",
+                   search: str = "") -> List[Tuple]:
+    """Resource-grain rows for a window. Every predicate is bound, never formatted."""
+    sql = ("SELECT service_name, meter_category, resource_type, resource_name, "
+           "       resource_group, location, subscription_id, resource_id, SUM(cost_usd) "
+           "FROM finops_daily_resource_costs "
+           "WHERE snapshot_date >= ? AND snapshot_date <= ?")
+    params: List[Any] = [d_from, d_to]
+    if subscription_ids:
+        sql += f" AND subscription_id IN ({','.join('?' * len(subscription_ids))})"
+        params.extend(subscription_ids)
+    if resource_group:
+        sql += " AND LOWER(resource_group) = ?"
+        params.append(resource_group.lower())
+    if search:
+        sql += " AND (LOWER(resource_name) LIKE ? OR LOWER(resource_id) LIKE ?)"
+        like = f"%{search.lower()}%"
+        params.extend([like, like])
+    sql += (" GROUP BY service_name, meter_category, resource_type, resource_name, "
+            "resource_group, location, subscription_id, resource_id")
+    with _conn() as con:
+        return con.execute(sql, params).fetchall()
+
+
+# Cost exports are not consistent about casing or spacing: the same ARM type arrives as
+# both "Microsoft.CognitiveServices/accounts" and "microsoft.cognitiveservices/accounts",
+# and one region as both "swedencentral" and "se central". Grouping on the raw string
+# splits one resource into two rows, which is exactly the noise this view exists to remove.
+def _norm(s: str) -> str:
+    return (s or "").strip().lower().replace(" ", "")
+
+
+def _rank(agg: Dict[str, Dict[str, Any]], total: float, key: str) -> List[Dict[str, Any]]:
+    out = []
+    for _k, v in sorted(agg.items(), key=lambda x: -x[1]["cost_usd"]):
+        out.append({key: v["label"], "cost_usd": round(v["cost_usd"], 2),
+                    "cost_pct": round(v["cost_usd"] / total * 100, 1) if total else 0.0,
+                    "resource_count": len(v["ids"])})
+    return out
+
+
+def get_category_breakdown(days: int = 30,
+                           subscription_ids: Optional[List[str]] = None,
+                           category: str = "",
+                           resource_group: str = "",
+                           search: str = "",
+                           top: int = 200) -> Dict[str, Any]:
+    """Service categories with their sub-categories, deltas and resource drill-down."""
+    empty = {"available": False, "categories": [], "total_usd": 0.0, "detail": None,
+             "resource_groups": [], "note": "No resource-grain cost rows for this window."}
+    if not _DB_AVAILABLE:
+        return empty
+    days = max(1, min(int(days or 30), 365))
+    d_to = _today()
+    d_from = d_to - timedelta(days=days - 1)
+    p_to = d_from - timedelta(days=1)
+    p_from = p_to - timedelta(days=days - 1)
+
+    try:
+        cur = _category_rows(str(d_from), str(d_to), subscription_ids, resource_group, search)
+        prev = _category_rows(str(p_from), str(p_to), subscription_ids, resource_group, search)
+    except Exception as e:
+        logger.warning("category breakdown query failed: %s", e)
+        return empty
+    if not cur:
+        return empty
+
+    prev_by_cat: Dict[str, float] = {}
+    for svc, mcat, rtype, *_rest in prev:
+        c = categorize_service(svc or "", mcat or "", rtype or "")
+        prev_by_cat[c] = prev_by_cat.get(c, 0.0) + float(_rest[-1] or 0)
+
+    cats: Dict[str, Dict[str, Any]] = {}
+    rgs: Dict[str, float] = {}
+    for svc, mcat, rtype, rname, rg, loc, sub, rid, cost in cur:
+        cost = float(cost or 0)
+        c = categorize_service(svc or "", mcat or "", rtype or "")
+        e = cats.setdefault(c, {"cost_usd": 0.0, "ids": set(), "services": set(),
+                                "types": set(), "rgs": set(), "rows": []})
+        e["cost_usd"] += cost
+        e["ids"].add(_norm(rid or rname))
+        e["services"].add(svc or "Unknown")
+        e["types"].add(_norm(rtype))
+        if rg:
+            e["rgs"].add(rg)
+            rgs[rg] = rgs.get(rg, 0.0) + cost
+        e["rows"].append((svc or "Unknown", rtype or "unknown", rname or "",
+                          rg or "", loc or "", sub or "", rid or "", cost))
+
+    total = round(sum(v["cost_usd"] for v in cats.values()), 2)
+    summary = []
+    for name, v in sorted(cats.items(), key=lambda x: -x[1]["cost_usd"]):
+        pv = prev_by_cat.get(name, 0.0)
+        # A category with no prior spend is "new", not an infinite percentage.
+        delta_pct = round((v["cost_usd"] - pv) / pv * 100, 1) if pv > 0.01 else None
+        top_svc = max(
+            ((s, sum(r[7] for r in v["rows"] if r[0] == s)) for s in v["services"]),
+            key=lambda x: x[1], default=("", 0.0))[0]
+        summary.append({
+            "category": name,
+            "cost_usd": round(v["cost_usd"], 2),
+            "cost_pct": round(v["cost_usd"] / total * 100, 1) if total else 0.0,
+            "prev_usd": round(pv, 2),
+            "delta_usd": round(v["cost_usd"] - pv, 2),
+            "delta_pct": delta_pct,
+            "is_new": pv <= 0.01,
+            "service_count": len(v["services"]),
+            "type_count": len(v["types"]),
+            "resource_count": len(v["ids"]),
+            "resource_group_count": len(v["rgs"]),
+            "top_service": top_svc,
+            "daily_avg_usd": round(v["cost_usd"] / days, 2),
+        })
+
+    detail = None
+    if category and category in cats:
+        v = cats[category]
+        ctot = v["cost_usd"]
+        svc_agg: Dict[str, Dict[str, Any]] = {}
+        type_agg: Dict[str, Dict[str, Any]] = {}
+        rg_agg: Dict[str, Dict[str, Any]] = {}
+        loc_agg: Dict[str, Dict[str, Any]] = {}
+        svc_types: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        res_agg: Dict[str, Dict[str, Any]] = {}
+        for svc, rtype, rname, rg, loc, sub, rid, cost in v["rows"]:
+            rkey = _norm(rid or rname)
+            for agg, key, label in ((svc_agg, _norm(svc), svc),
+                                    (type_agg, _norm(rtype), rtype),
+                                    (rg_agg, _norm(rg), rg or "(no resource group)"),
+                                    (loc_agg, _norm(loc), loc or "(unknown)")):
+                a = agg.setdefault(key, {"cost_usd": 0.0, "ids": set(), "label": label})
+                a["cost_usd"] += cost
+                a["ids"].add(rkey)
+            st = svc_types.setdefault(_norm(svc), {}).setdefault(
+                _norm(rtype), {"cost_usd": 0.0, "ids": set(), "label": rtype})
+            st["cost_usd"] += cost
+            st["ids"].add(rkey)
+
+            # SQL grouped on the raw resource_id, so one resource can arrive as several
+            # rows that differ only in casing. Fold them here or the table double-counts.
+            ra = res_agg.setdefault(rkey, {
+                "resource_name": rname, "resource_type": rtype, "service_name": svc,
+                "resource_group": rg, "location": loc, "subscription_id": sub,
+                "resource_id": rid, "cost_usd": 0.0})
+            ra["cost_usd"] += cost
+
+        resources = sorted(
+            [{**r, "cost_usd": round(r["cost_usd"], 2),
+              "cost_pct": round(r["cost_usd"] / ctot * 100, 1) if ctot else 0.0,
+              "daily_avg_usd": round(r["cost_usd"] / days, 2)}
+             for r in res_agg.values()],
+            key=lambda x: -x["cost_usd"])
+
+        services = _rank(svc_agg, ctot, "service_name")
+        for s in services:
+            s["types"] = sorted(
+                [{"resource_type": d["label"], "cost_usd": round(d["cost_usd"], 2),
+                  "resource_count": len(d["ids"]),
+                  "cost_pct": round(d["cost_usd"] / ctot * 100, 1) if ctot else 0.0}
+                 for d in svc_types.get(_norm(s["service_name"]), {}).values()],
+                key=lambda x: -x["cost_usd"])
+
+        detail = {
+            "category": category,
+            "cost_usd": round(ctot, 2),
+            "cost_pct_of_total": round(ctot / total * 100, 1) if total else 0.0,
+            "resource_count": len(v["ids"]),
+            "services": services,
+            "resource_types": _rank(type_agg, ctot, "resource_type"),
+            "by_resource_group": _rank(rg_agg, ctot, "resource_group")[:25],
+            "by_location": _rank(loc_agg, ctot, "location")[:25],
+            "resources": resources[:top],
+            "resources_truncated": len(resources) > top,
+            "resources_total": len(resources),
+        }
+
+    return {"available": True, "categories": summary, "total_usd": total,
+            "period_days": days, "date_from": str(d_from), "date_to": str(d_to),
+            "prev_from": str(p_from), "prev_to": str(p_to),
+            "prev_total_usd": round(sum(prev_by_cat.values()), 2),
+            "resource_groups": [k for k, _ in sorted(rgs.items(), key=lambda x: -x[1])][:100],
+            "detail": detail}

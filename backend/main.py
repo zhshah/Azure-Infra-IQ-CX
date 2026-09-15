@@ -8865,6 +8865,29 @@ async def mgmt_service_categories(days: int = 30, subscription_id: Optional[str]
         _pool, lambda: _fd.get_service_category_costs(days, _mgmt_subs(subscription_id)))
 
 
+@app.get("/api/finops/mgmt/category-breakdown", tags=["FinOps Management"])
+async def mgmt_category_breakdown(days: int = 30,
+                                  subscription_id: Optional[str] = None,
+                                  category: Optional[str] = None,
+                                  resource_group: Optional[str] = None,
+                                  search: Optional[str] = None):
+    """Service categories with their sub-categories, period-over-period delta and the
+    resources behind each one.
+
+    Without `category` this returns the roll-up plus per-category service/type/resource
+    counts and the change vs the preceding window of equal length. With `category` it
+    also returns that category's services -> resource types -> individual resources, so
+    a reviewer can go from "AI/ML is up 40%" to the exact resource in two clicks.
+    """
+    from services import finops_dashboard_service as _fd
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _pool, lambda: _fd.get_category_breakdown(
+            days=days, subscription_ids=_mgmt_subs(subscription_id),
+            category=(category or "").strip(), resource_group=(resource_group or "").strip(),
+            search=(search or "").strip()[:80]))
+
+
 @app.get("/api/finops/mgmt/utilization-types", tags=["FinOps Management"])
 async def mgmt_utilization_types(subscription_id: Optional[str] = None):
     """Resource types that actually carry a utilisation reading, for the type picker."""

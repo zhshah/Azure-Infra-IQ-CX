@@ -19,6 +19,7 @@ import {
   DollarSign, TrendingUp, Database, CheckCircle2, Info,
 } from 'lucide-react'
 import { fmtUsd, fmtPct, CHART_COLORS } from './finopsApi'
+import CategoryExplorer from './CategoryExplorer'
 
 const PALETTE = CHART_COLORS && CHART_COLORS.length
   ? CHART_COLORS
@@ -172,7 +173,6 @@ export default function ManagementDashboard() {
   const [error, setError] = useState(null)
   const [collecting, setCollecting] = useState(false)
   const [days, setDays] = useState(30)
-  const [hoverCat, setHoverCat] = useState(null)
   const [hoverEnv, setHoverEnv] = useState(null)
   // Resource type shown in the cost-vs-utilisation review. The overview payload carries
   // VMs; any other type is fetched on demand.
@@ -307,60 +307,11 @@ export default function ManagementDashboard() {
       )}
 
       {/* ── Service categories ─────────────────────────────────────────────── */}
+      {/* CategoryExplorer owns its own window/resource-group/name filters and fetches
+          resource-grain rows, so it is deliberately independent of the page-level
+          service_categories roll-up rather than a second render of it. */}
       <Section title="Spend by Service Category" icon={Layers}>
-        {(service_categories.categories || []).length === 0 ? (
-          <NoData what="service category" hint="Requires meter-level collection." />
-        ) : (
-          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-            <div style={{ flex: '1 1 320px' }}>
-              <ShareDonut
-                data={service_categories.categories}
-                nameKey="category" valueKey="cost_usd"
-                colorOf={(c) => PALETTE[(service_categories.categories || []).indexOf(c) % PALETTE.length]}
-                hovered={hoverCat} onHover={setHoverCat}
-              />
-            </div>
-            <div style={{ flex: '1 1 320px' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                <thead>
-                  <tr style={{ color: 'var(--c-94a3b8, #94a3b8)', textAlign: 'left' }}>
-                    <th style={{ padding: '6px 8px' }}>Category</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'right' }}>Cost</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'right' }}>Share</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(service_categories.categories || []).map((c, i) => {
-                    const zero = !(Number(c.cost_usd) > 0)
-                    const on = hoverCat === c.category
-                    return (
-                      <tr key={c.category}
-                          onMouseEnter={() => setHoverCat(c.category)}
-                          onMouseLeave={() => setHoverCat(null)}
-                          style={{
-                            borderTop: '1px solid var(--c-1e293b, #1e293b)',
-                            background: on ? 'rgba(59,130,246,.12)' : 'transparent',
-                            opacity: zero ? 0.55 : 1,
-                          }}>
-                        <td style={{ padding: '6px 8px', color: 'var(--c-e2e8f0, #e2e8f0)' }}>
-                          <span style={{
-                            display: 'inline-block', width: 8, height: 8, borderRadius: 2,
-                            background: zero ? 'var(--c-475569, #475569)' : PALETTE[i % PALETTE.length],
-                            marginRight: 8,
-                          }} />
-                          {c.category}
-                          {zero && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--c-64748b, #64748b)' }}>no spend</span>}
-                        </td>
-                        <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--c-e2e8f0, #e2e8f0)', fontVariantNumeric: 'tabular-nums' }}>{fmtUsd(c.cost_usd)}</td>
-                        <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--c-94a3b8, #94a3b8)', fontVariantNumeric: 'tabular-nums' }}>{c.cost_pct}%</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+        <CategoryExplorer />
       </Section>
 
       {/* ── Cost & utilisation, by resource type ───────────────────────────── */}
@@ -731,7 +682,7 @@ export default function ManagementDashboard() {
 
       {/* ── Savings & ROI ──────────────────────────────────────────────────── */}
       <Section title="Savings &amp; ROI" icon={TrendingUp}
-        note="Realized savings compares each implemented recommendation's baseline cost against the resource's measured cost afterwards. ROI prices implementation effort at the configured hourly rate.">
+        note="Executive roll-up only — the per-recommendation ledger, filters and status changes live in Optimization → Savings Ledger & ROI. Realized savings compares each implemented recommendation's baseline cost against the resource's measured cost afterwards. ROI prices implementation effort at the configured hourly rate.">
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
           <Kpi label="Identified" value={fmtUsd(savings.identified_monthly_usd || 0)} sub="per month" icon={DollarSign} />
           <Kpi label="Potential (open)" value={fmtUsd(savings.potential_monthly_usd || 0)} color="#3b82f6" />
