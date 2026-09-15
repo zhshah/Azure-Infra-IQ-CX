@@ -115,17 +115,35 @@ def _query_with_retry(
     Back-off is deliberately bounded so a throttled Cost Management API can never
     hang the live dashboard build for minutes. On exhaustion the caller degrades
     to partial / 2-hour-cached cost figures instead of zeroes.
+
+    Calls go through the SAME tenant-wide pacer as the FinOps collector. The limit is
+    per-tenant, so two modules firing independently just throttle each other: the
+    dashboard scan was issuing a cost query per subscription with no spacing, earning
+    429s that the warehouse loader then backed off from. Sharing one rate keeps them
+    from competing, and the interval widens automatically while the tenant is hot.
     """
+    try:
+        from services.finops_data_service import (
+            _pace_cost_call, _note_cost_throttled, _note_cost_ok,
+        )
+    except Exception:  # pacing is an optimisation, never a hard dependency
+        _pace_cost_call = _note_cost_throttled = _note_cost_ok = lambda: None
+
     delay = initial_delay
     for attempt in range(max_retries + 1):
         try:
-            return client.query.usage(scope=scope, parameters=parameters, **kwargs)
+            _pace_cost_call()
+            result = client.query.usage(scope=scope, parameters=parameters, **kwargs)
+            _note_cost_ok()
+            return result
         except Exception as exc:
             is_rate_limit = (
                 "429" in str(exc)
                 or getattr(exc, "status_code", None) == 429
                 or "too many requests" in str(exc).lower()
             )
+            if is_rate_limit:
+                _note_cost_throttled()
             if is_rate_limit and attempt < max_retries:
                 # Respect Retry-After header if the SDK surfaces it
                 retry_after = None

@@ -300,6 +300,11 @@ _pool = ThreadPoolExecutor(max_workers=12)  # shared executor for blocking I/O (
 # Dedicated pool for AI calls so long (~15-20s) Azure OpenAI requests can never
 # starve the data pool and make every FinOps tab hang on a spinner.
 _ai_pool = ThreadPoolExecutor(max_workers=4)
+# Unattended collection must never queue behind, or ahead of, a user's request. The
+# warmup, ETL, snapshots and first-fill supervisor each hold a worker for minutes at a
+# time while a throttled Azure call backs off, and sharing _pool with the request
+# handlers made page loads take ~70s while the CPU sat at 3%.
+_bg_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="bg")
 # The estate scan fans out ~30 Azure calls at once. It used to build its own pool per
 # call and never shut it down, so every scan and auto-refresh left threads behind.
 _scan_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="scan")
@@ -3070,7 +3075,7 @@ async def _finops_cache_warmup() -> None:
             _finops_warm_cache["summary_ts"] = ts
             logger.info("FinOps warmup: summary KPIs cached from dashboard cache (instant)")
         else:
-            summary = await loop.run_in_executor(_pool, lambda: finops_svc.get_finops_kpi(sub_ids))
+            summary = await loop.run_in_executor(_bg_pool, lambda: finops_svc.get_finops_kpi(sub_ids))
             _finops_warm_cache["summary"]    = summary
             _finops_warm_cache["summary_ts"] = ts
             logger.info("FinOps warmup: summary KPIs cached from live API")
@@ -3080,7 +3085,7 @@ async def _finops_cache_warmup() -> None:
     # ── 2. Savings (dashboard-cache-backed, fast) ─────────────────────────
     try:
         dash = dash_for_warmup or _cache.get("data:*") or _cache.get("data")
-        sv = await loop.run_in_executor(_pool, lambda: finops_svc.get_savings_summary(dash))
+        sv = await loop.run_in_executor(_bg_pool, lambda: finops_svc.get_savings_summary(dash))
         _finops_warm_cache["savings"]    = sv
         _finops_warm_cache["savings_ts"] = ts
         logger.info("FinOps warmup: savings cached")
@@ -3090,7 +3095,7 @@ async def _finops_cache_warmup() -> None:
     # ── 3. Commitments ────────────────────────────────────────────────────
     try:
         cm = await asyncio.wait_for(
-            loop.run_in_executor(_pool, commitment_svc.get_commitment_summary),
+            loop.run_in_executor(_bg_pool, commitment_svc.get_commitment_summary),
             timeout=30.0,
         )
         _finops_warm_cache["commitments"]    = cm
@@ -3122,7 +3127,7 @@ async def _finops_cache_warmup() -> None:
 
         # ── 5. Chargeback ─────────────────────────────────────────────────────
         try:
-            cb = await loop.run_in_executor(_pool, lambda: finops_svc.get_chargeback_report("last_30d", sub_ids))
+            cb = await loop.run_in_executor(_bg_pool, lambda: finops_svc.get_chargeback_report("last_30d", sub_ids))
             _finops_warm_cache["chargeback"]    = cb
             _finops_warm_cache["chargeback_ts"] = ts
             logger.info("FinOps warmup: chargeback cached")
@@ -3132,7 +3137,7 @@ async def _finops_cache_warmup() -> None:
         # ── 6. Forecast — runs last; capped at 90s so it doesn't block others ─
         try:
             fc = await asyncio.wait_for(
-                loop.run_in_executor(_pool, lambda: forecast_finops_svc.get_forecast(horizon_days=30, subscription_ids=sub_ids)),
+                loop.run_in_executor(_bg_pool, lambda: forecast_finops_svc.get_forecast(horizon_days=30, subscription_ids=sub_ids)),
                 timeout=90.0,
             )
             _finops_warm_cache["forecast"]    = fc
@@ -3294,7 +3299,7 @@ async def _metrics_snapshot_run() -> dict:
             return {"error": "no subscriptions configured"}
 
         logger.info("Metrics snapshot: starting full metrics pull…")
-        resources = await loop.run_in_executor(_pool, partial(list_all_resources, sub_ids))
+        resources = await loop.run_in_executor(_bg_pool, partial(list_all_resources, sub_ids))
         all_metrics: dict[str, Any] = {}
         BATCH = 20
         for i in range(0, len(resources), BATCH):
@@ -3311,7 +3316,7 @@ async def _metrics_snapshot_run() -> dict:
                     all_metrics[r["id"].lower()] = res
 
         if all_metrics:
-            await loop.run_in_executor(_pool, partial(persistence_svc.save_resource_metrics, all_metrics))
+            await loop.run_in_executor(_bg_pool, partial(persistence_svc.save_resource_metrics, all_metrics))
             # Invalidate the short-lived Redis metrics cache so the rebuild below
             # and the next dashboard open pick up the freshly-persisted metrics.
             try:
@@ -3444,7 +3449,7 @@ async def _cost_snapshot_run() -> dict:
     loop = asyncio.get_event_loop()
     try:
         import services.cost_snapshot_service as cost_snapshot_svc
-        summary = await loop.run_in_executor(_pool, cost_snapshot_svc.capture_and_save)
+        summary = await loop.run_in_executor(_bg_pool, cost_snapshot_svc.capture_and_save)
         now = datetime.now(tz=timezone.utc)
         _cost_snapshot_state.update({
             "last_run": now.isoformat(),
@@ -8069,7 +8074,7 @@ async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full")
     failures: List[str] = []
 
     try:
-        _ing.job_set_counts("before", await loop.run_in_executor(_pool, _ing.table_counts))
+        _ing.job_set_counts("before", await loop.run_in_executor(_bg_pool, _ing.table_counts))
     except Exception:
         pass
 
@@ -8091,7 +8096,7 @@ async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full")
     recent_scan_age = None
     if quick:
         try:
-            av = await loop.run_in_executor(_pool, _ing.get_inventory, False)
+            av = await loop.run_in_executor(_bg_pool, _ing.get_inventory, False)
             scans = next((d for d in av.get("datasets", []) if d.get("key") == "scans"), None)
             recent_scan_age = (scans or {}).get("age_hours")
         except Exception:
@@ -8188,8 +8193,8 @@ async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full")
     # 6) Recommendations + realised savings.
     async def _recs():
         from services import finops_savings_service as _sav
-        gen = await loop.run_in_executor(_pool, _sav.generate_warehouse_recommendations)
-        measured = await loop.run_in_executor(_pool, lambda: _sav.measure_realized_savings(run_id))
+        gen = await loop.run_in_executor(_bg_pool, _sav.generate_warehouse_recommendations)
+        measured = await loop.run_in_executor(_bg_pool, lambda: _sav.measure_realized_savings(run_id))
         return {"generated": (gen or {}).get("generated", 0),
                 "monthly_usd": (gen or {}).get("monthly_usd", 0),
                 "measured": (measured or {}).get("measured", 0)}
@@ -8199,7 +8204,7 @@ async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full")
                           f"{r['measured']} realised", r["generated"]))
 
     try:
-        _ing.job_set_counts("after", await loop.run_in_executor(_pool, _ing.table_counts))
+        _ing.job_set_counts("after", await loop.run_in_executor(_bg_pool, _ing.table_counts))
     except Exception:
         pass
 
@@ -8263,7 +8268,7 @@ async def _first_fill_supervisor() -> None:
     await asyncio.sleep(45)  # let migrations, RBAC and the export loader settle
 
     try:
-        gaps = await loop.run_in_executor(_pool, _first_fill_gaps)
+        gaps = await loop.run_in_executor(_bg_pool, _first_fill_gaps)
     except Exception as exc:
         logger.warning("First-fill: could not read table counts: %s", exc)
         gaps = []
@@ -8295,7 +8300,7 @@ async def _first_fill_supervisor() -> None:
             _ing.fill_update(last_error=str(exc)[:300])
 
         try:
-            gaps = await loop.run_in_executor(_pool, _first_fill_gaps)
+            gaps = await loop.run_in_executor(_bg_pool, _first_fill_gaps)
         except Exception as exc:
             _ing.fill_update(last_error=str(exc)[:300])
             gaps = gaps  # keep the previous view rather than claiming success
