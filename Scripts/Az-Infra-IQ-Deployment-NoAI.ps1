@@ -1787,6 +1787,30 @@ Write-Host "  ✅ RBAC configured following Least-Privilege principle" -Foregrou
 Write-Host ""
 
 # ============================================
+# FINOPS COST-EXPORT PIPELINE
+# ============================================
+# Cost data reaches SQL as: Cost Management --daily export--> ADLS Gen2 --loader--> SQL.
+# The app creates and loads the exports itself, but cannot create the landing storage
+# account or grant itself access; without this step the FinOps views stay empty.
+Write-Step "Step 9a: Provisioning the FinOps cost-export pipeline"
+try {
+    $exportSetup = Join-Path $PSScriptRoot 'Setup-FinOpsExportPipeline.ps1'
+    if (Test-Path -LiteralPath $exportSetup) {
+        & $exportSetup -ResourceGroup $ResourceGroupName -Location $Location `
+            -PrincipalId $principalId -SubscriptionIds $subList `
+            -StorageSubscriptionId $SubscriptionId -AppName $WebAppName -AppKind 'webapp' | Out-Null
+        Write-Success "Cost-export pipeline provisioned"
+    } else {
+        Write-Host "  WARNING: Setup-FinOpsExportPipeline.ps1 not found - FinOps cost data will not load" -ForegroundColor Yellow
+        $permIssues += @{ Kind = "FinOps"; Name = "Cost export pipeline"; Scope = $ResourceGroupName; Command = "Scripts\Setup-FinOpsExportPipeline.ps1" }
+    }
+} catch {
+    Write-Host "  WARNING: Cost-export pipeline setup failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    $permIssues += @{ Kind = "FinOps"; Name = "Cost export pipeline"; Scope = $ResourceGroupName; Command = "Scripts\Setup-FinOpsExportPipeline.ps1" }
+}
+Write-Host ""
+
+# ============================================
 # ASSIGN MICROSOFT GRAPH API PERMISSIONS (FOR ENTRA ID FEATURES)
 # ============================================
 Write-Step "Step 9b: Assigning Microsoft Graph API Permissions (Entra ID)"

@@ -149,22 +149,25 @@ export default function DataIngestion() {
   }, [loadInventory, loadStatus])
 
   // While a run is in flight, poll status; refresh the census once it lands so the
-  // row counts the user is watching actually move.
+  // row counts the user is watching actually move. The first-fill supervisor also
+  // counts as in-flight: between its attempts no job is running, but it is still
+  // working, and stopping the poll there would make it look like nothing happens.
+  const supervising = !!job?.first_fill?.active
   useEffect(() => {
-    if (!job?.running) {
+    if (!job?.running && !supervising) {
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
       return
     }
     pollRef.current = setInterval(async () => {
       const s = await loadStatus()
       setTick(t => t + 1)
-      if (s && !s.running) {
+      if (s && !s.running && !s.first_fill?.active) {
         clearInterval(pollRef.current); pollRef.current = null
         loadInventory(true)
       }
     }, 4000)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
-  }, [job?.running, loadStatus, loadInventory])
+  }, [job?.running, supervising, loadStatus, loadInventory])
 
   async function startRun(mode = 'full') {
     setStarting(true); setError(null)
@@ -243,12 +246,63 @@ export default function DataIngestion() {
   const running = !!job?.running
   const gaps = inv?.actionable_gaps || []
   const sched = inv?.schedule || {}
+  const fill = job?.first_fill || {}
+  const showFill = fill.active || fill.phase === 'exhausted'
+  const fillTone = fill.phase === 'exhausted' ? '#f59e0b' : '#3b82f6'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {error && (
         <div style={{ background: 'var(--c-3f1d1d, #1a0e0e)', border: '1px solid var(--c-7f1d1d, #7f1d1d)', borderRadius: 10, padding: 12, color: '#ef4444', display: 'flex', gap: 8, fontSize: 12 }}>
           <AlertCircle size={15} /><span>{error}</span>
+        </div>
+      )}
+
+      {/* First-fill supervisor: on a fresh deployment the views are empty until the
+          collectors have run, so say so explicitly instead of showing blank charts. */}
+      {showFill && (
+        <div style={{ background: 'var(--c-0f172a, #0f172a)', border: `1px solid ${fillTone}55`,
+                      borderLeft: `3px solid ${fillTone}`, borderRadius: 10, padding: '12px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {fill.phase === 'exhausted'
+              ? <AlertCircle size={15} color={fillTone} />
+              : <RefreshCw size={15} color={fillTone} className="animate-spin" />}
+            <span style={{ color: 'var(--c-f1f5f9, #f1f5f9)', fontSize: 13, fontWeight: 700 }}>
+              {fill.phase === 'exhausted'
+                ? 'First collection incomplete'
+                : 'Filling your dashboards for the first time'}
+            </span>
+            {fill.max_attempts > 0 && (
+              <span style={{ fontSize: 11, color: 'var(--c-94a3b8, #94a3b8)',
+                             background: 'var(--c-1e293b, #1e293b)', padding: '2px 7px', borderRadius: 6 }}>
+                attempt {fill.attempt} / {fill.max_attempts}
+              </span>
+            )}
+            <span style={{ fontSize: 11, color: '#22c55e' }}>{fill.filled_count} ready</span>
+            <span style={{ fontSize: 11, color: 'var(--c-94a3b8, #94a3b8)' }}>·</span>
+            <span style={{ fontSize: 11, color: fillTone }}>{fill.pending_count} pending</span>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--c-94a3b8, #94a3b8)', marginTop: 6 }}>
+            {fill.message}
+            {fill.next_attempt_at && fill.phase === 'waiting' &&
+              ` · next attempt ${new Date(fill.next_attempt_at).toLocaleTimeString()}`}
+          </div>
+          {!!(fill.pending || []).length && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+              {fill.pending.map(p => (
+                <span key={p.dataset} title={p.dataset}
+                      style={{ fontSize: 11, color: 'var(--c-cbd5e1, #cbd5e1)',
+                               background: 'var(--c-1e293b, #1e293b)',
+                               border: '1px solid var(--c-334155, #334155)',
+                               padding: '3px 8px', borderRadius: 6 }}>
+                  {p.label}
+                </span>
+              ))}
+            </div>
+          )}
+          {fill.last_error && (
+            <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 6 }}>Last error: {fill.last_error}</div>
+          )}
         </div>
       )}
 
@@ -466,8 +520,23 @@ export default function DataIngestion() {
               const max = inv.by_subscription[0].rows || 1
               return (
                 <div key={s.subscription_id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontFamily: 'monospace', fontSize: 10.5, color: 'var(--c-cbd5e1, #cbd5e1)', width: 300, flexShrink: 0 }}>
-                    {s.subscription_id}
+                  <span style={{ width: 300, flexShrink: 0, overflow: 'hidden' }} title={s.subscription_id}>
+                    <span style={{
+                      display: 'block', fontSize: 11.5, fontWeight: 600,
+                      color: 'var(--c-f1f5f9, #f1f5f9)', whiteSpace: 'nowrap',
+                      overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}>
+                      {s.subscription_name || s.subscription_id}
+                    </span>
+                    {s.subscription_name && (
+                      <span style={{
+                        display: 'block', fontFamily: 'monospace', fontSize: 9.5,
+                        color: 'var(--c-64748b, #64748b)', whiteSpace: 'nowrap',
+                        overflow: 'hidden', textOverflow: 'ellipsis',
+                      }}>
+                        {s.subscription_id}
+                      </span>
+                    )}
                   </span>
                   <div style={{ flex: 1, height: 8, background: 'var(--c-1e293b, #1e293b)', borderRadius: 999, overflow: 'hidden' }}>
                     <div style={{ width: `${(s.rows / max) * 100}%`, height: '100%', background: '#3b82f6', borderRadius: 999 }} />
@@ -573,11 +642,13 @@ export default function DataIngestion() {
                             <div style={{ fontSize: 10.5, color: 'var(--c-64748b, #64748b)', marginBottom: 4 }}>Rows by subscription</div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                               {d.by_subscription.map(s => (
-                                <span key={s.subscription_id} style={{
+                                <span key={s.subscription_id} title={s.subscription_id} style={{
                                   background: 'var(--c-1e293b, #1e293b)', border: '1px solid var(--c-334155, #334155)',
                                   borderRadius: 6, padding: '3px 8px', fontSize: 10.5, color: 'var(--c-cbd5e1, #cbd5e1)',
                                 }}>
-                                  <span style={{ fontFamily: 'monospace' }}>{s.subscription_id}</span>
+                                  <span style={s.subscription_name ? undefined : { fontFamily: 'monospace' }}>
+                                    {s.subscription_name || s.subscription_id}
+                                  </span>
                                   {' '}<strong style={{ color: '#22c55e' }}>{fmtNum(s.rows)}</strong>
                                 </span>
                               ))}

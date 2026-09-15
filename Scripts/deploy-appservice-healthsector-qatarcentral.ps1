@@ -324,7 +324,14 @@ param(
     # deployment needs no outbound access to pypi.org at all. Used automatically as a fallback if
     # the remote build fails. Requires Python 3 on the machine running this script.
     [Parameter(Mandatory = $false)]
-    [switch]$OfflineDependencies
+    [switch]$OfflineDependencies,
+
+    # Storage account that Azure Cost Management writes its daily cost exports to.
+    # The app reads those files and loads them into SQL; without it the FinOps views
+    # stay empty. Left blank, the script asks for a name.
+    [string]$CostExportStorageAccountName = "",
+
+    [string]$CostExportContainerName = "cost-exports"
 )
 
 # ============================================
@@ -332,6 +339,11 @@ param(
 # ============================================
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+# Declared here because Step 6b (cost export storage) may append to it long before the RBAC
+# section runs. `$undefined += @{...}` yields a HASHTABLE, not an array, and the second append
+# then dies with "Item has already been added" — which under ErrorActionPreference=Stop aborts
+# the whole deployment.
+$permIssues = @()
 # PowerShell 7.4+ defaults $PSNativeCommandUseErrorActionPreference to $true, which makes
 # ANY native command exiting non-zero throw under ErrorActionPreference=Stop. That would
 # break (a) robocopy (whose SUCCESS exit codes are 1-7) and (b) the idempotent
@@ -562,6 +574,35 @@ if (-not $PSBoundParameters.ContainsKey('Location')) {
     if (-not [string]::IsNullOrWhiteSpace($locInput)) { $Location = $locInput.Trim() }
 }
 Write-Success "Location: $Location"
+
+# 3b) Storage account for the FinOps cost exports. Azure Cost Management writes the
+# daily cost files here and the app loads them into SQL, so this is what makes the
+# FinOps dashboards show data. Name rules: 3-24 chars, lowercase letters and digits.
+if ([string]::IsNullOrWhiteSpace($CostExportStorageAccountName)) {
+    Write-Host ""
+    Write-Host "  FinOps cost exports" -ForegroundColor White
+    Write-Host "    Azure Cost Management writes daily cost files to a storage account," -ForegroundColor Gray
+    Write-Host "    and the app loads them into SQL. This is what fills the FinOps views." -ForegroundColor Gray
+    # Derived from subscription + resource group with a stable hash so re-running the
+    # deployment offers the SAME name. String.GetHashCode() is randomised per process
+    # and would suggest a different account every run.
+    $defaultCostSaHash = [System.Security.Cryptography.SHA256]::HashData(
+        [Text.Encoding]::UTF8.GetBytes("$SubscriptionId/$ResourceGroupName"))
+    $defaultCostSa = 'iqcost' + (([BitConverter]::ToString($defaultCostSaHash) -replace '-', '').Substring(0, 14).ToLower())
+    $saInput = Read-Host "  Storage account name for cost exports [default: $defaultCostSa]"
+    $CostExportStorageAccountName = if ([string]::IsNullOrWhiteSpace($saInput)) { $defaultCostSa } else { $saInput.Trim().ToLower() }
+}
+$CostExportStorageAccountName = $CostExportStorageAccountName.ToLower()
+if ($CostExportStorageAccountName -notmatch '^[a-z0-9]{3,24}$') {
+    throw "Cost export storage account name '$CostExportStorageAccountName' is invalid - use 3-24 lowercase letters and digits only."
+}
+# Caught here rather than 20 minutes later at 'az storage container create', which would
+# leave the app pointed at a container that was never made and the FinOps views empty.
+$CostExportContainerName = $CostExportContainerName.Trim().ToLower()
+if ($CostExportContainerName -notmatch '^[a-z0-9]([a-z0-9]|-(?!-)){1,61}[a-z0-9]$') {
+    throw "Cost export container name '$CostExportContainerName' is invalid - use 3-63 lowercase letters, digits and single hyphens, starting and ending with a letter or digit."
+}
+Write-Success "Cost export storage: $CostExportStorageAccountName (container '$CostExportContainerName')"
 
 # 3a) Azure OpenAI SOURCE — create a NEW resource, or reuse an EXISTING one (e.g. a PTU /
 # Provisioned deployment the customer already has in Sweden Central). Ask if not pre-supplied.
@@ -977,6 +1018,37 @@ function Confirm-PrivateDnsARecord {
     } else {
         Write-Host "  WARNING: failed to create the A record for $RecordName.$ZoneName" -ForegroundColor Yellow
     }
+}
+
+function New-PrivateEndpointSafe {
+    # az resolves --vnet-name inside --resource-group, so the name form only works when the
+    # VNet happens to live in the deployment RG. The full subnet resource ID is RG-agnostic,
+    # so it is tried first and the name form is kept only as a fallback.
+    param(
+        [string]$Name, [string]$ResourceGroup, [string]$Location,
+        [string]$ConnectionResourceId, [string]$GroupId, [string]$ConnectionName,
+        [string]$SubnetResourceId, [string]$FallbackVNetName, [string]$FallbackSubnetName
+    )
+    if (-not [string]::IsNullOrWhiteSpace($SubnetResourceId)) {
+        az network private-endpoint create `
+            --name $Name --resource-group $ResourceGroup --location $Location `
+            --subnet $SubnetResourceId `
+            --private-connection-resource-id $ConnectionResourceId `
+            --group-id $GroupId --connection-name $ConnectionName `
+            --output none 2>$null
+        if ($LASTEXITCODE -eq 0) { return $true }
+        Write-Info "Subnet-ID create failed for '$Name' - retrying with --vnet-name..."
+    }
+    if ([string]::IsNullOrWhiteSpace($FallbackVNetName) -or [string]::IsNullOrWhiteSpace($FallbackSubnetName)) {
+        return $false
+    }
+    az network private-endpoint create `
+        --name $Name --resource-group $ResourceGroup --location $Location `
+        --vnet-name $FallbackVNetName --subnet $FallbackSubnetName `
+        --private-connection-resource-id $ConnectionResourceId `
+        --group-id $GroupId --connection-name $ConnectionName `
+        --output none 2>$null
+    return ($LASTEXITCODE -eq 0)
 }
 
 # ============================================
@@ -1430,34 +1502,13 @@ if ($DeploymentMode -eq "Private" -and $OpenAIMode -ne "Existing") {
         Write-Info "Private Endpoint '$openaiPeName' already exists"
     } else {
         Write-Info "Creating Private Endpoint for Azure OpenAI..."
-        az network private-endpoint create `
-            --name $openaiPeName `
-            --resource-group $ResourceGroupName `
-            --location $Location `
-            --vnet-name $VNetName `
-            --subnet $PrivateEndpointSubnetName `
-            --private-connection-resource-id $openaiResourceId `
-            --group-id "account" `
-            --connection-name "${OpenAIResourceName}-connection" `
-            --output none 2>$null
-        
-        if ($LASTEXITCODE -ne 0) {
-            # Try with full subnet resource ID
-            Write-Info "Retrying with full subnet resource ID..."
-            az network private-endpoint create `
-                --name $openaiPeName `
-                --resource-group $ResourceGroupName `
-                --location $Location `
-                --subnet $peSubnetResourceId `
-                --private-connection-resource-id $openaiResourceId `
-                --group-id "account" `
-                --connection-name "${OpenAIResourceName}-connection" `
-                --output none
-            
-            if ($LASTEXITCODE -ne 0) {
-                Write-Error "Failed to create Private Endpoint for Azure OpenAI"
-                exit 1
-            }
+        $openaiPeOk = New-PrivateEndpointSafe -Name $openaiPeName -ResourceGroup $ResourceGroupName `
+            -Location $Location -ConnectionResourceId $openaiResourceId -GroupId "account" `
+            -ConnectionName "${OpenAIResourceName}-connection" -SubnetResourceId $peSubnetResourceId `
+            -FallbackVNetName $VNetName -FallbackSubnetName $PrivateEndpointSubnetName
+        if (-not $openaiPeOk) {
+            Write-Error "Failed to create Private Endpoint for Azure OpenAI"
+            exit 1
         }
         Write-Success "Private Endpoint created: $openaiPeName"
     }
@@ -1616,31 +1667,13 @@ if ($DeploySql) {
             Write-Info "Private Endpoint '$sqlPeName' already exists"
         } else {
             Write-Info "Creating Private Endpoint for Azure SQL..."
-            az network private-endpoint create `
-                --name $sqlPeName `
-                --resource-group $ResourceGroupName `
-                --location $Location `
-                --vnet-name $VNetName `
-                --subnet $PrivateEndpointSubnetName `
-                --private-connection-resource-id $sqlServerResourceId `
-                --group-id "sqlServer" `
-                --connection-name "${SqlServerName}-connection" `
-                --output none 2>$null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Info "Retrying with full subnet resource ID..."
-                az network private-endpoint create `
-                    --name $sqlPeName `
-                    --resource-group $ResourceGroupName `
-                    --location $Location `
-                    --subnet $peSubnetResourceId `
-                    --private-connection-resource-id $sqlServerResourceId `
-                    --group-id "sqlServer" `
-                    --connection-name "${SqlServerName}-connection" `
-                    --output none
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Error "Failed to create Private Endpoint for Azure SQL"
-                    exit 1
-                }
+            $sqlPeOk = New-PrivateEndpointSafe -Name $sqlPeName -ResourceGroup $ResourceGroupName `
+                -Location $Location -ConnectionResourceId $sqlServerResourceId -GroupId "sqlServer" `
+                -ConnectionName "${SqlServerName}-connection" -SubnetResourceId $peSubnetResourceId `
+                -FallbackVNetName $VNetName -FallbackSubnetName $PrivateEndpointSubnetName
+            if (-not $sqlPeOk) {
+                Write-Error "Failed to create Private Endpoint for Azure SQL"
+                exit 1
             }
             Write-Success "Private Endpoint created: $sqlPeName"
         }
@@ -1745,16 +1778,31 @@ if ($DeployRedis -and [string]::IsNullOrWhiteSpace($RedisUrl)) {
             az redis update --name $redisName --resource-group $ResourceGroupName --set publicNetworkAccess=Disabled --output none 2>$null
             $redisResourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Cache/Redis/$redisName"
             $redisPeName = "${redisName}-pe"
-            az network private-endpoint create `
-                --name $redisPeName `
-                --resource-group $ResourceGroupName `
-                --location $Location `
-                --vnet-name $VNetName `
-                --subnet $PrivateEndpointSubnetName `
-                --private-connection-resource-id $redisResourceId `
-                --group-id "redisCache" `
-                --connection-name "${redisName}-connection" `
-                --output none 2>$null
+            # Same reason as the other endpoints: --vnet-name resolves inside the deployment
+            # resource group, which is not where the VNet usually lives.
+            if (-not [string]::IsNullOrWhiteSpace($peSubnetResourceId)) {
+                az network private-endpoint create `
+                    --name $redisPeName `
+                    --resource-group $ResourceGroupName `
+                    --location $Location `
+                    --subnet $peSubnetResourceId `
+                    --private-connection-resource-id $redisResourceId `
+                    --group-id "redisCache" `
+                    --connection-name "${redisName}-connection" `
+                    --output none 2>$null
+            }
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($peSubnetResourceId)) {
+                az network private-endpoint create `
+                    --name $redisPeName `
+                    --resource-group $ResourceGroupName `
+                    --location $Location `
+                    --vnet-name $VNetName `
+                    --subnet $PrivateEndpointSubnetName `
+                    --private-connection-resource-id $redisResourceId `
+                    --group-id "redisCache" `
+                    --connection-name "${redisName}-connection" `
+                    --output none 2>$null
+            }
             $redisDnsZoneName = "privatelink.redis.cache.windows.net"
             az network private-dns zone create --name $redisDnsZoneName --resource-group $dnsZoneResourceGroup --subscription $dnsZoneSubscriptionId --output none 2>$null
             $redisDnsLinkName = "link-$VNetName-redis"
@@ -1989,6 +2037,206 @@ Write-Info "Managed Identity Principal ID: $principalId"
 # ============================================
 # CONFIGURE WEB APP SETTINGS
 # ============================================
+Write-Step "Step 6b: FinOps Cost Export Storage"
+
+$costExportStorageId = ""
+$costExportSub = $SubscriptionId
+$costExportTargets = @($ScanSubscriptionsEnv -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne 'auto' })
+if ($costExportTargets.Count -eq 0) {
+    # "auto" only means the APP discovers subscriptions at runtime - the deployment already
+    # resolved the real list into $SubscriptionIdsCsv above, so use it. Granting only the
+    # deployment subscription used to leave every other subscription exporting nothing:
+    # creating an export needs Cost Management CONTRIBUTOR, and the Cost Management READER
+    # that Step 9 grants can only read an existing one.
+    $costExportTargets = @($SubscriptionIdsCsv -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($costExportTargets.Count -eq 0) { $costExportTargets = @($SubscriptionId) }
+    Write-Info "Granting the cost export role on all $($costExportTargets.Count) discovered subscription(s)."
+}
+
+# Exports fail with "RP Not Registered" unless the provider is registered on the
+# subscription that owns the storage account AND on every exported subscription.
+foreach ($cesub in (@($costExportSub) + $costExportTargets | Select-Object -Unique)) {
+    $ceState = az provider show --namespace Microsoft.CostManagementExports --subscription $cesub --query registrationState -o tsv 2>$null
+    if ($ceState -ne 'Registered') {
+        Write-Info "Registering Microsoft.CostManagementExports on $cesub ..."
+        az provider register --namespace Microsoft.CostManagementExports --subscription $cesub --wait 2>&1 | Out-Null
+    }
+}
+
+$existingCostSa = az storage account show --name $CostExportStorageAccountName --resource-group $ResourceGroupName --query name -o tsv 2>$null
+if ($existingCostSa) {
+    Write-Info "Cost export storage '$CostExportStorageAccountName' already exists - reusing"
+} else {
+    Write-Info "Creating ADLS Gen2 storage account '$CostExportStorageAccountName' in $Location ..."
+    az storage account create `
+        --name $CostExportStorageAccountName `
+        --resource-group $ResourceGroupName `
+        --location $Location `
+        --sku Standard_LRS `
+        --kind StorageV2 `
+        --enable-hierarchical-namespace true `
+        --min-tls-version TLS1_2 `
+        --allow-blob-public-access false `
+        --tags SecurityControl=Ignore purpose=finops-cost-exports `
+        --output none 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  WARNING: Could not create '$CostExportStorageAccountName' (the name may be taken globally) - FinOps cost data will not load." -ForegroundColor Yellow
+        $permIssues += @{ Kind = "FinOps"; Name = "Cost export storage account"; Scope = $ResourceGroupName; Command = "az storage account create --name <unique-name> --resource-group $ResourceGroupName --location $Location --sku Standard_LRS --kind StorageV2 --enable-hierarchical-namespace true" }
+    }
+}
+
+$costExportStorageId = az storage account show --name $CostExportStorageAccountName --resource-group $ResourceGroupName --query id -o tsv 2>$null
+
+if (-not [string]::IsNullOrWhiteSpace($costExportStorageId)) {
+    # Shared keys can be disabled by tenant policy, which used to make the container
+    # creation fail silently and leave the exports writing to a container that is not
+    # there. Fall back to an Entra (RBAC) create and only then give up.
+    $costSaKey = az storage account keys list --account-name $CostExportStorageAccountName --resource-group $ResourceGroupName --query "[0].value" -o tsv 2>$null
+    $costContainerOk = $false
+    if (-not [string]::IsNullOrWhiteSpace($costSaKey)) {
+        az storage container create --account-name $CostExportStorageAccountName --account-key $costSaKey --name $CostExportContainerName --output none 2>$null
+        $costContainerOk = ($LASTEXITCODE -eq 0)
+    }
+    if (-not $costContainerOk) {
+        az storage container create --account-name $CostExportStorageAccountName --name $CostExportContainerName --auth-mode login --output none 2>$null
+        $costContainerOk = ($LASTEXITCODE -eq 0)
+    }
+    if ($costContainerOk) {
+        Write-Success "Container '$CostExportContainerName' ready"
+    } else {
+        Write-Host "  WARNING: Could not create container '$CostExportContainerName' on '$CostExportStorageAccountName' - the exports will have nowhere to write." -ForegroundColor Yellow
+        $permIssues += @{ Kind = "FinOps"; Name = "Cost export container"; Scope = $costExportStorageId; Command = "az storage container create --account-name $CostExportStorageAccountName --name $CostExportContainerName --auth-mode login" }
+    }
+
+    # The Cost Management export writer is NOT covered by the storage firewall's
+    # "AzureServices" bypass. With --default-action Deny it refuses the export at
+    # CREATION time: 400 "The exports service is not authorized to access the
+    # specified storage account". The container then stays empty forever and the
+    # FinOps warehouse never fills. Keep this account reachable by the service; it
+    # still blocks anonymous blob access and the app reads it over its private
+    # endpoint. Do not "harden" this back to Deny without moving the exports to the
+    # managed-identity export API first.
+    if ($DeploymentMode -eq "Private") {
+        Write-Info "Keeping cost export storage reachable by the Cost Management export service..."
+        az storage account update --name $CostExportStorageAccountName --resource-group $ResourceGroupName `
+            --default-action Allow --bypass AzureServices Logging Metrics --output none 2>$null
+        az storage account update --name $CostExportStorageAccountName --resource-group $ResourceGroupName `
+            --allow-blob-public-access false --output none 2>$null
+
+        $costPeName = "$CostExportStorageAccountName-pe"
+        # --vnet-name/--subnet resolve inside --resource-group, so they only work when the
+        # VNet lives in the DEPLOYMENT resource group. It usually does not, which is why the
+        # other endpoints here pass the resolved subnet id. Same approach, same reason.
+        $costPeOut = ""
+        if (-not [string]::IsNullOrWhiteSpace($peSubnetResourceId)) {
+            $costPeOut = az network private-endpoint create `
+                --name $costPeName `
+                --resource-group $ResourceGroupName `
+                --location $Location `
+                --subnet $peSubnetResourceId `
+                --private-connection-resource-id $costExportStorageId `
+                --group-id "blob" `
+                --connection-name "$CostExportStorageAccountName-blob" `
+                --output none 2>&1
+        }
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($peSubnetResourceId)) {
+            $costPeOut = az network private-endpoint create `
+                --name $costPeName `
+                --resource-group $ResourceGroupName `
+                --location $Location `
+                --vnet-name $VNetName `
+                --subnet $PrivateEndpointSubnetName `
+                --private-connection-resource-id $costExportStorageId `
+                --group-id "blob" `
+                --connection-name "$CostExportStorageAccountName-blob" `
+                --output none 2>&1
+        }
+        if ($LASTEXITCODE -eq 0) {
+            $blobDnsZoneName = "privatelink.blob.core.windows.net"
+            az network private-dns zone create --name $blobDnsZoneName --resource-group $dnsZoneResourceGroup --subscription $dnsZoneSubscriptionId --output none 2>$null
+            $blobDnsLinkName = "link-$VNetName-blob"
+            az network private-dns link vnet show --name $blobDnsLinkName --zone-name $blobDnsZoneName --resource-group $dnsZoneResourceGroup --subscription $dnsZoneSubscriptionId 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                az network private-dns link vnet create --name $blobDnsLinkName --zone-name $blobDnsZoneName --resource-group $dnsZoneResourceGroup --subscription $dnsZoneSubscriptionId --virtual-network $vnetResourceId --registration-enabled false --output none 2>$null
+            }
+            $blobDnsZoneId = "/subscriptions/$dnsZoneSubscriptionId/resourceGroups/$dnsZoneResourceGroup/providers/Microsoft.Network/privateDnsZones/$blobDnsZoneName"
+            az network private-endpoint dns-zone-group create --name "blob-dns-group" --endpoint-name $costPeName --resource-group $ResourceGroupName --private-dns-zone $blobDnsZoneId --zone-name "blob" --output none 2>$null
+            Write-Success "Cost export storage Private Endpoint configured"
+        } else {
+            # Storage is Deny-by-default at this point, so without the endpoint the app
+            # cannot read the export files at all — say why, and how to finish it by hand.
+            Write-Host "  WARNING: Private Endpoint for '$CostExportStorageAccountName' failed - the app cannot reach the export files." -ForegroundColor Yellow
+            if ($costPeOut) { Write-Host ("           " + (($costPeOut | Out-String).Trim() -split "`n" | Select-Object -First 3 | Join-String -Separator ' ')) -ForegroundColor DarkYellow }
+            $permIssues += @{ Kind = "Network"; Name = "Cost export blob Private Endpoint"; Scope = $CostExportStorageAccountName;
+                Command = "az network private-endpoint create --name $costPeName --resource-group $ResourceGroupName --location $Location --subnet $peSubnetResourceId --private-connection-resource-id $costExportStorageId --group-id blob --connection-name $CostExportStorageAccountName-blob" }
+        }
+    }
+
+    # Reader lets the app read the export files. Cost Management assigns Storage Blob
+    # Data Contributor to each export's own identity, which is why the app also needs
+    # rights to create role assignments on this one account.
+    foreach ($ceRole in @('Storage Blob Data Reader', 'Storage Account Contributor', 'User Access Administrator')) {
+        $ceOut = az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal `
+            --role $ceRole --scope $costExportStorageId --output none 2>&1
+        if ($LASTEXITCODE -eq 0 -or $ceOut -match "already exists") {
+            Write-Success "$ceRole on $CostExportStorageAccountName"
+        } else {
+            Write-Host "  WARNING: Could not assign '$ceRole' on $CostExportStorageAccountName" -ForegroundColor Yellow
+            $permIssues += @{ Kind = "RBAC"; Name = $ceRole; Scope = $costExportStorageId; Command = "az role assignment create --assignee $principalId --role `"$ceRole`" --scope `"$costExportStorageId`"" }
+        }
+    }
+
+    # Creating and running the exports is done by the app at runtime.
+    foreach ($cesub in $costExportTargets) {
+        $ceOut = az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal `
+            --role "Cost Management Contributor" --scope "/subscriptions/$cesub" --output none 2>&1
+        if ($LASTEXITCODE -eq 0 -or $ceOut -match "already exists") {
+            Write-Success "Cost Management Contributor on $cesub"
+        } else {
+            Write-Host "  WARNING: Could not assign 'Cost Management Contributor' on $cesub - that subscription's cost will not export." -ForegroundColor Yellow
+            $permIssues += @{ Kind = "RBAC"; Name = "Cost Management Contributor"; Scope = "/subscriptions/$cesub"; Command = "az role assignment create --assignee $principalId --role `"Cost Management Contributor`" --scope `"/subscriptions/$cesub`"" }
+        }
+    }
+    # Exports are SUBSCRIPTION-scoped, so deleting an old deployment's resource group
+    # takes its storage away but leaves the export definitions behind, failing every
+    # night against a destination that no longer exists. Remove only those whose
+    # storage really answers 404 - a live deployment's exports are left alone.
+    $prunedExports = 0
+    foreach ($cesub in $costExportTargets) {
+        $ceList = az rest --method get --url "https://management.azure.com/subscriptions/$cesub/providers/Microsoft.CostManagement/exports?api-version=2023-08-01" -o json 2>$null | ConvertFrom-Json
+        foreach ($ceExport in @($ceList.value)) {
+            if ($ceExport.name -notlike 'infraiq-*') { continue }
+            $ceDest = $ceExport.properties.deliveryInfo.destination.resourceId
+            if ([string]::IsNullOrWhiteSpace($ceDest) -or $ceDest -eq $costExportStorageId) { continue }
+            az rest --method get --url "https://management.azure.com$ceDest`?api-version=2023-01-01" -o none 2>$null
+            if ($LASTEXITCODE -eq 0) { continue }   # destination still alive, leave it
+            $ceProbe = az storage account show --ids $ceDest --query name -o tsv 2>$null
+            if (-not [string]::IsNullOrWhiteSpace($ceProbe)) { continue }
+            az rest --method delete --url "https://management.azure.com/subscriptions/$cesub/providers/Microsoft.CostManagement/exports/$($ceExport.name)?api-version=2023-08-01" -o none 2>$null
+            if ($LASTEXITCODE -eq 0) { $prunedExports++ }
+        }
+    }
+    if ($prunedExports -gt 0) {
+        Write-Success "Removed $prunedExports orphaned cost export(s) left by a deleted deployment"
+    }
+
+    # An export whose storage rejects the Cost Management writer is created but never
+    # produces a file, so surface the firewall state rather than claiming success.
+    $ceNetAction = az storage account show --name $CostExportStorageAccountName --resource-group $ResourceGroupName --query "networkRuleSet.defaultAction" -o tsv 2>$null
+    if ($ceNetAction -eq 'Deny') {
+        Write-Host "  WARNING: '$CostExportStorageAccountName' has default-action Deny. The Cost Management export" -ForegroundColor Yellow
+        Write-Host "           service is NOT covered by the AzureServices bypass and will fail with 'the exports" -ForegroundColor Yellow
+        Write-Host "           service is not authorized to access the specified storage account'. No cost data will load." -ForegroundColor Yellow
+        $permIssues += @{ Kind = "Network"; Name = "Cost export storage firewall"; Scope = $costExportStorageId; Command = "az storage account update --name $CostExportStorageAccountName --resource-group $ResourceGroupName --default-action Allow --bypass AzureServices Logging Metrics" }
+    }
+    Write-Success "Cost export pipeline ready on $($costExportTargets.Count) subscription(s) - the app creates its exports and loads them within 30 minutes"
+}
+Write-Host ""
+
+# ============================================
+# CONFIGURE WEB APP SETTINGS
+# ============================================
+
 Write-Step "Step 7: Configuring Web App Settings"
 
 Write-Info "Setting application configuration..."
@@ -2047,6 +2295,16 @@ if (-not [string]::IsNullOrWhiteSpace($redisUrl)) {
 }
 
 $settingsString = $settings -join " "
+
+# FinOps cost exports -> the app reads these files and loads them into SQL.
+# Without these three the FinOps views have no cost data and show nothing.
+if (-not [string]::IsNullOrWhiteSpace($costExportStorageId)) {
+    $settings += @(
+        "FINOPS_EXPORT_ACCOUNT=$CostExportStorageAccountName",
+        "FINOPS_EXPORT_CONTAINER=$CostExportContainerName",
+        "FINOPS_EXPORT_STORAGE_ID=$costExportStorageId"
+    )
+}
 
 az webapp config appsettings set `
     --name $WebAppName `
@@ -2224,12 +2482,19 @@ function New-DeploymentPackage {
 
 function Invoke-ZipDeploy {
     param([string]$ZipPath)
+    # --track-status makes the CLI wait for the WORKER to start and hard-fail after 10
+    # minutes. The build itself finishes in seconds; this app's first cold start is
+    # slower than that window, so the deploy was reported as failed every time even
+    # though the code was already published. Step 11 restarts and Step 13 probes it,
+    # so publish success is what matters here. Older CLIs reject the flag, and the
+    # config-zip fallback below still covers them.
     az webapp deploy `
         --name $WebAppName `
         --resource-group $ResourceGroupName `
         --src-path $ZipPath `
         --type zip `
         --async false `
+        --track-status false `
         --output none
     if ($LASTEXITCODE -eq 0) { return $true }
     # Older CLI / transient SCM errors: the legacy endpoint often succeeds where the new one fails.
@@ -2379,34 +2644,13 @@ if ($DeploymentMode -eq "Private") {
         Write-Info "Private Endpoint '$webAppPeName' already exists"
     } else {
         Write-Info "Creating Private Endpoint for Web App..."
-        az network private-endpoint create `
-            --name $webAppPeName `
-            --resource-group $ResourceGroupName `
-            --location $Location `
-            --vnet-name $VNetName `
-            --subnet $PrivateEndpointSubnetName `
-            --private-connection-resource-id $webAppResourceId `
-            --group-id "sites" `
-            --connection-name "${WebAppName}-connection" `
-            --output none 2>$null
-        
-        if ($LASTEXITCODE -ne 0) {
-            # Try with full subnet resource ID
-            Write-Info "Retrying with full subnet resource ID..."
-            az network private-endpoint create `
-                --name $webAppPeName `
-                --resource-group $ResourceGroupName `
-                --location $Location `
-                --subnet $peSubnetResourceId `
-                --private-connection-resource-id $webAppResourceId `
-                --group-id "sites" `
-                --connection-name "${WebAppName}-connection" `
-                --output none
-            
-            if ($LASTEXITCODE -ne 0) {
-                Write-Error "Failed to create Private Endpoint for Web App"
-                exit 1
-            }
+        $webAppPeOk = New-PrivateEndpointSafe -Name $webAppPeName -ResourceGroup $ResourceGroupName `
+            -Location $Location -ConnectionResourceId $webAppResourceId -GroupId "sites" `
+            -ConnectionName "${WebAppName}-connection" -SubnetResourceId $peSubnetResourceId `
+            -FallbackVNetName $VNetName -FallbackSubnetName $PrivateEndpointSubnetName
+        if (-not $webAppPeOk) {
+            Write-Error "Failed to create Private Endpoint for Web App"
+            exit 1
         }
         Write-Success "Private Endpoint created: $webAppPeName"
     }
@@ -2508,7 +2752,7 @@ $miRbacRef = @(
     @{ Role = "Management Group Reader";         Scope = $mgScope;     ScopeLabel = "Tenant Root MG";                     Purpose = "List management groups in the hierarchy dropdown" },
     @{ Role = "Reservations Reader";            Scope = $capacityScope; ScopeLabel = "/providers/Microsoft.Capacity";     Purpose = "Read Reserved Instances inventory & recommendations" }
 )
-$permIssues = @()   # collects { Kind, Name, Scope, Command } for anything not auto-assigned
+if (-not $permIssues) { $permIssues = @() }   # cost-export step above may have added entries
 $openaiGrantFailed = $false   # set true if the app MI could not be granted OpenAI access (customer must grant it)
 $openaiGrantCmd = ""          # exact command the customer runs to grant that access
 

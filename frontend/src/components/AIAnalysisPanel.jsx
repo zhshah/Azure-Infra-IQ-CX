@@ -11,7 +11,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import TagAIBanner from './TagAIBanner';
 import ResourceDetailDrawer from './ResourceDetailDrawer';
-import AIControlsBar, { EMPTY_AI_CONTROLS, aiControlsQuery, AffectedResources } from './ai/AIAnalysisTools';
 import { asText } from '../utils/safeText';
 
 const API = import.meta.env.VITE_API_URL || '';
@@ -113,11 +112,41 @@ function FindingsList({ findings, onResourceClick }) {
   return findings.map((f, i) => (
     <ExpandableCard key={i} title={f.title} severity={f.severity}>
       <p style={{ color: 'var(--c-cbd5e1)', fontSize: 12, lineHeight: 1.6, marginTop: 8 }}>{f.detail || f.description}</p>
-      <AffectedResources
-        items={f.affected_resources}
-        count={f.affected_count}
-        onResourceClick={onResourceClick}
-      />
+      {f.affected_resources?.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <span style={{ color: 'var(--c-94a3b8)', fontSize: 11, fontWeight: 600 }}>
+            Affected resources ({f.affected_resources.length}{f.affected_count && f.affected_count > f.affected_resources.length ? ` of ${f.affected_count}` : ''}) — click for 360° detail:
+          </span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+            {f.affected_resources.map((r, j) => {
+              const ro = typeof r === 'string' ? { resource_name: r } : (r || {});
+              const clickable = onResourceClick && (ro.resource_id || ro.resource_name);
+              return (
+                <div
+                  key={j}
+                  onClick={() => clickable && onResourceClick(ro)}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                    padding: '6px 10px', borderRadius: 6,
+                    background: clickable ? 'var(--c-1e3a5f)' : 'var(--c-1e293b)',
+                    border: clickable ? '1px solid #2563eb55' : '1px solid var(--c-1e293b)',
+                    cursor: clickable ? 'pointer' : 'default',
+                  }}
+                  title={clickable ? `View 360° details for ${ro.resource_name}` : undefined}
+                >
+                  <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                    <span style={{ color: clickable ? '#93c5fd' : 'var(--c-cbd5e1)', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ro.resource_name || '(unknown)'}</span>
+                    <span style={{ color: 'var(--c-64748b)', fontSize: 10 }}>
+                      {(ro.resource_type || '').split('/').pop()}{ro.resource_group ? ` · ${ro.resource_group}` : ''}{ro.cost_usd ? ` · $${ro.cost_usd}/mo` : ''}
+                    </span>
+                  </div>
+                  {clickable && <span style={{ color: 'var(--c-60a5fa)', fontSize: 11, whiteSpace: 'nowrap', flexShrink: 0 }}>Details →</span>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {f.recommendation && (
         <div style={{ marginTop: 8, padding: '8px 10px', background: '#0c4a6e20', border: '1px solid #0c4a6e50', borderRadius: 6 }}>
           <span style={{ color: 'var(--c-38bdf8)', fontSize: 11, fontWeight: 600 }}>Recommendation: </span>
@@ -141,7 +170,7 @@ function FindingsList({ findings, onResourceClick }) {
   ));
 }
 
-function RecommendationList({ recommendations, onResourceClick }) {
+function RecommendationList({ recommendations }) {
   if (!recommendations?.length) return null;
   return (
     <div style={{ marginTop: 12 }}>
@@ -161,8 +190,8 @@ function RecommendationList({ recommendations, onResourceClick }) {
             <div style={{ color: 'var(--c-94a3b8)', fontSize: 12, lineHeight: 1.5, marginTop: 2 }}>{r.description}</div>
             {r.azure_services?.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
-                {(r?.azure_services || []).map((s, j) => (
-                  <span key={j} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', border: '1px solid #0369a150', color: 'var(--c-38bdf8)' }}>{asText(s)}</span>
+                {r.azure_services.map((s, j) => (
+                  <span key={j} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#0369a120', border: '1px solid #0369a150', color: 'var(--c-38bdf8)' }}>{s}</span>
                 ))}
               </div>
             )}
@@ -173,12 +202,6 @@ function RecommendationList({ recommendations, onResourceClick }) {
                 {r.resources_affected > 0 && <span style={{ fontSize: 10, color: 'var(--c-64748b)' }}>{r.resources_affected} resources</span>}
               </div>
             )}
-            <AffectedResources
-              items={r.affected_resources}
-              count={r.affected_count ?? r.resources_affected}
-              label="Resources this applies to"
-              onResourceClick={onResourceClick}
-            />
           </div>
         </div>
       ))}
@@ -277,13 +300,11 @@ function endpointFocusMeta(endpoint = '') {
 }
 
 
-export default function AIAnalysisPanel({ endpoint, title, renderReport, resources = null }) {
+export default function AIAnalysisPanel({ endpoint, title, renderReport }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [loadingStage, setLoadingStage] = useState('');
-  // Business context + resource filter (scope lives in its own state below).
-  const [controls, setControls] = useState(EMPTY_AI_CONTROLS);
   // Resource detail drawer — opened when user clicks an affected resource chip
   const [drawerResource, setDrawerResource] = useState(null); // { name, id }
   // User-directed focus (scopes the AI to a sub-topic of THIS category's data)
@@ -306,7 +327,7 @@ export default function AIAnalysisPanel({ endpoint, title, renderReport, resourc
     }
   }, []);
 
-  const runAnalysis = useCallback(async (refresh = false, scopeValue = scope, ctlValue = controls) => {
+  const runAnalysis = useCallback(async (refresh = false, scopeValue = scope) => {
     setLoading(true);
     setError(null);
 
@@ -331,27 +352,10 @@ export default function AIAnalysisPanel({ endpoint, title, renderReport, resourc
       const params = new URLSearchParams();
       params.set('refresh', String(refresh));
       if (scopeValue) params.set('scope', scopeValue);
-      // Business context + resource filter (already url-encoded by the helper).
-      const extra = aiControlsQuery({ ...ctlValue, scope: '' });
-      const url = `${API}${endpoint}${endpoint.includes('?') ? '&' : '?'}${params.toString()}${extra}`;
-
-      // A deep analysis can take several minutes - longer than the gateway will hold a
-      // connection open (that is where the 504s came from). The server now returns a
-      // `processing` marker instead of hanging, and we poll until the result lands.
-      const deadline = Date.now() + 15 * 60 * 1000;
-      let json;
-      for (;;) {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
-        json = await res.json();
-        if (json.status !== 'processing') break;
-        if (Date.now() > deadline) {
-          throw new Error('Analysis is taking longer than expected. Please try again.');
-        }
-        setLoadingStage(`Still analysing on the server — this can take a few minutes...`);
-        const waitMs = Math.max(5, Number(json.retry_after_seconds) || 10) * 1000;
-        await new Promise(r => setTimeout(r, waitMs));
-      }
+      const url = `${API}${endpoint}${endpoint.includes('?') ? '&' : '?'}${params.toString()}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+      const json = await res.json();
       if (json.error) throw new Error(json.error);
       setData(json);
     } catch (e) {
@@ -361,15 +365,7 @@ export default function AIAnalysisPanel({ endpoint, title, renderReport, resourc
       setLoading(false);
       setLoadingStage('');
     }
-  }, [endpoint, scope, controls, meta]);
-
-  // Scope / context / filter changes from the shared controls bar.
-  const applyControls = useCallback((next) => {
-    setControls(next);
-    setScope(next.scope || '');
-    setFocusDraft(next.scope || '');
-    runAnalysis(true, next.scope || '', next);
-  }, [runAnalysis]);
+  }, [endpoint, scope, meta]);
 
   // Apply a focus (preset chip or free text) and immediately re-run scoped.
   const applyFocus = useCallback((value) => {
@@ -451,14 +447,6 @@ export default function AIAnalysisPanel({ endpoint, title, renderReport, resourc
     <ReportBoundary resetKey={data?._meta?.generated_at} onRetry={() => runAnalysis(true)}>
     <div style={{ position: 'relative' }}>
       <TagAIBanner />
-      <AIControlsBar
-        title={title || 'AI analysis'}
-        report={data}
-        resources={resources}
-        value={controls}
-        onApply={applyControls}
-        busy={loading}
-      />
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 10 }}>
         <button onClick={exportPdf} disabled={!!exporting} title="Download a PDF of this AI analysis"
           style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', background: 'var(--c-1e293b)', border: '1px solid var(--c-334155)', color: 'var(--c-e2e8f0)', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: exporting ? 'default' : 'pointer', opacity: exporting ? 0.6 : 1 }}>
@@ -471,7 +459,7 @@ export default function AIAnalysisPanel({ endpoint, title, renderReport, resourc
       </div>
       {/* Focus selector — directs the AI at a sub-topic of THIS category's data.
           Only shown for scope-aware generic categories (presets configured). */}
-      {(meta?.presets || []).length > 0 && (
+      {meta.presets.length > 0 && (
       <div style={{
         display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8,
         background: 'var(--c-0b1220)', border: '1px solid var(--c-1e293b)', borderRadius: 10,
@@ -489,7 +477,7 @@ export default function AIAnalysisPanel({ endpoint, title, renderReport, resourc
             color: scope ? 'var(--c-94a3b8)' : '#93c5fd',
           }}
         >Full analysis</button>
-        {(meta?.presets || []).map((p) => {
+        {meta.presets.map((p) => {
           const active = scope === p;
           return (
             <button key={p} onClick={() => applyFocus(p)} style={{

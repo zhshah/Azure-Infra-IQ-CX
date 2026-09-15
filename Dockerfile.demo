@@ -49,5 +49,11 @@ COPY --from=web /web/dist /srv/frontend/dist
 COPY Icons /srv/Icons
 
 WORKDIR /srv/app
+# Fail the build, not the deployment, if the app cannot import or a driver is missing.
+RUN python -B -m compileall -q . \
+    && python -B -c "import main, pyodbc; from azure.storage.blob import BlobServiceClient; \
+assert 'ODBC Driver 18 for SQL Server' in pyodbc.drivers(); \
+assert '/api/finops/exports/status' in main.app.openapi()['paths']; \
+print('Runtime imports, ODBC 18, blob SDK and export routes verified')"
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

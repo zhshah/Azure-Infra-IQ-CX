@@ -13,7 +13,6 @@
  */
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { ShieldCheck, Save, PlayCircle, Brain, AlertTriangle, CheckCircle2, XCircle, RefreshCw, ListChecks, Gauge, Boxes, Search, Sparkles, ChevronDown, ChevronRight, ShieldAlert, FileWarning, Rocket } from 'lucide-react'
-import { asText } from '../utils/safeText';
 
 const RISK_COLOR = { high: '#ef4444', medium: '#f59e0b', low: '#22c55e' }
 const EOL_COLOR  = { 'end-of-life': '#ef4444', 'approaching-eol': '#f59e0b', supported: '#22c55e', unknown: 'var(--c-64748b)' }
@@ -269,7 +268,7 @@ export default function SoftwareGovernancePanel() {
                       <td style={{ padding: '6px 8px', color: 'var(--c-64748b)' }}>{c.publisher || '—'}</td>
                       <td style={{ padding: '6px 8px' }}><CatBadge category={c.category} /></td>
                       <td style={{ padding: '6px 8px' }}><Badge text={c.risk} color={RISK_COLOR[c.risk]} /></td>
-                      <td style={{ padding: '6px 8px', color: c.license === 'commercial' ? 'var(--c-c4b5fd)' : 'var(--c-94a3b8)' }}>{c.license}</td>
+                      <td style={{ padding: '6px 8px', color: c.license === 'commercial' ? '#c4b5fd' : 'var(--c-94a3b8)' }}>{c.license}</td>
                       <td style={{ padding: '6px 8px' }}><span style={{ color: EOL_COLOR[c.eol_status] || 'var(--c-64748b)' }}>{c.eol_status}</span></td>
                       <td style={{ padding: '6px 8px', color: 'var(--c-60a5fa)', fontWeight: 700 }} title={(c.servers || []).join(', ')}>{c.server_count}</td>
                       <td style={{ padding: '6px 8px' }}>
@@ -419,7 +418,7 @@ function Findings({ title, color, icon: Icon, items, empty }) {
       </div>
       {items.length === 0
         ? <div style={{ color: '#22c55e', fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}><CheckCircle2 size={12} /> {empty}</div>
-        : <ul style={{ margin: 0, paddingLeft: 16, color: 'var(--c-cbd5e1)', fontSize: 11, lineHeight: 1.6 }}>{items.map((it, i) => <li key={i}>{asText(it)}</li>)}</ul>}
+        : <ul style={{ margin: 0, paddingLeft: 16, color: 'var(--c-cbd5e1)', fontSize: 11, lineHeight: 1.6 }}>{items.map((it, i) => <li key={i}>{it}</li>)}</ul>}
     </div>
   )
 }

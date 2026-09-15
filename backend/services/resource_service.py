@@ -376,23 +376,22 @@ def get_resource_locks(
     for sub_id in sub_ids:
         try:
             lock_client = ManagementLockClient(credential, sub_id)
+            # This one call returns EVERY lock in the subscription, at whatever scope it
+            # was applied. The lock's own id embeds that scope, so stripping the trailing
+            # ".../providers/Microsoft.Authorization/locks/{name}" yields exactly the
+            # subscription / resource-group / resource id the caller matches against.
+            # The previous code also called list_at_resource_group_level_by_subscription()
+            # and list_by_subscription(), neither of which exists on the SDK: the
+            # AttributeError aborted the whole block, and every lock had already been
+            # recorded as a SUBSCRIPTION-wide lock, so a single lock anywhere silently
+            # marked the entire subscription protected and disabled orphan/waste
+            # detection for it.
             for lock in lock_client.management_locks.list_at_subscription_level():
-                # Subscription-level lock — protect everything (rare but possible)
-                if lock.level in ("ReadOnly", "CanNotDelete"):
-                    locked.add(f"/subscriptions/{sub_id}".lower())
-            for lock in lock_client.management_locks.list_at_resource_group_level_by_subscription():
-                if lock.level in ("ReadOnly", "CanNotDelete"):
-                    # Resource group lock — we'll match resources by RG prefix
-                    if lock.id:
-                        rg_id = "/".join(lock.id.lower().split("/")[:5])
-                        locked.add(rg_id)
-            for lock in lock_client.management_locks.list_by_subscription():
-                if lock.level in ("ReadOnly", "CanNotDelete") and lock.id:
-                    # Resource-level lock — extract the resource ID from the lock ID
-                    # Lock ID format: /subscriptions/{sub}/resourceGroups/{rg}/providers/{type}/{name}/providers/Microsoft.Authorization/locks/{lockName}
-                    parts = lock.id.lower().split("/providers/microsoft.authorization/locks/")
-                    if parts:
-                        locked.add(parts[0])
+                if lock.level not in ("ReadOnly", "CanNotDelete") or not lock.id:
+                    continue
+                scope = lock.id.lower().split("/providers/microsoft.authorization/locks/")[0]
+                if scope:
+                    locked.add(scope)
         except Exception as exc:
             logger.warning("[%s] Lock check failed: %s", sub_id, exc)
 

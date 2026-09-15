@@ -300,6 +300,14 @@ _pool = ThreadPoolExecutor(max_workers=12)  # shared executor for blocking I/O (
 # Dedicated pool for AI calls so long (~15-20s) Azure OpenAI requests can never
 # starve the data pool and make every FinOps tab hang on a spinner.
 _ai_pool = ThreadPoolExecutor(max_workers=4)
+# Unattended collection must never queue behind, or ahead of, a user's request. The
+# warmup, ETL, snapshots and first-fill supervisor each hold a worker for minutes at a
+# time while a throttled Azure call backs off, and sharing _pool with the request
+# handlers made page loads take ~70s while the CPU sat at 3%.
+_bg_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="bg")
+# The estate scan fans out ~30 Azure calls at once. It used to build its own pool per
+# call and never shut it down, so every scan and auto-refresh left threads behind.
+_scan_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="scan")
 # ── Arc security findings cache (15 min TTL) ──────────────────────────────────
 import time as _time_mod
 _arc_security_cache: dict = {}  # {"data": [...], "ts": float}
@@ -689,7 +697,7 @@ async def _build_dashboard(
             await progress_cb({"type": "progress", "step": step, "message": msg, "pct": pct})
 
     loop     = asyncio.get_event_loop()
-    executor = ThreadPoolExecutor(max_workers=10)
+    executor = _scan_pool
     cfg      = settings_svc.get()
     sub_ids  = settings_svc.get_subscription_ids()
     # Full set the identity can access, captured BEFORE any single-subscription
@@ -2961,7 +2969,7 @@ async def _regenerate_ai_narrative() -> None:
     """Regenerate AI narrative for the cached data without a full re-scan."""
     try:
         loop     = asyncio.get_event_loop()
-        executor = ThreadPoolExecutor(max_workers=2)
+        executor = _ai_pool
         for slot in ("data:*", "data"):
             cached: Optional[DashboardData] = _cache.get(slot)
             if cached and cached.resources and cached.kpi:
@@ -3067,7 +3075,7 @@ async def _finops_cache_warmup() -> None:
             _finops_warm_cache["summary_ts"] = ts
             logger.info("FinOps warmup: summary KPIs cached from dashboard cache (instant)")
         else:
-            summary = await loop.run_in_executor(_pool, lambda: finops_svc.get_finops_kpi(sub_ids))
+            summary = await loop.run_in_executor(_bg_pool, lambda: finops_svc.get_finops_kpi(sub_ids))
             _finops_warm_cache["summary"]    = summary
             _finops_warm_cache["summary_ts"] = ts
             logger.info("FinOps warmup: summary KPIs cached from live API")
@@ -3077,7 +3085,7 @@ async def _finops_cache_warmup() -> None:
     # ── 2. Savings (dashboard-cache-backed, fast) ─────────────────────────
     try:
         dash = dash_for_warmup or _cache.get("data:*") or _cache.get("data")
-        sv = await loop.run_in_executor(_pool, lambda: finops_svc.get_savings_summary(dash))
+        sv = await loop.run_in_executor(_bg_pool, lambda: finops_svc.get_savings_summary(dash))
         _finops_warm_cache["savings"]    = sv
         _finops_warm_cache["savings_ts"] = ts
         logger.info("FinOps warmup: savings cached")
@@ -3087,7 +3095,7 @@ async def _finops_cache_warmup() -> None:
     # ── 3. Commitments ────────────────────────────────────────────────────
     try:
         cm = await asyncio.wait_for(
-            loop.run_in_executor(_pool, commitment_svc.get_commitment_summary),
+            loop.run_in_executor(_bg_pool, commitment_svc.get_commitment_summary),
             timeout=30.0,
         )
         _finops_warm_cache["commitments"]    = cm
@@ -3097,36 +3105,46 @@ async def _finops_cache_warmup() -> None:
         logger.warning("FinOps warmup: commitments failed/timeout: %s", e)
 
     # ── 4. Allocation breakdowns (3 key dimensions) ───────────────────────
-    for dim in ("SubscriptionId", "ServiceFamily", "ResourceType"):
+    # Each dimension costs TWO Cost Management query-API calls (current + prior
+    # period), so this block alone is 6 throttled calls every 30 minutes. When the
+    # export loader owns the cost tables that same breakdown is already in Azure SQL,
+    # and re-asking Azure for it is what starves the ETL and the on-demand views of
+    # their throttle budget - a warmup here was measured at 22 minutes, almost all of
+    # it in 429 backoff. Same rule the warehouse ETL already follows.
+    if _export_ingestion_owns_costs():
+        logger.info("FinOps warmup: cost tables are loaded from Cost Management exports — "
+                    "skipping the allocation/chargeback/forecast query-API warmup")
+    else:
+        for dim in ("SubscriptionId", "ServiceFamily", "ResourceType"):
+            try:
+                alloc = await loop.run_in_executor(
+                    _pool, lambda d=dim: finops_svc.get_cost_allocation(d, "last_30d", sub_ids))
+                _finops_warm_cache[f"alloc_{dim}"]    = alloc
+                _finops_warm_cache[f"alloc_{dim}_ts"] = ts
+                logger.info("FinOps warmup: allocation by %s cached", dim)
+            except Exception as e:
+                logger.warning("FinOps warmup: allocation(%s) failed: %s", dim, e)
+
+        # ── 5. Chargeback ─────────────────────────────────────────────────────
         try:
-            alloc = await loop.run_in_executor(
-                _pool, lambda d=dim: finops_svc.get_cost_allocation(d, "last_30d", sub_ids))
-            _finops_warm_cache[f"alloc_{dim}"]    = alloc
-            _finops_warm_cache[f"alloc_{dim}_ts"] = ts
-            logger.info("FinOps warmup: allocation by %s cached", dim)
+            cb = await loop.run_in_executor(_bg_pool, lambda: finops_svc.get_chargeback_report("last_30d", sub_ids))
+            _finops_warm_cache["chargeback"]    = cb
+            _finops_warm_cache["chargeback_ts"] = ts
+            logger.info("FinOps warmup: chargeback cached")
         except Exception as e:
-            logger.warning("FinOps warmup: allocation(%s) failed: %s", dim, e)
+            logger.warning("FinOps warmup: chargeback failed: %s", e)
 
-    # ── 5. Chargeback ─────────────────────────────────────────────────────
-    try:
-        cb = await loop.run_in_executor(_pool, lambda: finops_svc.get_chargeback_report("last_30d", sub_ids))
-        _finops_warm_cache["chargeback"]    = cb
-        _finops_warm_cache["chargeback_ts"] = ts
-        logger.info("FinOps warmup: chargeback cached")
-    except Exception as e:
-        logger.warning("FinOps warmup: chargeback failed: %s", e)
-
-    # ── 6. Forecast — runs last; capped at 90s so it doesn't block others ─
-    try:
-        fc = await asyncio.wait_for(
-            loop.run_in_executor(_pool, lambda: forecast_finops_svc.get_forecast(horizon_days=30, subscription_ids=sub_ids)),
-            timeout=90.0,
-        )
-        _finops_warm_cache["forecast"]    = fc
-        _finops_warm_cache["forecast_ts"] = ts
-        logger.info("FinOps warmup: forecast cached")
-    except (asyncio.TimeoutError, Exception) as e:
-        logger.warning("FinOps warmup: forecast failed/timeout: %s", e)
+        # ── 6. Forecast — runs last; capped at 90s so it doesn't block others ─
+        try:
+            fc = await asyncio.wait_for(
+                loop.run_in_executor(_bg_pool, lambda: forecast_finops_svc.get_forecast(horizon_days=30, subscription_ids=sub_ids)),
+                timeout=90.0,
+            )
+            _finops_warm_cache["forecast"]    = fc
+            _finops_warm_cache["forecast_ts"] = ts
+            logger.info("FinOps warmup: forecast cached")
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.warning("FinOps warmup: forecast failed/timeout: %s", e)
 
     _finops_warm_cache["last_warmup"]    = datetime.now(tz=timezone.utc).isoformat()
     _finops_warm_cache["last_warmup_ts"] = ts
@@ -3281,7 +3299,7 @@ async def _metrics_snapshot_run() -> dict:
             return {"error": "no subscriptions configured"}
 
         logger.info("Metrics snapshot: starting full metrics pull…")
-        resources = await loop.run_in_executor(_pool, partial(list_all_resources, sub_ids))
+        resources = await loop.run_in_executor(_bg_pool, partial(list_all_resources, sub_ids))
         all_metrics: dict[str, Any] = {}
         BATCH = 20
         for i in range(0, len(resources), BATCH):
@@ -3298,7 +3316,7 @@ async def _metrics_snapshot_run() -> dict:
                     all_metrics[r["id"].lower()] = res
 
         if all_metrics:
-            await loop.run_in_executor(_pool, partial(persistence_svc.save_resource_metrics, all_metrics))
+            await loop.run_in_executor(_bg_pool, partial(persistence_svc.save_resource_metrics, all_metrics))
             # Invalidate the short-lived Redis metrics cache so the rebuild below
             # and the next dashboard open pick up the freshly-persisted metrics.
             try:
@@ -3431,7 +3449,7 @@ async def _cost_snapshot_run() -> dict:
     loop = asyncio.get_event_loop()
     try:
         import services.cost_snapshot_service as cost_snapshot_svc
-        summary = await loop.run_in_executor(_pool, cost_snapshot_svc.capture_and_save)
+        summary = await loop.run_in_executor(_bg_pool, cost_snapshot_svc.capture_and_save)
         now = datetime.now(tz=timezone.utc)
         _cost_snapshot_state.update({
             "last_run": now.isoformat(),
@@ -3560,6 +3578,46 @@ async def _dashboard_snapshot_catchup() -> None:
         logger.warning("Dashboard snapshot startup catch-up failed: %s", exc)
 
 
+def _export_ingestion_owns_costs() -> bool:
+    """True when Cost Management exports are the configured source of cost data."""
+    try:
+        return bool(_FINOPS_EXPORT_INGESTION_AVAILABLE and finops_export_ingestion_svc.is_configured())
+    except Exception:
+        return False
+
+
+async def _finops_export_ingestion_scheduler() -> None:
+    """Load any new Cost Management export files into Azure SQL, then keep watching.
+
+    Azure republishes the open billing period as charges are restated, so this keeps
+    running rather than stopping once the tables are first populated. Each pass is
+    idempotent: files already loaded are skipped by their ledger entry.
+    """
+    interval = int(os.getenv("FINOPS_EXPORT_POLL_SECONDS", "1800") or 1800)
+    await asyncio.sleep(15)  # let the app finish starting up
+    settled = False
+    while True:
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                _pool, finops_export_ingestion_svc.ingest_available_exports
+            )
+            if result.get("processed") or result.get("failed"):
+                logger.info("Cost export loader: %s (loaded=%d failed=%d rows=%s)",
+                            result.get("status"), len(result.get("processed") or []),
+                            len(result.get("failed") or []), result.get("rows_written"))
+            if result.get("processed"):
+                # Fresh cost data landed, so the cached aggregates are now stale.
+                _fw_bump_version()
+                _clear_finops_derived_caches()
+            settled = settled or result.get("status") in ("completed", "disabled")
+        except Exception as exc:
+            logger.error("Cost export loader pass failed: %s", exc)
+        # On a new deployment the schema migrations and the first exports can still be
+        # running. Retry quickly until one pass succeeds, so the FinOps views fill in
+        # minutes rather than waiting out a full poll interval.
+        await asyncio.sleep(interval if settled else 60)
+
+
 async def _finops_warehouse_scheduler() -> None:
     """
     Background scheduler: run the FinOps Warehouse ETL at midnight UTC every night.
@@ -3655,6 +3713,13 @@ try:
 except Exception as _fwe:
     logger.warning("FinOps Warehouse module unavailable: %s", _fwe)
     _FINOPS_WAREHOUSE_AVAILABLE = False
+
+try:
+    import services.finops_export_ingestion_service as finops_export_ingestion_svc
+    _FINOPS_EXPORT_INGESTION_AVAILABLE = True
+except Exception as _fxe:
+    logger.warning("Cost export loader unavailable: %s", _fxe)
+    _FINOPS_EXPORT_INGESTION_AVAILABLE = False
 
 # Track in-progress warehouse ETL to prevent concurrent runs
 _warehouse_etl_task: Optional[asyncio.Task] = None
@@ -7977,8 +8042,10 @@ _ingestion_task: Optional[asyncio.Task] = None
 _INGESTION_STEPS = [
     {"key": "estate_scan", "label": "Estate scan (inventory, scores, metrics)",
      "typical": "5-12 min", "weight": 30},
-    {"key": "warehouse_etl", "label": "Cost warehouse ETL (per resource / subscription / service / tag / meter)",
-     "typical": "10-40 min", "weight": 45},
+    {"key": "cost_exports", "label": "Cost Management exports → Azure SQL (all cost tables)",
+     "typical": "1-3 min", "weight": 15},
+    {"key": "warehouse_etl", "label": "Cost warehouse ETL (budgets, utilisation, auxiliary datasets)",
+     "typical": "10-40 min", "weight": 30},
     {"key": "utilisation", "label": "Utilisation metrics snapshot",
      "typical": "2-8 min", "weight": 10},
     {"key": "cost_snapshot", "label": "Cost bundle snapshot",
@@ -8007,7 +8074,7 @@ async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full")
     failures: List[str] = []
 
     try:
-        _ing.job_set_counts("before", await loop.run_in_executor(_pool, _ing.table_counts))
+        _ing.job_set_counts("before", await loop.run_in_executor(_bg_pool, _ing.table_counts))
     except Exception:
         pass
 
@@ -8029,7 +8096,7 @@ async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full")
     recent_scan_age = None
     if quick:
         try:
-            av = await loop.run_in_executor(_pool, _ing.get_inventory, False)
+            av = await loop.run_in_executor(_bg_pool, _ing.get_inventory, False)
             scans = next((d for d in av.get("datasets", []) if d.get("key") == "scans"), None)
             recent_scan_age = (scans or {}).get("age_hours")
         except Exception:
@@ -8047,7 +8114,25 @@ async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full")
                    lambda d: (f"{len(getattr(d, 'resources', []) or [])} resources",
                               len(getattr(d, "resources", []) or [])))
 
-    # 2) Cost warehouse — the spine behind every FinOps chart.
+    # 2) Cost Management exports -> Azure SQL. This owns every cost table, so it runs
+    #    before the warehouse ETL (which now only fills the auxiliary datasets).
+    if _FINOPS_EXPORT_INGESTION_AVAILABLE and finops_export_ingestion_svc.is_configured():
+        async def _exports():
+            return await loop.run_in_executor(
+                _pool, finops_export_ingestion_svc.ingest_available_exports)
+
+        def _exports_detail(r):
+            loaded = len((r or {}).get("processed") or [])
+            rows = sum(((r or {}).get("rows_written") or {}).values())
+            skipped = (r or {}).get("skipped_already_loaded", 0)
+            return (f"{loaded} export file(s) loaded, {skipped} already current", rows)
+
+        await step("cost_exports", _exports, _exports_detail)
+    else:
+        _ing.job_step("cost_exports", "skipped",
+                      detail="no cost-export storage configured (FINOPS_EXPORT_ACCOUNT)")
+
+    # 3) Cost warehouse — the spine behind every FinOps chart.
     async def _etl():
         if not _FINOPS_WAREHOUSE_AVAILABLE:
             raise RuntimeError("FinOps warehouse not available (Azure SQL required)")
@@ -8108,8 +8193,8 @@ async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full")
     # 6) Recommendations + realised savings.
     async def _recs():
         from services import finops_savings_service as _sav
-        gen = await loop.run_in_executor(_pool, _sav.generate_warehouse_recommendations)
-        measured = await loop.run_in_executor(_pool, lambda: _sav.measure_realized_savings(run_id))
+        gen = await loop.run_in_executor(_bg_pool, _sav.generate_warehouse_recommendations)
+        measured = await loop.run_in_executor(_bg_pool, lambda: _sav.measure_realized_savings(run_id))
         return {"generated": (gen or {}).get("generated", 0),
                 "monthly_usd": (gen or {}).get("monthly_usd", 0),
                 "measured": (measured or {}).get("measured", 0)}
@@ -8119,7 +8204,7 @@ async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full")
                           f"{r['measured']} realised", r["generated"]))
 
     try:
-        _ing.job_set_counts("after", await loop.run_in_executor(_pool, _ing.table_counts))
+        _ing.job_set_counts("after", await loop.run_in_executor(_bg_pool, _ing.table_counts))
     except Exception:
         pass
 
@@ -8129,6 +8214,123 @@ async def _run_ingestion_async(triggered_by: str, days: int, mode: str = "full")
         done = sum(1 for s in _ing.job_snapshot()["steps"] if s["status"] == "ok")
         _ing.job_finish("partial" if done else "failed", error=" | ".join(failures)[:600])
     logger.info("Ingestion run %s finished (%d step failure(s))", run_id, len(failures))
+
+
+# Tables the main dashboards read. If these are empty the UI has nothing to draw,
+# which is what "everything is blank after a fresh deployment" actually means.
+# Names are the catalogued ones in data_availability_service.DATASETS - a name that
+# is not in the catalogue is skipped silently, so they are verified against it.
+_FIRST_FILL_TARGETS = [
+    ("resource_snapshots", "Estate inventory (home, resources, architecture)"),
+    ("finops_daily_resource_costs", "Per-resource daily cost (FinOps overview, drilldowns)"),
+    ("finops_daily_subscription_costs", "Per-subscription daily cost (summary, trends)"),
+    ("finops_monthly_service_costs", "Cost by service (breakdown charts)"),
+    ("finops_daily_meter_costs", "Meter-level cost (unit economics)"),
+    ("finops_daily_dimension_costs", "Cost by dimension (tags, locations)"),
+    ("finops_budgets", "Budgets and alerts"),
+    ("finops_resource_utilization", "Utilisation metrics (right-sizing)"),
+    ("finops_recommendations", "Optimisation recommendations"),
+]
+
+
+def _first_fill_gaps() -> List[Dict[str, Any]]:
+    """Which dashboard-critical tables are still empty.
+
+    A table missing from the census counts as a gap, not as "nothing to do": on a
+    fresh deployment the schema migrations run alongside startup, so an early probe
+    sees no tables at all. Treating that as success would make the supervisor stand
+    down on exactly the deployment it exists for.
+    """
+    from services import finops_ingestion_service as _ing
+    counts = _ing.table_counts()
+    return [{"dataset": table, "label": label}
+            for table, label in _FIRST_FILL_TARGETS
+            if int(counts.get(table) or 0) <= 0]
+
+
+async def _first_fill_supervisor() -> None:
+    """Drive collection until the dashboards actually have data, then stand down.
+
+    Every collector owns its own timer, so on a fresh deployment the views stay blank
+    until each one happens to fire - up to hours. This runs the whole pipeline at
+    startup and keeps retrying while tables are still empty, because the usual reasons
+    for an empty first pass (exports not yet produced, Azure 429, RBAC still
+    propagating) all clear on their own given another attempt. Progress is published
+    for the UI so "empty" is never indistinguishable from "broken".
+    """
+    from services import finops_ingestion_service as _ing
+
+    max_attempts = int(os.getenv("FINOPS_FIRST_FILL_ATTEMPTS", "6") or 6)
+    # Long enough for a cost export to be produced and for 429 backoff to clear.
+    backoff = [120, 300, 600, 900, 1800, 1800]
+    loop = asyncio.get_running_loop()
+
+    await asyncio.sleep(45)  # let migrations, RBAC and the export loader settle
+
+    try:
+        gaps = await loop.run_in_executor(_bg_pool, _first_fill_gaps)
+    except Exception as exc:
+        logger.warning("First-fill: could not read table counts: %s", exc)
+        gaps = []
+    if not gaps:
+        _ing.fill_update(active=False, phase="settled", message="Estate already populated",
+                         pending=[], finished_at=datetime.now(timezone.utc).isoformat())
+        return
+
+    _ing.fill_update(active=True, phase="running", attempt=0, max_attempts=max_attempts,
+                     started_at=datetime.now(timezone.utc).isoformat(), finished_at=None,
+                     pending=gaps, filled=[], last_error=None,
+                     message=f"{len(gaps)} dataset(s) empty - starting first collection")
+    logger.info("First-fill: %d dashboard dataset(s) empty, driving collection", len(gaps))
+
+    for attempt in range(1, max_attempts + 1):
+        # Never fight a run the user started from the UI.
+        while _ing.job_is_running():
+            _ing.fill_update(phase="waiting", message="Waiting for the running collection to finish")
+            await asyncio.sleep(30)
+
+        _ing.fill_update(phase="running", attempt=attempt, next_attempt_at=None,
+                         message=f"Collection attempt {attempt} of {max_attempts}")
+        try:
+            # First pass pulls full history; later passes only top up what is missing.
+            await _run_ingestion_async("first-fill supervisor", days=30,
+                                       mode="full" if attempt == 1 else "quick")
+        except Exception as exc:
+            logger.warning("First-fill attempt %d failed: %s", attempt, exc)
+            _ing.fill_update(last_error=str(exc)[:300])
+
+        try:
+            gaps = await loop.run_in_executor(_bg_pool, _first_fill_gaps)
+        except Exception as exc:
+            _ing.fill_update(last_error=str(exc)[:300])
+            gaps = gaps  # keep the previous view rather than claiming success
+
+        filled = [t for t, _ in _FIRST_FILL_TARGETS
+                  if t not in {g["dataset"] for g in gaps}]
+        _ing.fill_update(pending=gaps, filled=filled)
+
+        if not gaps:
+            _ing.fill_update(active=False, phase="settled",
+                             finished_at=datetime.now(timezone.utc).isoformat(),
+                             message=f"All dashboard datasets populated after {attempt} attempt(s)")
+            logger.info("First-fill: complete after %d attempt(s)", attempt)
+            return
+
+        if attempt < max_attempts:
+            wait = backoff[min(attempt - 1, len(backoff) - 1)]
+            nxt = datetime.now(timezone.utc) + timedelta(seconds=wait)
+            _ing.fill_update(phase="waiting", next_attempt_at=nxt.isoformat(),
+                             message=(f"{len(gaps)} dataset(s) still empty - retrying in "
+                                      f"{wait // 60} min"))
+            logger.info("First-fill: %d still empty, retry %d in %ds",
+                        len(gaps), attempt + 1, wait)
+            await asyncio.sleep(wait)
+
+    _ing.fill_update(active=False, phase="exhausted",
+                     finished_at=datetime.now(timezone.utc).isoformat(),
+                     message=(f"{len(gaps)} dataset(s) still empty after {max_attempts} attempts - "
+                              f"the scheduled collectors will keep trying"))
+    logger.warning("First-fill: gave up with %d dataset(s) still empty", len(gaps))
 
 
 @app.get("/api/finops/ingestion/inventory", tags=["FinOps Ingestion"])
@@ -8164,24 +8366,43 @@ async def ingestion_inventory(subscriptions: bool = True, refresh: bool = False)
         from services import finops_meter_service as _meter
         from services import log_analytics_cost_service as _lasvc
         w = finops_warehouse_svc
-        data["collection_windows"] = [
-            {"grain": "Daily cost per resource", "window": f"{w.DAILY_RESOURCE_DAYS} days",
-             "env": "FINOPS_DAILY_RESOURCE_DAYS",
-             "note": "Deliberately shorter — the per-resource grain is the one Azure throttles hardest."},
-            {"grain": "Daily cost per subscription", "window": f"{w.DAILY_RESOURCE_DAYS} days",
-             "env": "FINOPS_DAILY_RESOURCE_DAYS", "note": ""},
-            {"grain": "Daily cost by dimension", "window": f"{w.ANALYZE_DIMENSION_DAYS} days",
-             "env": "FINOPS_ANALYZE_DIMENSION_DAYS",
-             "note": "~13 months — Azure Cost Management's maximum history."},
-            {"grain": "Cost + usage by meter", "window": f"{_meter.METER_HISTORY_DAYS} days",
-             "env": "FINOPS_METER_HISTORY_DAYS", "note": "~13 months."},
-            {"grain": "Monthly cost by service", "window": f"{w.MONTHLY_SERVICE_MONTHS} months",
-             "env": "FINOPS_MONTHLY_SERVICE_MONTHS", "note": ""},
-            {"grain": "Monthly cost by tag", "window": f"{w.MONTHLY_TAG_MONTHS} months",
-             "env": "FINOPS_MONTHLY_TAG_MONTHS", "note": ""},
-            {"grain": "Log Analytics per-table cost", "window": f"{_lasvc.LA_HISTORY_DAYS} days",
-             "env": "—", "note": "Bounded by each workspace's own retention."},
-        ]
+        if finops_warehouse_svc.exports_own_cost_data():
+            # Cost Management exports own every cost grain now, so the old per-grain
+            # query windows no longer describe what is on disk. Reporting them here
+            # contradicts the coverage dates shown directly above.
+            _months = int(os.getenv("FINOPS_EXPORT_HISTORY_MONTHS", "2") or 0)
+            _window = f"{_months} month{'s' if _months != 1 else ''} + current"
+            _note = ("Cost Management exports backfill this many closed months, then the "
+                     "open month is republished daily.")
+            data["collection_windows"] = [
+                {"grain": g, "window": _window,
+                 "env": "FINOPS_EXPORT_HISTORY_MONTHS", "note": _note}
+                for g in ("Daily cost per resource", "Daily cost per subscription",
+                          "Daily cost by dimension", "Cost + usage by meter",
+                          "Monthly cost by service", "Monthly cost by tag")
+            ] + [
+                {"grain": "Log Analytics per-table cost", "window": f"{_lasvc.LA_HISTORY_DAYS} days",
+                 "env": "—", "note": "Bounded by each workspace's own retention."},
+            ]
+        else:
+            data["collection_windows"] = [
+                {"grain": "Daily cost per resource", "window": f"{w.DAILY_RESOURCE_DAYS} days",
+                 "env": "FINOPS_DAILY_RESOURCE_DAYS",
+                 "note": "Deliberately shorter — the per-resource grain is the one Azure throttles hardest."},
+                {"grain": "Daily cost per subscription", "window": f"{w.DAILY_RESOURCE_DAYS} days",
+                 "env": "FINOPS_DAILY_RESOURCE_DAYS", "note": ""},
+                {"grain": "Daily cost by dimension", "window": f"{w.ANALYZE_DIMENSION_DAYS} days",
+                 "env": "FINOPS_ANALYZE_DIMENSION_DAYS",
+                 "note": "~13 months — Azure Cost Management's maximum history."},
+                {"grain": "Cost + usage by meter", "window": f"{_meter.METER_HISTORY_DAYS} days",
+                 "env": "FINOPS_METER_HISTORY_DAYS", "note": "~13 months."},
+                {"grain": "Monthly cost by service", "window": f"{w.MONTHLY_SERVICE_MONTHS} months",
+                 "env": "FINOPS_MONTHLY_SERVICE_MONTHS", "note": ""},
+                {"grain": "Monthly cost by tag", "window": f"{w.MONTHLY_TAG_MONTHS} months",
+                 "env": "FINOPS_MONTHLY_TAG_MONTHS", "note": ""},
+                {"grain": "Log Analytics per-table cost", "window": f"{_lasvc.LA_HISTORY_DAYS} days",
+                 "env": "—", "note": "Bounded by each workspace's own retention."},
+            ]
     except Exception:
         pass
     cache_svc.set_json(ck, data, ttl_seconds=90)
@@ -8192,7 +8413,11 @@ async def ingestion_inventory(subscriptions: bool = True, refresh: bool = False)
 async def ingestion_status():
     """Live progress of the force-ingest run: per-step state and rows written."""
     from services import finops_ingestion_service as _ing
-    return _ing.job_snapshot()
+    snap = _ing.job_snapshot()
+    # The supervisor is what keeps running after a fresh deployment, so the UI can
+    # say "still filling, N datasets pending" instead of just showing empty charts.
+    snap["first_fill"] = _ing.fill_snapshot()
+    return snap
 
 
 @app.post("/api/finops/ingestion/run", tags=["FinOps Ingestion"])
@@ -8247,6 +8472,30 @@ async def warehouse_dashboard(
         "etl_running": finops_warehouse_svc.is_etl_running(),
     }
     return data
+
+
+@app.get("/api/finops/exports/status", tags=["FinOps Warehouse"])
+async def finops_export_status():
+    """Cost-export loader health: which files loaded, and whether totals reconcile."""
+    if not _FINOPS_EXPORT_INGESTION_AVAILABLE:
+        return {"configured": False, "reason": "Cost export loader module unavailable"}
+    return await asyncio.get_running_loop().run_in_executor(
+        _pool, finops_export_ingestion_svc.get_ingestion_status
+    )
+
+
+@app.post("/api/finops/exports/ingest", tags=["FinOps Warehouse"])
+async def finops_export_ingest():
+    """Load any export files that have not been loaded yet."""
+    if not _FINOPS_EXPORT_INGESTION_AVAILABLE or not finops_export_ingestion_svc.is_configured():
+        raise HTTPException(status_code=503, detail="Cost export loader is not configured")
+    result = await asyncio.get_running_loop().run_in_executor(
+        _pool, finops_export_ingestion_svc.ingest_available_exports
+    )
+    if result.get("processed"):
+        _fw_bump_version()
+        _clear_finops_derived_caches()
+    return result
 
 
 @app.get("/api/finops/warehouse/resources", tags=["FinOps Warehouse"])
@@ -9113,13 +9362,36 @@ async def start_auto_refresh_scheduler() -> None:
     except Exception as _awe:
         logger.debug("Startup: could not schedule Arc warm: %s", _awe)
 
+    # ── Start the Cost Management export loader ───────────────────────────────
+    # Azure writes scheduled exports into ADLS Gen2; this loads them into Azure SQL.
+    # When it is configured it is the ONLY writer of cost data, so the query-API
+    # collector below is left idle rather than filling the same tables from a
+    # second source that can disagree with this one.
+    try:
+        if _FINOPS_EXPORT_INGESTION_AVAILABLE and finops_export_ingestion_svc.is_configured():
+            asyncio.create_task(_finops_export_ingestion_scheduler())
+            logger.info("Startup: Cost export loader registered (account=%s)",
+                        finops_export_ingestion_svc.ACCOUNT)
+    except Exception as _xis:
+        logger.warning("Startup: could not start the cost export loader: %s", _xis)
+
+    # ── Drive the first fill until the dashboards have data ───────────────────
+    # Each collector below runs on its own timer, so a fresh deployment shows empty
+    # views until every one of them has happened to fire. This supervises them.
+    try:
+        asyncio.create_task(_first_fill_supervisor())
+        logger.info("Startup: first-fill supervisor registered")
+    except Exception as _ffe:
+        logger.warning("Startup: could not start the first-fill supervisor: %s", _ffe)
+
     # ── Start FinOps Warehouse nightly ETL scheduler ──────────────────────────
     # Downloads all Azure cost data into Azure SQL every night at midnight UTC.
     # On first startup, triggers an immediate run if the warehouse is empty.
     try:
         if _FINOPS_WAREHOUSE_AVAILABLE:
             asyncio.create_task(_finops_warehouse_scheduler())
-            logger.info("Startup: FinOps Warehouse ETL scheduler registered")
+            logger.info("Startup: FinOps Warehouse ETL scheduler registered (cost tables owned by exports: %s)",
+                        _export_ingestion_owns_costs())
         else:
             logger.warning("Startup: FinOps Warehouse scheduler skipped — module unavailable")
     except Exception as _wse:
@@ -9153,6 +9425,24 @@ async def start_auto_refresh_scheduler() -> None:
         logger.info("Startup: FinOps dashboard v2 schema migration applied")
     except Exception as _mig_err2:
         logger.warning("Startup: FinOps dashboard v2 migration skipped: %s", _mig_err2)
+
+    # ── Cost-export ingestion schema on startup ───────────────────────────────
+    # A fresh customer deployment has neither the ingestion ledger nor the resource
+    # tag column, and the export loader cannot run without them.
+    for _mig_file, _mig_label in (
+        ("007_cost_export_ingestion.py", "cost-export ingestion ledger"),
+        ("008_resource_tags.py", "per-resource tags"),
+    ):
+        try:
+            import importlib.util, os as _os
+            _mig_path3 = _os.path.join(_os.path.dirname(__file__), "migrations", _mig_file)
+            _spec3 = importlib.util.spec_from_file_location(_mig_file.replace(".", "_"), _mig_path3)
+            _mod3 = importlib.util.module_from_spec(_spec3)
+            _spec3.loader.exec_module(_mod3)
+            _mod3.run_migration()
+            logger.info("Startup: %s migration applied", _mig_label)
+        except Exception as _mig_err3:
+            logger.warning("Startup: %s migration skipped: %s", _mig_label, _mig_err3)
 
 
 
@@ -9275,7 +9565,7 @@ async def analyze_single_resource(resource_id: str):
     }
 
     loop     = asyncio.get_event_loop()
-    executor = ThreadPoolExecutor(max_workers=1)
+    executor = _ai_pool
     try:
         verdicts = await loop.run_in_executor(executor, partial(get_ai_verdicts, [resource_dict]))
     except Exception as exc:

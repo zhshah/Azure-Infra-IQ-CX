@@ -115,17 +115,65 @@ def _query_with_retry(
     Back-off is deliberately bounded so a throttled Cost Management API can never
     hang the live dashboard build for minutes. On exhaustion the caller degrades
     to partial / 2-hour-cached cost figures instead of zeroes.
+
+    Calls go through the SAME tenant-wide pacer as the FinOps collector. The limit is
+    per-tenant, so two modules firing independently just throttle each other: the
+    dashboard scan was issuing a cost query per subscription with no spacing, earning
+    429s that the warehouse loader then backed off from. Sharing one rate keeps them
+    from competing, and the interval widens automatically while the tenant is hot.
+
+    Admission is bounded too. The pacer serialises calls tenant-wide, so a thread that
+    is not admitted would only sleep holding a worker — which is how the app ran out of
+    threads and stopped serving pages. A rejected call degrades to cached figures.
     """
+    try:
+        from services.finops_data_service import (
+            _pace_cost_call, _note_cost_throttled, _note_cost_ok,
+            cost_call_slot, CostCallRejected,
+        )
+    except Exception:  # pacing is an optimisation, never a hard dependency
+        _pace_cost_call = _note_cost_throttled = _note_cost_ok = lambda: None
+        cost_call_slot = None
+        class CostCallRejected(Exception):
+            pass
+
+    slot = None
+    if cost_call_slot is not None:
+        try:
+            slot = cost_call_slot()
+            slot.__enter__()
+        except CostCallRejected as exc:
+            logger.info("Cost Management: skipping query on %s — %s", scope, exc)
+            raise
+
+    try:
+        return _query_with_retry_inner(
+            client, scope, parameters, max_retries, initial_delay,
+            _pace_cost_call, _note_cost_throttled, _note_cost_ok, **kwargs)
+    finally:
+        if slot is not None:
+            slot.__exit__(None, None, None)
+
+
+def _query_with_retry_inner(
+    client, scope, parameters, max_retries, initial_delay,
+    _pace_cost_call, _note_cost_throttled, _note_cost_ok, **kwargs,
+):
     delay = initial_delay
     for attempt in range(max_retries + 1):
         try:
-            return client.query.usage(scope=scope, parameters=parameters, **kwargs)
+            _pace_cost_call()
+            result = client.query.usage(scope=scope, parameters=parameters, **kwargs)
+            _note_cost_ok()
+            return result
         except Exception as exc:
             is_rate_limit = (
                 "429" in str(exc)
                 or getattr(exc, "status_code", None) == 429
                 or "too many requests" in str(exc).lower()
             )
+            if is_rate_limit:
+                _note_cost_throttled()
             if is_rate_limit and attempt < max_retries:
                 # Respect Retry-After header if the SDK surfaces it
                 retry_after = None

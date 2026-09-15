@@ -255,6 +255,16 @@ def probe_credential() -> Tuple[bool, str]:
         return False, str(exc)
 
 
+def exports_own_cost_data() -> bool:
+    """True when Cost Management exports are the configured writer of the cost tables.
+
+    Two writers filling the same tables from different extractions is what made the
+    views disagree, so the query-API collectors stand down while exports are in use.
+    Everything exports do not provide (utilisation, capacity, budgets) still runs.
+    """
+    return bool(os.getenv("FINOPS_EXPORT_ACCOUNT", "").strip())
+
+
 def _start_etl_run(triggered_by: str = "scheduler") -> str:
     run_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
@@ -379,6 +389,8 @@ def _collect_daily_dimension_costs(sub_id: str, today: date, run_id: str,
                                    days: int = ANALYZE_DIMENSION_DAYS,
                                    cost_types: Tuple[str, ...] = ANALYZE_COST_TYPES,
                                    dimensions: Optional[List[str]] = None) -> int:
+    if exports_own_cost_data():
+        return 0
     """Daily cost grouped by RG / service / meter / location for actual + amortized,
     upserted into finops_daily_dimension_costs. Non-throttled dimensions, so this
     populates reliably where the per-resource grain cannot. `dimensions` limits which
@@ -742,7 +754,13 @@ def run_full_etl(
             return bool(abort_after) and int(_tstats().get("gave_up", 0) or 0) >= abort_after
 
         subs_done = 0
+        cost_tables_owned_by_exports = exports_own_cost_data()
+        if cost_tables_owned_by_exports:
+            logger.info("ETL run %s: cost tables are loaded from Cost Management exports; "
+                        "collecting only the datasets exports do not provide", run_id)
         for idx, sub_id in enumerate(subscription_ids, 1):
+            if cost_tables_owned_by_exports:
+                break
             if throttled_out:
                 logger.warning("ETL run %s: skipping subscription %d/%d — tenant throttled",
                                run_id, idx, len(subscription_ids))
@@ -927,6 +945,8 @@ def run_full_etl(
 
 def _collect_daily_resource_costs(sub_id: str, today: date, run_id: str,
                                   days: int = DAILY_RESOURCE_DAYS) -> int:
+    if exports_own_cost_data():
+        return 0
     """
     Query daily cost per resource for the last ``days`` days
     and bulk-upsert into finops_daily_resource_costs.
@@ -1026,6 +1046,8 @@ def _upsert_resource_cost_batch(batch: List[tuple]) -> int:
 
 def _collect_daily_subscription_costs(sub_id: str, today: date, run_id: str,
                                       days: int = DAILY_RESOURCE_DAYS) -> int:
+    if exports_own_cost_data():
+        return 0
     from_date = today - timedelta(days=days - 1)
     scope = f"/subscriptions/{sub_id}"
 
@@ -1066,6 +1088,8 @@ def _collect_daily_subscription_costs(sub_id: str, today: date, run_id: str,
 
 def _derive_daily_subscription_costs(sub_id: str, today: date, run_id: str,
                                      days: int = DAILY_RESOURCE_DAYS) -> Optional[int]:
+    if exports_own_cost_data():
+        return 0
     """Roll the dimension grain up to a daily subscription total — no API call.
 
     Every dimension is a complete partition of the same spend, so summing one of them
@@ -1102,6 +1126,8 @@ def _derive_daily_subscription_costs(sub_id: str, today: date, run_id: str,
 
 def _collect_monthly_service_costs(sub_id: str, today: date, run_id: str,
                                    months: int = MONTHLY_SERVICE_MONTHS) -> int:
+    if exports_own_cost_data():
+        return 0
     # `months` back from start of current month
     from_date = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
     for _ in range(months - 1):
@@ -1157,6 +1183,8 @@ _TAG_KEYS = ["Environment", "BusinessUnit", "Project", "Application", "CostCente
 def _collect_monthly_tag_costs(sub_id: str, today: date, run_id: str,
                                months: int = MONTHLY_TAG_MONTHS,
                                tag_keys: Optional[List[str]] = None) -> int:
+    if exports_own_cost_data():
+        return 0
     from_date = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
     for _ in range(months - 1):
         from_date = (from_date - timedelta(days=1)).replace(day=1)
@@ -1400,12 +1428,45 @@ def get_last_run_status() -> Dict[str, Any]:
         return {"status": "error", "message": str(e)}
 
 
+def _expire_stale_etl_runs(con) -> None:
+    """Release the run lock held by a process that died mid-run.
+
+    A killed container (deploy, restart, OOM) leaves status='running' forever, and
+    every later trigger then refuses to start because the run "is already going".
+    """
+    lease_minutes = _env_int("FINOPS_ETL_LEASE_MINUTES", 120)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=lease_minutes)
+    stale: List[str] = []
+    for run_id, started_at in con.execute(
+        "SELECT run_id, started_at FROM finops_etl_runs WHERE status='running'"
+    ).fetchall():
+        try:
+            started = datetime.fromisoformat(str(started_at))
+        except ValueError:
+            stale.append(run_id)          # unparseable timestamp cannot prove freshness
+            continue
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        if started < cutoff:
+            stale.append(run_id)
+    for run_id in stale:
+        con.execute(
+            "UPDATE finops_etl_runs SET status='interrupted', completed_at=?, error_message=? "
+            "WHERE run_id=? AND status='running'",
+            (datetime.now(timezone.utc).isoformat(),
+             f"Run lease expired after {lease_minutes} minutes; the process did not finish.",
+             run_id),
+        )
+        logger.warning("ETL: released the stale run lock held by %s", run_id)
+
+
 def is_etl_running() -> bool:
-    """Check if an ETL run is currently in progress."""
+    """Check if an ETL run is currently in progress, ignoring expired leases."""
     if not _DB_AVAILABLE:
         return False
     try:
         with _conn() as con:
+            _expire_stale_etl_runs(con)
             row = con.execute(
                 "SELECT 1 FROM finops_etl_runs WHERE status='running'"
             ).fetchone()

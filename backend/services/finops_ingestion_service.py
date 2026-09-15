@@ -186,6 +186,43 @@ def job_set_counts(when: str, counts: Dict[str, int]) -> None:
         _JOB[f"rows_{when}"] = dict(counts)
 
 
+# ── First-fill supervisor ────────────────────────────────────────────────────
+# A fresh deployment has empty tables, and every collector is on its own timer, so
+# the dashboards stay blank until each one happens to fire. This tracks the
+# supervisor that drives them until the estate is actually populated, and is what
+# the UI reads to say what is filled, what is still pending, and what it is doing.
+
+_FILL_LOCK = threading.Lock()
+_FILL: Dict[str, Any] = {
+    "active": False,
+    "phase": "idle",           # idle | waiting | running | settled | exhausted
+    "attempt": 0,
+    "max_attempts": 0,
+    "started_at": None,
+    "finished_at": None,
+    "next_attempt_at": None,
+    "filled": [],              # datasets that now have rows
+    "pending": [],             # datasets still empty, with why
+    "message": None,
+    "last_error": None,
+}
+
+
+def fill_snapshot() -> Dict[str, Any]:
+    with _FILL_LOCK:
+        snap = {k: (list(v) if isinstance(v, list) else
+                    dict(v) if isinstance(v, dict) else v)
+                for k, v in _FILL.items()}
+    snap["pending_count"] = len(snap.get("pending") or [])
+    snap["filled_count"] = len(snap.get("filled") or [])
+    return snap
+
+
+def fill_update(**fields: Any) -> None:
+    with _FILL_LOCK:
+        _FILL.update(fields)
+
+
 # ── Census ───────────────────────────────────────────────────────────────────
 
 def _fast_row_counts(cur) -> Dict[str, int]:
@@ -270,6 +307,26 @@ def _subscription_breakdown(cur, table: str, col: str, limit: int = 25) -> List[
         return []
 
 
+def _subscription_names(cur) -> Dict[str, str]:
+    """subscription_id -> display name, taken from the warehouse rather than Azure.
+
+    The cost exports already carry subscriptionName, so this needs no live API call
+    and still resolves on a locked-down deployment.
+    """
+    names: Dict[str, str] = {}
+    try:
+        cur.execute(
+            "SELECT DISTINCT subscription_id, subscription_name "
+            "FROM finops_daily_subscription_costs WHERE subscription_name <> ''"
+        )
+        for row in cur.fetchall() or []:
+            if row[0] and row[1]:
+                names[str(row[0]).lower()] = str(row[1])
+    except Exception as exc:
+        logger.debug("subscription name lookup failed: %s", exc)
+    return names
+
+
 def _database_size() -> Optional[Dict[str, Any]]:
     if not is_azure_sql():
         return None
@@ -310,9 +367,11 @@ def get_inventory(include_subscriptions: bool = True) -> Dict[str, Any]:
 
     total_rows = 0
     sub_totals: Dict[str, int] = {}
+    sub_names: Dict[str, str] = {}
     try:
         with get_connection() as con:
             cur = con.cursor()
+            sub_names = _subscription_names(cur)
             for key, entry in (base.get("datasets") or {}).items():
                 fill = FILL_METHOD.get(key, _FILL_FALLBACK)
                 row = {"key": key, **entry,
@@ -324,6 +383,9 @@ def get_inventory(include_subscriptions: bool = True) -> Dict[str, Any]:
                         col = _sub_column(cur, tbl)
                         if col:
                             breakdown = _subscription_breakdown(cur, tbl, col)
+                            for s in breakdown:
+                                s["subscription_name"] = sub_names.get(
+                                    s["subscription_id"].lower(), "")
                             row["by_subscription"] = breakdown
                             for s in breakdown:
                                 sub_totals[s["subscription_id"]] = \
@@ -342,7 +404,9 @@ def get_inventory(include_subscriptions: bool = True) -> Dict[str, Any]:
     out["datasets"].sort(key=lambda d: (order.get(d.get("source"), 9), d.get("label", "")))
     out["total_rows"] = total_rows
     out["by_subscription"] = sorted(
-        ({"subscription_id": k, "rows": v} for k, v in sub_totals.items()),
+        ({"subscription_id": k,
+          "subscription_name": sub_names.get(k.lower(), ""),
+          "rows": v} for k, v in sub_totals.items()),
         key=lambda x: -x["rows"])
 
     # Only a "collection" dataset that is empty is an actual gap the button can close.

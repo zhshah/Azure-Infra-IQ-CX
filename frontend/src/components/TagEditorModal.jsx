@@ -29,7 +29,7 @@ export default function TagEditorModal({ resource, onClose, onSaved }) {
       fetch('/api/tags/schema').then(r => r.json()),
       fetch(`/api/tags/resource/${encodeURIComponent(rid)}`).then(r => r.json()),
     ]).then(([s, t]) => {
-      setSchema(s)
+      setSchema(Array.isArray(s) ? s : [])
       setCustom(t || {})
       setAzureTags(resource?.tags || {})
     }).catch(console.error).finally(() => setLoading(false))

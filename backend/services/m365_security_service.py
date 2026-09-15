@@ -41,7 +41,7 @@ def _creds() -> Tuple[str, str, str]:
     """Resolve tenant/client/secret from runtime settings or environment."""
     tid = cid = sec = ""
     try:
-        from services.settings_service import settings_service as _ss  # type: ignore
+        import services.settings_service as _ss
         tid = _ss.get_value("AZURE_TENANT_ID", "") or ""
         cid = _ss.get_value("AZURE_CLIENT_ID", "") or ""
         sec = _ss.get_value("AZURE_CLIENT_SECRET", "") or ""

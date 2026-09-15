@@ -15,9 +15,7 @@ from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from services.database import get_raw_connection
 
-# Agent model assignments based on APEX best practices.
-# Values are PROVIDER routing hints, not deployment names — the Azure OpenAI path
-# always uses AZURE_OPENAI_DEPLOYMENT so one model serves the whole app.
+# Agent model assignments based on APEX best practices
 AGENT_MODELS = {
     "01-orchestrator": "claude-opus",
     "02-requirements": "claude-opus",
@@ -27,9 +25,9 @@ AGENT_MODELS = {
     "05-iac-planner": "claude-opus",
     "06b-bicep-codegen": "claude-sonnet",
     "06t-terraform-codegen": "claude-sonnet",
-    "07b-bicep-deploy": "azure-openai",
-    "07t-terraform-deploy": "azure-openai",
-    "08-as-built": "azure-openai",
+    "07b-bicep-deploy": "gpt-4o",
+    "07t-terraform-deploy": "gpt-4o",
+    "08-as-built": "gpt-4o",
     "09-diagnose": "claude-opus",
     "10-challenger": "claude-sonnet",
     "11-context-optimizer": "claude-opus"
@@ -67,29 +65,19 @@ class ApexAgentService:
         else:
             self.anthropic_client = None
         
-        # Azure OpenAI client (fallback)
+        # Azure OpenAI client — managed identity or API key (see services.aoai_client).
         azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
         if azure_endpoint:
             try:
-                credential = DefaultAzureCredential()
-                token_provider = get_bearer_token_provider(
-                    credential, "https://cognitiveservices.azure.com/.default"
-                )
-                self.azure_openai_client = AzureOpenAI(
-                    azure_endpoint=azure_endpoint,
+                from services.aoai_client import build_client
+                self.azure_openai_client = build_client(
+                    azure_endpoint,
+                    os.getenv("AZURE_OPENAI_KEY", ""),
                     api_version="2024-10-21",
-                    azure_ad_token_provider=token_provider
                 )
-            except:
-                api_key = os.getenv("AZURE_OPENAI_KEY")
-                if api_key:
-                    self.azure_openai_client = AzureOpenAI(
-                        azure_endpoint=azure_endpoint,
-                        api_key=api_key,
-                        api_version="2024-10-21"
-                    )
-                else:
-                    self.azure_openai_client = None
+            except Exception as e:
+                print(f"Warning: Failed to initialize Azure OpenAI client: {e}")
+                self.azure_openai_client = None
         else:
             self.azure_openai_client = None
     
@@ -262,30 +250,17 @@ If you're creating diagrams, describe them in detail or provide mermaid/drawio s
         return message.content[0].text
     
     async def _execute_with_azure_openai(self, prompt: str) -> str:
-        """Execute with the configured Azure OpenAI deployment"""
+        """Execute with Azure OpenAI GPT-4o"""
         if not self.azure_openai_client:
             raise Exception("Azure OpenAI not configured")
-
-        model = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-sol")
-        kwargs = dict(
-            model=model,
+        
+        response = self.azure_openai_client.chat.completions.create(
+            model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini"),
             messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=4096,
+            max_tokens=4096,
+            temperature=0.7
         )
-        # Reasoning models reject max_tokens and any temperature other than the default.
-        if not any(k in model.lower() for k in ("gpt-5", "gpt5", "o1", "o3", "o4")):
-            kwargs["temperature"] = 0.7
-
-        try:
-            response = self.azure_openai_client.chat.completions.create(**kwargs)
-        except Exception as exc:
-            es = str(exc)
-            if "max_completion_tokens" in es or "unsupported_parameter" in es:
-                kwargs["max_tokens"] = kwargs.pop("max_completion_tokens")
-                response = self.azure_openai_client.chat.completions.create(**kwargs)
-            else:
-                raise
-
+        
         return response.choices[0].message.content
     
     def _extract_artifacts(self, output: str, agent_name: str) -> List[Dict]:
